@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/grant"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -161,7 +162,7 @@ func ValidateGrant(claims GrantClaims, validation GrantValidation) error {
 	if !validation.Action.Valid() || claims.Action != validation.Action {
 		return errors.New("telemetry grant action is invalid")
 	}
-	if claims.TenantID != validation.TenantID || !validUUIDv7(validation.TenantID) {
+	if claims.TenantID != validation.TenantID || !uuidv7.IsValidAnyCase(validation.TenantID) {
 		return errors.New("telemetry grant tenant is invalid")
 	}
 	expectedDigest, err := ScopeDigest(validation.Action, validation.TenantID, validation.Targets)

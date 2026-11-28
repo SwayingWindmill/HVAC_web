@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -23,6 +20,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
+	"github.com/quanlaihe/hvac-web/libs/servicehost"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/optimization-service/internal/optimization"
 )
@@ -147,18 +145,11 @@ func runService(logger *slog.Logger) error {
 		OTLPEndpoint: strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")),
 	})
 	metrics := telemetry.Metrics
-	var telemetryShutdownOnce sync.Once
-	shutdownTelemetry := func() {
-		telemetryShutdownOnce.Do(func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultTelemetryShutdownPeriod)
-			defer cancel()
-			_ = telemetry.Shutdown(shutdownCtx)
-		})
-	}
+	shutdownTelemetry := servicehost.NewTelemetryShutdown(telemetry, defaultTelemetryShutdownPeriod)
 	// Defer telemetry shutdown after pool closers are registered above so LIFO flushes telemetry first and closes pools last.
 	defer shutdownTelemetry()
 
-	dsn, err := requiredEnv("OPTIMIZATION_POSTGRES_DSN")
+	dsn, err := servicehost.RequiredEnv("OPTIMIZATION_POSTGRES_DSN")
 	if err != nil {
 		return err
 	}
@@ -168,40 +159,40 @@ func runService(logger *slog.Logger) error {
 	}
 	closers = append(closers, publication.Close)
 
-	clickhouseURL, err := requiredEnv("OPTIMIZATION_CLICKHOUSE_HTTP_URL")
+	clickhouseURL, err := servicehost.RequiredEnv("OPTIMIZATION_CLICKHOUSE_HTTP_URL")
 	if err != nil {
 		return err
 	}
 	evaluations, err := optimization.NewClickHouseSink(
 		clickhouseURL,
-		envOrDefault("OPTIMIZATION_CLICKHOUSE_USERNAME", "optimization_service_writer"),
+		servicehost.EnvOrDefault("OPTIMIZATION_CLICKHOUSE_USERNAME", "optimization_service_writer"),
 		os.Getenv("OPTIMIZATION_CLICKHOUSE_PASSWORD"), nil,
 	)
 	if err != nil {
 		return err
 	}
 	evaluations.WithReader(
-		envOrDefault("OPTIMIZATION_CLICKHOUSE_READER_USERNAME", "optimization_service_reader"),
+		servicehost.EnvOrDefault("OPTIMIZATION_CLICKHOUSE_READER_USERNAME", "optimization_service_reader"),
 		os.Getenv("OPTIMIZATION_CLICKHOUSE_READER_PASSWORD"),
 	)
 	closers = append(closers, evaluations.CloseIdleConnections)
-	tlsCert, err := requiredEnv("OPTIMIZATION_TLS_CERT")
+	tlsCert, err := servicehost.RequiredEnv("OPTIMIZATION_TLS_CERT")
 	if err != nil {
 		return err
 	}
-	tlsKey, err := requiredEnv("OPTIMIZATION_TLS_KEY")
+	tlsKey, err := servicehost.RequiredEnv("OPTIMIZATION_TLS_KEY")
 	if err != nil {
 		return err
 	}
-	tlsCA, err := requiredEnv("OPTIMIZATION_TLS_CA")
+	tlsCA, err := servicehost.RequiredEnv("OPTIMIZATION_TLS_CA")
 	if err != nil {
 		return err
 	}
-	iamURL, err := requiredEnv("OPTIMIZATION_IAM_URL")
+	iamURL, err := servicehost.RequiredEnv("OPTIMIZATION_IAM_URL")
 	if err != nil {
 		return err
 	}
-	queryURL, err := requiredEnv("OPTIMIZATION_QUERY_URL")
+	queryURL, err := servicehost.RequiredEnv("OPTIMIZATION_QUERY_URL")
 	if err != nil {
 		return err
 	}
@@ -220,7 +211,7 @@ func runService(logger *slog.Logger) error {
 	}
 	inputs, err := optimization.NewClickHouseInputReader(optimization.InputReaderConfig{
 		BaseURL:          clickhouseURL,
-		Username:         envOrDefault("OPTIMIZATION_CLICKHOUSE_READER_USERNAME", "optimization_service_reader"),
+		Username:         servicehost.EnvOrDefault("OPTIMIZATION_CLICKHOUSE_READER_USERNAME", "optimization_service_reader"),
 		Password:         os.Getenv("OPTIMIZATION_CLICKHOUSE_READER_PASSWORD"),
 		Energy:           energy,
 		LiveObservations: telemetryLiveClient,
@@ -270,7 +261,7 @@ func runService(logger *slog.Logger) error {
 	service.WithStagingSiteLister(optimization.NewCompositeStagingSiteLister(inputs, publication))
 	// The Chiller COP Model runs as a shadow solver: it records what it would recommend beside
 	// every published run and never publishes. OPTIMIZATION_SHADOW_SOLVER=OFF turns it off.
-	switch shadow := envOrDefault("OPTIMIZATION_SHADOW_SOLVER", optimization.ChillerCOPSolverName); shadow {
+	switch shadow := servicehost.EnvOrDefault("OPTIMIZATION_SHADOW_SOLVER", optimization.ChillerCOPSolverName); shadow {
 	case optimization.ChillerCOPSolverName:
 		service.WithShadow(optimization.COPModelSolver{History: inputs, Staging: inputs, StagingCatalog: publication}, 30*time.Second, func(format string, _ ...any) {
 			logger.Warn("optimization_shadow_solver_notice", "event", strings.SplitN(format, ":", 2)[0])
@@ -287,7 +278,7 @@ func runService(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	delegationCertPath, err := requiredEnv("OPTIMIZATION_GATEWAY_DELEGATION_CERT")
+	delegationCertPath, err := servicehost.RequiredEnv("OPTIMIZATION_GATEWAY_DELEGATION_CERT")
 	if err != nil {
 		return err
 	}
@@ -297,7 +288,7 @@ func runService(logger *slog.Logger) error {
 	}
 	handler, err := optimization.NewHTTPHandler(service, preparer, optimization.AuthConfig{
 		GatewayPublicKey: gatewayKey,
-		GatewaySPIFFE:    envOrDefault("OPTIMIZATION_GATEWAY_SPIFFE", optimization.DefaultGatewaySPIFFEID),
+		GatewaySPIFFE:    servicehost.EnvOrDefault("OPTIMIZATION_GATEWAY_SPIFFE", optimization.DefaultGatewaySPIFFEID),
 	})
 	if err != nil {
 		return err
@@ -312,13 +303,13 @@ func runService(logger *slog.Logger) error {
 		PrivateKeyPath:  tlsKey,
 		CAPath:          tlsCA,
 		IAMURL:          iamURL,
-		GatewayURL:      envOrDefault("OPTIMIZATION_GATEWAY_URL", "https://platform-gateway:8452"),
+		GatewayURL:      servicehost.EnvOrDefault("OPTIMIZATION_GATEWAY_URL", "https://platform-gateway:8452"),
 	})
 	if err != nil {
 		return err
 	}
-	workerID := envOrDefault("OPTIMIZATION_WORKER_ID", defaultWorkerID())
-	monitorLeaseDuration, err := durationEnv("OPTIMIZATION_MONITOR_LEASE_DURATION", optimization.DefaultExecutionMonitorClaimLease)
+	workerID := servicehost.EnvOrDefault("OPTIMIZATION_WORKER_ID", servicehost.DefaultWorkerID("optimization"))
+	monitorLeaseDuration, err := servicehost.DurationEnv("OPTIMIZATION_MONITOR_LEASE_DURATION", optimization.DefaultExecutionMonitorClaimLease)
 	if err != nil {
 		return err
 	}
@@ -329,7 +320,7 @@ func runService(logger *slog.Logger) error {
 		return err
 	}
 	var controlEvents optimization.ControlEventPublisher
-	if alarmURL := strings.TrimSpace(envOrDefault("OPTIMIZATION_ALARM_URL", "https://alarm-service:8448")); alarmURL != "" &&
+	if alarmURL := strings.TrimSpace(servicehost.EnvOrDefault("OPTIMIZATION_ALARM_URL", "https://alarm-service:8448")); alarmURL != "" &&
 		!strings.EqualFold(alarmURL, "OFF") && !strings.EqualFold(alarmURL, "DISABLED") {
 		publisher, pubErr := optimization.NewHTTPControlEventPublisher(optimization.ControlEventClientConfig{
 			CertificatePath: tlsCert,
@@ -347,19 +338,19 @@ func runService(logger *slog.Logger) error {
 	}
 	autoController.WithPointHealth(telemetryHealthClient).WithControlEvents(controlEvents).WithWorkerID(workerID).WithLeaseDuration(monitorLeaseDuration)
 
-	claimInterval, err := durationEnv("OPTIMIZATION_CLAIM_INTERVAL", 5*time.Second)
+	claimInterval, err := servicehost.DurationEnv("OPTIMIZATION_CLAIM_INTERVAL", 5*time.Second)
 	if err != nil {
 		return err
 	}
-	leaseDuration, err := durationEnv("OPTIMIZATION_LEASE_DURATION", 2*time.Minute)
+	leaseDuration, err := servicehost.DurationEnv("OPTIMIZATION_LEASE_DURATION", 2*time.Minute)
 	if err != nil {
 		return err
 	}
-	leaseRenew, err := durationEnv("OPTIMIZATION_LEASE_RENEW", 30*time.Second)
+	leaseRenew, err := servicehost.DurationEnv("OPTIMIZATION_LEASE_RENEW", 30*time.Second)
 	if err != nil {
 		return err
 	}
-	claimBatch, err := integerEnv("OPTIMIZATION_CLAIM_BATCH", 8)
+	claimBatch, err := servicehost.BoundedIntEnv("OPTIMIZATION_CLAIM_BATCH", 8, 1, 100)
 	if err != nil {
 		return err
 	}
@@ -367,21 +358,21 @@ func runService(logger *slog.Logger) error {
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 	defer cancelWorkers()
 	var bgWG sync.WaitGroup
-	runSupervised(workerCtx, &bgWG, logger, metrics, "optimization.worker", defaultPanicRestartDelay, func() {
+	servicehost.RunSupervised(workerCtx, &bgWG, logger, metrics, "optimization.worker", defaultPanicRestartDelay, func() {
 		runOptimizationWorker(workerCtx, queue, publication, service, preparer, autoController, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew, logger, metrics)
 	})
-	runSupervised(workerCtx, &bgWG, logger, metrics, "optimization.execution_monitor", defaultPanicRestartDelay, func() {
+	servicehost.RunSupervised(workerCtx, &bgWG, logger, metrics, "optimization.execution_monitor", defaultPanicRestartDelay, func() {
 		runMonitorLoop(workerCtx, optimization.DefaultMonitorTickInterval, autoController, logger)
 	})
-	runSupervised(workerCtx, &bgWG, logger, metrics, "optimization.reconcile", defaultPanicRestartDelay, func() {
+	servicehost.RunSupervised(workerCtx, &bgWG, logger, metrics, "optimization.reconcile", defaultPanicRestartDelay, func() {
 		runReconcileLoop(workerCtx, 30*time.Second, service, logger)
 	})
-	runSupervised(workerCtx, &bgWG, logger, metrics, "optimization.staging_evaluation", defaultPanicRestartDelay, func() {
+	servicehost.RunSupervised(workerCtx, &bgWG, logger, metrics, "optimization.staging_evaluation", defaultPanicRestartDelay, func() {
 		runStagingEvaluationLoop(workerCtx, optimization.DefaultStagingSweepInterval, service, logger)
 	})
 
 	server := &http.Server{
-		Addr:              envOrDefault("OPTIMIZATION_HTTP_ADDR", ":19093"),
+		Addr:              servicehost.EnvOrDefault("OPTIMIZATION_HTTP_ADDR", ":19093"),
 		Handler:           handler,
 		TLSConfig:         serverTLS,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -391,52 +382,15 @@ func runService(logger *slog.Logger) error {
 	}
 	// The container health check has no client certificate, so it asks a plain port that answers nothing else.
 	diagnostics := &http.Server{
-		Addr: envOrDefault("OPTIMIZATION_DIAGNOSTICS_ADDR", ":19100"), Handler: optimization.NewDiagnosticsHandler(telemetry),
+		Addr: servicehost.EnvOrDefault("OPTIMIZATION_DIAGNOSTICS_ADDR", ":19100"), Handler: telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 3 * time.Second, WriteTimeout: 3 * time.Second,
 	}
 
 	telemetry.MarkReady()
 
-	serveErr := make(chan error, 2)
-	var httpWG sync.WaitGroup
-	httpWG.Add(1)
-	go func() {
-		defer httpWG.Done()
-		defer observability.Recover(logger, metrics, "optimization.diagnostics_server", func(any) {
-			select {
-			case serveErr <- errors.New("diagnostics server panicked"):
-			default:
-			}
-		})
-		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serveErr <- fmt.Errorf("diagnostics server: %w", err)
-		}
-	}()
-	httpWG.Add(1)
-	go func() {
-		defer httpWG.Done()
-		defer observability.Recover(logger, metrics, "optimization.http_server", func(any) {
-			select {
-			case serveErr <- errors.New("http server panicked"):
-			default:
-			}
-		})
-		logger.Info("optimization_service_started", "address", server.Addr, "diagnostics_address", diagnostics.Addr)
-		if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serveErr <- fmt.Errorf("http server: %w", err)
-		}
-	}()
+	httpWG, runErr := servicehost.ServeAndWait(sigCtx, stopSignals, logger, metrics, "optimization", server, diagnostics, true)
 
-	var runErr error
-	select {
-	case <-sigCtx.Done():
-		logger.Info("optimization_service_shutting_down")
-	case err := <-serveErr:
-		runErr = err
-		stopSignals()
-	}
-
-	if shutdownErr := shutdownServiceRuntime(logger, telemetry, defaultShutdownTimeout, defaultBackgroundDrainTimeout, "optimization.shutdown", &httpWG, cancelWorkers, &bgWG, shutdownTelemetry, server, diagnostics); shutdownErr != nil {
+	if shutdownErr := servicehost.ShutdownRuntime(logger, telemetry, defaultShutdownTimeout, defaultBackgroundDrainTimeout, "optimization.shutdown", httpWG, cancelWorkers, &bgWG, shutdownTelemetry, server, diagnostics); shutdownErr != nil {
 		logger.Warn("optimization_server_shutdown_failed", "error_code", "OPTIMIZATION_SHUTDOWN_FAILED", "error", shutdownErr)
 		if runErr == nil {
 			runErr = shutdownErr
@@ -444,73 +398,6 @@ func runService(logger *slog.Logger) error {
 	}
 	logger.Info("optimization_service_stopped")
 	return runErr
-}
-
-func shutdownServiceRuntime(
-	logger *slog.Logger,
-	telemetry *observability.Runtime,
-	shutdownTimeout time.Duration,
-	drainTimeout time.Duration,
-	component string,
-	httpWG *sync.WaitGroup,
-	cancelWorkers context.CancelFunc,
-	bgWG *sync.WaitGroup,
-	shutdownTelemetry func(),
-	servers ...*http.Server,
-) error {
-	var metrics *observability.Registry
-	if telemetry != nil {
-		telemetry.MarkNotReady()
-		metrics = telemetry.Metrics
-	}
-	shutdownDone, shutdownResult := startServerShutdown(shutdownTimeout, logger, metrics, component, servers...)
-	<-shutdownDone
-	shutdownErr := shutdownResult()
-	if httpWG != nil {
-		waitBackground(httpWG, shutdownTimeout, logger)
-	}
-	if cancelWorkers != nil {
-		cancelWorkers()
-	}
-	if bgWG != nil {
-		waitBackground(bgWG, drainTimeout, logger)
-	}
-	if shutdownTelemetry != nil {
-		shutdownTelemetry()
-	}
-	return shutdownErr
-}
-
-func runSupervised(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, metrics *observability.Registry, component string, restartDelay time.Duration, fn func()) {
-	if fn == nil {
-		return
-	}
-	if restartDelay <= 0 {
-		restartDelay = defaultPanicRestartDelay
-	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for ctx.Err() == nil {
-			panicked := false
-			func() {
-				defer observability.Recover(logger, metrics, component, func(any) {
-					panicked = true
-				})
-				fn()
-			}()
-			if !panicked || ctx.Err() != nil {
-				return
-			}
-			timer := time.NewTimer(restartDelay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-			}
-		}
-	}()
 }
 
 func runMonitorLoop(ctx context.Context, interval time.Duration, runner monitorPassRunner, logger *slog.Logger) {
@@ -586,83 +473,8 @@ func runStagingEvaluationLoop(ctx context.Context, interval time.Duration, runne
 	}
 }
 
-func startServerShutdown(timeout time.Duration, logger *slog.Logger, metrics *observability.Registry, component string, servers ...*http.Server) (<-chan struct{}, func() error) {
-	shutdownDone := make(chan struct{})
-	var (
-		mu       sync.Mutex
-		firstErr error
-	)
-	go func() {
-		defer close(shutdownDone)
-		defer observability.Recover(logger, metrics, component, func(r any) {
-			mu.Lock()
-			if firstErr == nil {
-				firstErr = fmt.Errorf("shutdown panicked: %v", r)
-			}
-			mu.Unlock()
-		})
-		if err := shutdownServers(timeout, servers...); err != nil {
-			mu.Lock()
-			if firstErr == nil {
-				firstErr = err
-			}
-			mu.Unlock()
-		}
-	}()
-	return shutdownDone, func() error {
-		mu.Lock()
-		defer mu.Unlock()
-		return firstErr
-	}
-}
-
-func shutdownServers(timeout time.Duration, servers ...*http.Server) error {
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	var (
-		mu       sync.Mutex
-		firstErr error
-		wg       sync.WaitGroup
-	)
-	for _, srv := range servers {
-		if srv == nil {
-			continue
-		}
-		wg.Add(1)
-		go func(server *http.Server) {
-			defer wg.Done()
-			if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				mu.Unlock()
-			}
-		}(srv)
-	}
-	wg.Wait()
-	return firstErr
-}
-
-func waitBackground(wg *sync.WaitGroup, timeout time.Duration, logger *slog.Logger) {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		wg.Wait()
-	}()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-done:
-	case <-timer.C:
-		if logger != nil {
-			logger.Warn("optimization_background_shutdown_timeout", "error_code", "OPTIMIZATION_SHUTDOWN_TIMEOUT")
-		}
-	}
-}
-
 func newTelemetryClients(tlsCert, tlsKey, tlsCA string) (*optimization.WorkloadTelemetryLiveClient, *optimization.WorkloadTelemetryHealthClient, error) {
-	telemetryURL := strings.TrimRight(envOrDefault("OPTIMIZATION_TELEMETRY_URL", "https://telemetry-runtime-service:8446"), "/")
+	telemetryURL := strings.TrimRight(servicehost.EnvOrDefault("OPTIMIZATION_TELEMETRY_URL", "https://telemetry-runtime-service:8446"), "/")
 	parsed, err := url.Parse(telemetryURL)
 	if err != nil || parsed.Hostname() == "" {
 		return nil, nil, fmt.Errorf("invalid OPTIMIZATION_TELEMETRY_URL %q", telemetryURL)
@@ -694,21 +506,6 @@ func newTelemetryClients(tlsCert, tlsKey, tlsCA string) (*optimization.WorkloadT
 		return nil, nil, err
 	}
 	return liveClient, healthClient, nil
-}
-
-func envOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func requiredEnv(name string) (string, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return "", fmt.Errorf("%s is required", name)
-	}
-	return value, nil
 }
 
 func runOptimizationWorker(ctx context.Context, queue optimizationJobQueue, store optimizationInputLoader, service optimizationRunner, preparer optimizationPreparer, autoController autoDispatcher, workerID string, claimInterval time.Duration, claimBatch int, leaseDuration, leaseRenew time.Duration, logger *slog.Logger, metrics *observability.Registry) {
@@ -1018,42 +815,6 @@ func executeOptimizationJob(ctx context.Context, queue optimizationJobQueue, sto
 	if err != nil && logger != nil {
 		logger.Warn("optimization_job_complete_finalize_failed", "error_code", "OPTIMIZATION_JOB_FINALIZE_FAILED", "job_id", job.JobID, "error", err)
 	}
-}
-
-func durationEnv(name string, fallback time.Duration) (time.Duration, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil || parsed <= 0 {
-		return 0, fmt.Errorf("%s must be a positive duration", name)
-	}
-	return parsed, nil
-}
-
-func integerEnv(name string, fallback int) (int, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 || parsed > 100 {
-		return 0, fmt.Errorf("%s must be an integer in [1,100]", name)
-	}
-	return parsed, nil
-}
-
-func defaultWorkerID() string {
-	hostname, err := os.Hostname()
-	if err != nil || strings.TrimSpace(hostname) == "" {
-		hostname = "optimization"
-	}
-	suffix := make([]byte, 4)
-	if _, randErr := rand.Read(suffix); randErr != nil {
-		return fmt.Sprintf("%s-%d", strings.TrimSpace(hostname), os.Getpid())
-	}
-	return fmt.Sprintf("%s-%d-%s", strings.TrimSpace(hostname), os.Getpid(), hex.EncodeToString(suffix))
 }
 
 func configureEdgeModelSigning(service *optimization.Service, logger *slog.Logger) error {

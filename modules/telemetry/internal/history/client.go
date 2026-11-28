@@ -20,14 +20,12 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const maximumResponseBodySize = int64(8 << 20)
 
-var (
-	identifierPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,127}$`)
-	uuidV7Pattern     = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-)
+var identifierPattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,127}$`)
 
 type Engine interface {
 	QueryDeviceHistory(context.Context, telemetryhistorymodel.DeviceHistoryQuery) (telemetryhistorymodel.DeviceHistoryResponse, error)
@@ -504,7 +502,7 @@ func decodeCursor(encoded string, query telemetryhistorymodel.DeviceHistoryQuery
 	if err != nil || lastSampledAt.Before(query.From) || !lastSampledAt.Before(query.To) {
 		return nil, errors.New("history cursor position is invalid")
 	}
-	if !uuidV7Pattern.MatchString(cursor.LastObservationID) {
+	if !uuidv7.IsValidAnyCase(cursor.LastObservationID) {
 		return nil, errors.New("history cursor observation identity is invalid")
 	}
 	cursor.SnapshotAt = formatClickHouseTime(snapshotAt)

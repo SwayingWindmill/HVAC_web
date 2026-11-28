@@ -1,13 +1,15 @@
-package main
+package servicehost
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -16,6 +18,45 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
+func TestEnvHelpersParseAndValidate(t *testing.T) {
+	t.Setenv("TEST_HOST_STR", "  val ")
+	if got := EnvOrDefault("TEST_HOST_STR", "fallback"); got != "val" {
+		t.Fatalf("EnvOrDefault = %q, want val", got)
+	}
+	if got := EnvOrDefault("TEST_HOST_MISSING", "fallback"); got != "fallback" {
+		t.Fatalf("EnvOrDefault missing = %q, want fallback", got)
+	}
+	if got, err := RequiredEnv("TEST_HOST_STR"); err != nil || got != "val" {
+		t.Fatalf("RequiredEnv = (%q, %v)", got, err)
+	}
+	if _, err := RequiredEnv("TEST_HOST_MISSING"); err == nil {
+		t.Fatal("RequiredEnv missing accepted")
+	}
+
+	t.Setenv("TEST_HOST_DUR", "30s")
+	if got, err := DurationEnv("TEST_HOST_DUR", time.Second); err != nil || got != 30*time.Second {
+		t.Fatalf("DurationEnv = (%v, %v)", got, err)
+	}
+	t.Setenv("TEST_HOST_DUR", "-1s")
+	if _, err := DurationEnv("TEST_HOST_DUR", time.Second); err == nil {
+		t.Fatal("DurationEnv negative accepted")
+	}
+
+	t.Setenv("TEST_HOST_INT", "10")
+	if got, err := BoundedIntEnv("TEST_HOST_INT", 5, 1, 100); err != nil || got != 10 {
+		t.Fatalf("BoundedIntEnv = (%d, %v)", got, err)
+	}
+	t.Setenv("TEST_HOST_INT", "101")
+	if _, err := BoundedIntEnv("TEST_HOST_INT", 5, 1, 100); err == nil {
+		t.Fatal("BoundedIntEnv out-of-range accepted")
+	}
+
+	id := DefaultWorkerID("service")
+	if !strings.Contains(id, "-") {
+		t.Fatalf("DefaultWorkerID = %q", id)
+	}
+}
+
 func TestRunSupervisedRecoversPanicAndDrains(t *testing.T) {
 	var logs bytes.Buffer
 	logger := observability.NewJSONLogger(&logs, slog.LevelInfo)
@@ -23,23 +64,23 @@ func TestRunSupervisedRecoversPanicAndDrains(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var runs atomic.Int32
+	restarted := make(chan struct{})
 	var wg sync.WaitGroup
-	runSupervised(ctx, &wg, logger, metrics, "report.test_worker", 5*time.Millisecond, func() {
+	RunSupervised(ctx, &wg, logger, metrics, "servicehost.test_worker", 5*time.Millisecond, func() {
 		if runs.Add(1) == 1 {
 			panic("boom")
 		}
+		close(restarted)
 		<-ctx.Done()
 	})
 
-	deadline := time.Now().Add(time.Second)
-	for runs.Load() < 2 && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if runs.Load() < 2 {
+	select {
+	case <-restarted:
+	case <-time.After(time.Second):
 		t.Fatalf("expected restart after panic, runs=%d", runs.Load())
 	}
 	cancel()
-	waitBackground(&wg, time.Second, logger)
+	WaitBackground(&wg, time.Second, logger)
 	if !bytes.Contains(logs.Bytes(), []byte("GOROUTINE_PANIC_RECOVERED")) {
 		t.Fatalf("expected JSON panic log, got: %s", logs.String())
 	}
@@ -80,7 +121,7 @@ func TestStartServerShutdownWaitsForInFlightHTTP(t *testing.T) {
 	}()
 	<-started
 
-	shutdownDone, shutdownErr := startServerShutdown(2*time.Second, nil, nil, "report.shutdown", srv)
+	shutdownDone, shutdownErr := StartServerShutdown(2*time.Second, nil, nil, "servicehost.shutdown", srv)
 	select {
 	case <-shutdownDone:
 		t.Fatal("shutdownDone closed while request was in flight")
@@ -94,7 +135,34 @@ func TestStartServerShutdownWaitsForInFlightHTTP(t *testing.T) {
 	if err := <-reqErrCh; err != nil {
 		t.Fatalf("HTTP request failed: %v", err)
 	}
-	waitBackground(&wg, time.Second, nil)
+	WaitBackground(&wg, time.Second, nil)
+}
+
+func TestShutdownServersIgnoresNilAndErrServerClosed(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: http.NewServeMux(), ReadHeaderTimeout: time.Second}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	serveErr := make(chan error, 1)
+	go func() {
+		defer wg.Done()
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- err
+		}
+	}()
+
+	if err := ShutdownServers(2*time.Second, srv, nil); err != nil {
+		t.Fatalf("ShutdownServers err=%v", err)
+	}
+	WaitBackground(&wg, 2*time.Second, nil)
+	select {
+	case err := <-serveErr:
+		t.Fatalf("unexpected server error: %v", err)
+	default:
+	}
 }
 
 type shutdownRecordingExporter struct {
@@ -112,7 +180,7 @@ func (e *shutdownRecordingExporter) Shutdown(context.Context) error {
 	return nil
 }
 
-func TestShutdownServiceRuntimeStrictOrder(t *testing.T) {
+func TestShutdownRuntimeStrictOrder(t *testing.T) {
 	var mu sync.Mutex
 	var events []string
 	record := func(event string) {
@@ -122,7 +190,7 @@ func TestShutdownServiceRuntimeStrictOrder(t *testing.T) {
 	}
 
 	telemetry := observability.NewRuntime(observability.RuntimeConfig{
-		Service:  "report-service-test",
+		Service:  "servicehost-test",
 		Exporter: &shutdownRecordingExporter{record: record},
 	})
 	telemetry.MarkReady()
@@ -154,7 +222,7 @@ func TestShutdownServiceRuntimeStrictOrder(t *testing.T) {
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 	var bgWG sync.WaitGroup
 	workerStarted := make(chan struct{})
-	runSupervised(workerCtx, &bgWG, nil, telemetry.Metrics, "report.test_worker", 5*time.Millisecond, func() {
+	RunSupervised(workerCtx, &bgWG, nil, telemetry.Metrics, "servicehost.test_worker", 5*time.Millisecond, func() {
 		close(workerStarted)
 		<-workerCtx.Done()
 		record("worker_exited")
@@ -174,31 +242,31 @@ func TestShutdownServiceRuntimeStrictOrder(t *testing.T) {
 
 	shutdownDone := make(chan error, 1)
 	go func() {
-		shutdownDone <- shutdownServiceRuntime(
+		shutdownDone <- ShutdownRuntime(
 			nil,
 			telemetry,
 			2*time.Second,
 			2*time.Second,
-			"report.shutdown",
+			"servicehost.shutdown",
 			&httpWG,
 			cancelWorkers,
 			&bgWG,
-			func() {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
-				_ = telemetry.Shutdown(ctx)
-			},
+			NewTelemetryShutdown(telemetry, time.Second),
 			srv,
 		)
 	}()
 
-	deadline := time.Now().Add(time.Second)
-	for telemetry.Ready() && time.Now().Before(deadline) {
-		time.Sleep(2 * time.Millisecond)
-	}
-	if telemetry.Ready() {
-		close(releaseHTTP)
-		t.Fatal("expected telemetry.MarkNotReady() immediately on shutdown")
+	deadlineTimer := time.NewTimer(time.Second)
+	defer deadlineTimer.Stop()
+	readyPoll := time.NewTicker(time.Millisecond)
+	defer readyPoll.Stop()
+	for telemetry.Ready() {
+		select {
+		case <-readyPoll.C:
+		case <-deadlineTimer.C:
+			close(releaseHTTP)
+			t.Fatal("expected telemetry.MarkNotReady() immediately on shutdown")
+		}
 	}
 	if workerCtx.Err() != nil {
 		close(releaseHTTP)
@@ -210,7 +278,7 @@ func TestShutdownServiceRuntimeStrictOrder(t *testing.T) {
 		t.Fatalf("HTTP request failed: %v", err)
 	}
 	if err := <-shutdownDone; err != nil {
-		t.Fatalf("shutdownServiceRuntime failed: %v", err)
+		t.Fatalf("ShutdownRuntime failed: %v", err)
 	}
 
 	mu.Lock()

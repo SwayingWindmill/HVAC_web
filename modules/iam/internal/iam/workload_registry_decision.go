@@ -1,10 +1,10 @@
 package iam
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
@@ -19,7 +19,7 @@ func (h *handler) handleRegistryWorkloadDecision(writer http.ResponseWriter, req
 		writeProblem(writer, http.StatusMethodNotAllowed, "IAM_METHOD_NOT_ALLOWED", "This IAM route only supports POST.")
 		return http.StatusMethodNotAllowed
 	}
-	if hasForgedIdentityHeader(request.Header) || strings.TrimSpace(request.Header.Get("X-Delegation-Grant")) != "" {
+	if hasForgedIdentityHeader(request.Header) || grant.HasNonEmptyHeader(request.Header, "X-Delegation-Grant") {
 		writeProblem(writer, http.StatusBadRequest, "IAM_FORGED_IDENTITY_HEADER", "Caller-supplied identity headers are not accepted.")
 		return http.StatusBadRequest
 	}
@@ -28,11 +28,11 @@ func (h *handler) handleRegistryWorkloadDecision(writer http.ResponseWriter, req
 		writeProblem(writer, http.StatusUnauthorized, "IAM_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.")
 		return http.StatusUnauthorized
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
-	var decisionRequest registryauth.DecisionRequest
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&decisionRequest); err != nil || ensureJSONEOF(decoder) != nil || decisionRequest.Validate() != nil || decisionRequest.GrantPresenter != "" {
+	decisionRequest, ok := decodeStrictDecisionJSON[registryauth.DecisionRequest](writer, request, "IAM_REGISTRY_DECISION_REQUEST_INVALID", "The Registry authorization request is invalid.")
+	if !ok {
+		return http.StatusBadRequest
+	}
+	if decisionRequest.GrantPresenter != "" {
 		writeProblem(writer, http.StatusBadRequest, "IAM_REGISTRY_DECISION_REQUEST_INVALID", "The Registry authorization request is invalid.")
 		return http.StatusBadRequest
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
@@ -83,7 +84,7 @@ func (h *handler) handleCommandReportedState(writer http.ResponseWriter, request
 	// The command runtime serves every Tenant; the answer names the Device's own Tenant
 	// and Site, which the caller checks against the command.
 	deviceIDs := query["deviceId"]
-	if len(deviceIDs) != 1 || !uuidV7Pattern.MatchString(strings.TrimSpace(deviceIDs[0])) {
+	if len(deviceIDs) != 1 || !uuidv7.IsValid(strings.TrimSpace(deviceIDs[0])) {
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_COMMAND_REPORTED_STATE_DEVICE_INVALID", "A single Device is required.", false)
 		return
 	}

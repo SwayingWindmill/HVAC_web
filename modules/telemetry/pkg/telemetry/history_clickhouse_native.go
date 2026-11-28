@@ -17,6 +17,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -162,7 +163,7 @@ func (sink *ClickHouseNativeHistorySink) InsertObservations(ctx context.Context,
 		if ordered[i].PointRevision != nil && *ordered[i].PointRevision < 0 {
 			return fmt.Errorf("%w: ClickHouse history point revision cannot be negative", ErrHistoryBatchPermanent)
 		}
-		if !uuidV7Pattern.MatchString(ordered[i].SourceEventID) {
+		if !uuidv7.IsValid(ordered[i].SourceEventID) {
 			return fmt.Errorf("%w: ClickHouse history source event ID must be UUIDv7", ErrHistoryBatchPermanent)
 		}
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 var (
@@ -259,7 +260,7 @@ func (store *Store) resolveActiveGatewayTenantAndSite(ctx context.Context, gatew
 	if store == nil || store.pool == nil {
 		return "", "", errors.New("connectivity store is closed")
 	}
-	if !gatewayIDPattern.MatchString(gatewayID) {
+	if !uuidv7.IsValid(gatewayID) {
 		return "", "", ErrEnrollmentRejected
 	}
 	var tenantID, siteID string
@@ -427,7 +428,7 @@ INSERT INTO connectivity.gateway_waveform_rules (
 }
 
 func (store *Store) UpdateGatewayWaveformRule(ctx context.Context, claims registryauth.GrantClaims, gatewayID, ruleID string, input UpsertWaveformRuleInput) (WaveformRuleRecord, error) {
-	if !gatewayIDPattern.MatchString(ruleID) {
+	if !uuidv7.IsValid(ruleID) {
 		return WaveformRuleRecord{}, ErrWaveformNotFound
 	}
 	tenantID, _, err := store.resolveGatewayScopeForDiagnostics(ctx, claims, gatewayID)
@@ -484,7 +485,7 @@ RETURNING id::text, tenant_id::text, site_id::text, gateway_id::text, rule_name,
 }
 
 func (store *Store) DeleteGatewayWaveformRule(ctx context.Context, claims registryauth.GrantClaims, gatewayID, ruleID string) error {
-	if !gatewayIDPattern.MatchString(ruleID) {
+	if !uuidv7.IsValid(ruleID) {
 		return ErrWaveformNotFound
 	}
 	tenantID, _, err := store.resolveGatewayScopeForDiagnostics(ctx, claims, gatewayID)
@@ -543,7 +544,7 @@ LIMIT $3`, tenantID, gatewayID, limit)
 }
 
 func (store *Store) GetGatewayWaveformCapture(ctx context.Context, claims registryauth.GrantClaims, gatewayID, captureID string) (WaveformCaptureRecord, error) {
-	if !gatewayIDPattern.MatchString(captureID) {
+	if !uuidv7.IsValid(captureID) {
 		return WaveformCaptureRecord{}, ErrWaveformNotFound
 	}
 	tenantID, _, err := store.resolveGatewayScopeForDiagnostics(ctx, claims, gatewayID)

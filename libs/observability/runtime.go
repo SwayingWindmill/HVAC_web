@@ -62,6 +62,14 @@ func NewRuntime(config RuntimeConfig) *Runtime {
 		logger = NewJSONLogger(os.Stdout, slog.LevelInfo)
 	}
 	metrics := NewRegistry()
+	if strings.TrimSpace(config.Service) != "" {
+		_ = metrics.SetGauge(
+			"hvac_service_up",
+			"1 when this diagnostics server is serving.",
+			map[string]string{"service": config.Service},
+			1,
+		)
+	}
 	async := newAsyncExporter(delegate, config.QueueSize, logger, metrics)
 	return &Runtime{
 		Service: config.Service,

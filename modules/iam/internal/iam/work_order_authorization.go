@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
+	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
 type WorkOrderOwnershipTarget struct {
@@ -69,23 +69,23 @@ func (store *staticWorkOrderAuthorizationStore) LookupWorkOrderAuthorization(_ c
 	return value, nil
 }
 
-func evaluateWorkOrderAuthorization(ctx context.Context, store WorkOrderAuthorizationStore, now time.Time, subjectIssuer, subject string, request workorderauth.DecisionRequest) (workorderauth.Decision, error) {
+func evaluateWorkOrderAuthorization(ctx context.Context, store WorkOrderAuthorizationStore, now time.Time, subjectIssuer, subject string, request workordermodel.DecisionRequest) (workordermodel.Decision, error) {
 	lookup := WorkOrderAuthorizationLookup{AuthorizationLookup: AuthorizationLookup{
 		SubjectIssuer: subjectIssuer, Subject: subject, TenantID: request.TenantID,
 	}}
-	assigning := request.Action == workorderauth.ActionCreate || request.Action == workorderauth.ActionAssign
+	assigning := request.Action == workordermodel.ActionCreate || request.Action == workordermodel.ActionAssign
 	if assigning && request.AssigneeID != nil {
 		lookup.AssigneePrincipalID = *request.AssigneeID
 	}
 	facts, err := store.LookupWorkOrderAuthorization(ctx, lookup)
 	if err != nil {
-		return workorderauth.Decision{}, err
+		return workordermodel.Decision{}, err
 	}
-	decision := workorderauth.Decision{
+	decision := workordermodel.Decision{
 		SubjectIssuer: subjectIssuer, Subject: subject,
 		TenantID: request.TenantID, SiteID: request.SiteID, WorkOrderID: request.WorkOrderID,
 		AssigneeID: request.AssigneeID, TeamID: request.TeamID,
-		Action: request.Action, PolicyRevision: facts.PolicyRevision, ReasonCode: workorderauth.ReasonDenyPrincipal,
+		Action: request.Action, PolicyRevision: facts.PolicyRevision, ReasonCode: workordermodel.ReasonDenyPrincipal,
 		DecidedAt: now.UTC().Format(time.RFC3339Nano),
 	}
 	if !facts.Found || facts.Principal.Status != FactStatusActive {
@@ -93,28 +93,28 @@ func evaluateWorkOrderAuthorization(ctx context.Context, store WorkOrderAuthoriz
 	}
 	decision.PrincipalID = facts.Principal.ID
 	if active, _ := facts.member(request.TenantID, now); !active {
-		decision.ReasonCode = workorderauth.ReasonDenyMembership
+		decision.ReasonCode = workordermodel.ReasonDenyMembership
 		return decision, nil
 	}
 	allowed, denied := facts.grantsAt(request.TenantID, request.SiteID, string(request.Action), now)
 	if denied {
-		decision.ReasonCode = workorderauth.ReasonDenyExplicit
+		decision.ReasonCode = workordermodel.ReasonDenyExplicit
 		return decision, nil
 	}
 	if !allowed {
-		decision.ReasonCode = workorderauth.ReasonDenyScope
+		decision.ReasonCode = workordermodel.ReasonDenyScope
 		return decision, nil
 	}
 	if assigning {
 		// A person may own a work order on a Site where they may start work.
 		if request.AssigneeID != nil {
 			if active, _ := facts.Assignee.member(request.TenantID, now); !active {
-				decision.ReasonCode = workorderauth.ReasonDenyScope
+				decision.ReasonCode = workordermodel.ReasonDenyScope
 				return decision, nil
 			}
-			startAllowed, startDenied := facts.Assignee.grantsAt(request.TenantID, request.SiteID, string(workorderauth.ActionStart), now)
+			startAllowed, startDenied := facts.Assignee.grantsAt(request.TenantID, request.SiteID, string(workordermodel.ActionStart), now)
 			if !startAllowed || startDenied {
-				decision.ReasonCode = workorderauth.ReasonDenyScope
+				decision.ReasonCode = workordermodel.ReasonDenyScope
 				return decision, nil
 			}
 		}
@@ -126,11 +126,11 @@ func evaluateWorkOrderAuthorization(ctx context.Context, store WorkOrderAuthoriz
 		}
 	}
 	decision.Allowed = true
-	decision.ReasonCode = workorderauth.ReasonAllowExactScope
+	decision.ReasonCode = workordermodel.ReasonAllowExactScope
 	return decision, nil
 }
 
-func teamTargetAllowed(targets []WorkOrderOwnershipTarget, request workorderauth.DecisionRequest, now time.Time) (workorderauth.ReasonCode, bool) {
+func teamTargetAllowed(targets []WorkOrderOwnershipTarget, request workordermodel.DecisionRequest, now time.Time) (workordermodel.ReasonCode, bool) {
 	allowed := false
 	for _, target := range targets {
 		if target.Status != FactStatusActive || !factEffective(target.ValidFrom, target.ValidTo, now) ||
@@ -139,12 +139,12 @@ func teamTargetAllowed(targets []WorkOrderOwnershipTarget, request workorderauth
 			continue
 		}
 		if target.Effect == BindingEffectDeny {
-			return workorderauth.ReasonDenyExplicit, false
+			return workordermodel.ReasonDenyExplicit, false
 		}
 		allowed = allowed || target.Effect == BindingEffectAllow
 	}
 	if !allowed {
-		return workorderauth.ReasonDenyScope, false
+		return workordermodel.ReasonDenyScope, false
 	}
 	return "", true
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 	"github.com/redis/go-redis/v9"
 )
@@ -723,7 +724,7 @@ func validateLatestCacheSnapshot(snapshot telemetryapi.DeviceObservationSnapshot
 	if snapshot.SchemaVersion != 1 || snapshot.BusinessRevision < 1 {
 		return errors.New("telemetry latest snapshot schema/revision is invalid")
 	}
-	if !uuidV7Pattern.MatchString(string(snapshot.TenantId)) || !uuidV7Pattern.MatchString(string(snapshot.SiteId)) || !uuidV7Pattern.MatchString(string(snapshot.DeviceId)) {
+	if !uuidv7.IsValid(string(snapshot.TenantId)) || !uuidv7.IsValid(string(snapshot.SiteId)) || !uuidv7.IsValid(string(snapshot.DeviceId)) {
 		return errors.New("telemetry latest snapshot identity must be UUIDv7")
 	}
 	if _, err := time.Parse(time.RFC3339Nano, string(snapshot.EvaluatedAt)); err != nil {

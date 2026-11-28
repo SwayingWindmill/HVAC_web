@@ -12,7 +12,6 @@ import (
 )
 
 var (
-	uuidV7Pattern  = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	traceIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	zeroTraceID    = strings.Repeat("0", 32)
 )

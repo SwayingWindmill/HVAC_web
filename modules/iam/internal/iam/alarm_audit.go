@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 )
 
 type AlarmDecisionAudit struct {
@@ -12,10 +12,10 @@ type AlarmDecisionAudit struct {
 	TenantID       string
 	SiteID         string
 	AlarmID        string
-	Action         alarmauth.Action
+	Action         alarmmodel.Action
 	Allowed        bool
 	PolicyRevision string
-	ReasonCode     alarmauth.ReasonCode
+	ReasonCode     alarmmodel.ReasonCode
 	RequestID      string
 	TraceID        string
 	OccurredAt     string

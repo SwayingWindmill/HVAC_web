@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const LifecycleMetricResultDataset = "metric_result_facts"
@@ -265,7 +266,7 @@ ORDER BY requested_at DESC LIMIT 1`, job.TenantID, job.SiteID, payload.DatasetCo
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return LifecycleDeletion{}, err
 	}
-	id, err := uuidv7(at)
+	id, err := uuidv7.NewAt(at)
 	if err != nil {
 		return LifecycleDeletion{}, err
 	}
@@ -327,7 +328,7 @@ WHERE tenant_id=$1::uuid AND dataset_code=$2 AND resource_key=$3`, job.TenantID,
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", err
 	}
-	tombstoneID, err := uuidv7(at)
+	tombstoneID, err := uuidv7.NewAt(at)
 	if err != nil {
 		return "", err
 	}
@@ -352,7 +353,7 @@ func (s *PostgresStore) RecordLifecycleEvent(ctx context.Context, job SchedulerJ
 	if err != nil {
 		return err
 	}
-	id, err := uuidv7(at)
+	id, err := uuidv7.NewAt(at)
 	if err != nil {
 		return err
 	}

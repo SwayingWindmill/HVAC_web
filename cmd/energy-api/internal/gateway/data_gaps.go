@@ -15,7 +15,6 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -309,7 +308,7 @@ func (h *handler) listActiveReadingGapAlarms(
 	route := publicAlarmRoute{
 		template: "/api/v1/alarms",
 		siteID:   siteID,
-		action:   alarmauth.ActionRead,
+		action:   alarmmodel.ActionRead,
 	}
 	var gaps []alarmmodel.Alarm
 	cursor := ""
@@ -334,7 +333,7 @@ func (h *handler) listActiveReadingGapAlarms(
 			h,
 			h.alarmCaller(session),
 			h.alarmOwner(),
-			string(alarmauth.ActionRead),
+			string(alarmmodel.ActionRead),
 			route.scope(session.TenantID),
 			alarmCall{public: syntheticReq, route: route, limit: dataGapsAlarmPageLimit},
 		)

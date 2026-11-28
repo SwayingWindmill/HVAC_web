@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -529,7 +530,7 @@ func decodeRemoteRecommendation(body []byte, request Request, at time.Time) (Rec
 	}
 
 	recID := deterministicV7(request.OptimizationRunID, "recommendation:1", request.ValidFrom.UTC())
-	if isUUIDv7(raw.ID) {
+	if uuidv7.IsValidLowerTrimmed(raw.ID) {
 		recID = strings.TrimSpace(raw.ID)
 	}
 
@@ -685,9 +686,4 @@ func toModelAuxiliaryTargets(targets []RemoteAuxiliaryTarget) []intelligencemode
 		})
 	}
 	return out
-}
-
-func isUUIDv7(raw string) bool {
-	trimmed := strings.TrimSpace(raw)
-	return uuidPattern.MatchString(trimmed) && len(trimmed) == 36 && trimmed[14] == '7'
 }

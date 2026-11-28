@@ -3,12 +3,10 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -17,18 +15,17 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/schedulerjob"
+	"github.com/quanlaihe/hvac-web/libs/servicehost"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/forecast-service/internal/forecast"
 )
 
 const (
-	defaultShutdownTimeout         = 10 * time.Second
-	defaultBackgroundDrainTimeout  = 10 * time.Second
-	defaultFinalizeJobTimeout      = 5 * time.Second
-	defaultPanicRestartDelay       = time.Second
-	defaultReconcileInterval       = 30 * time.Second
-	defaultJobTimeoutFallback      = 5 * time.Minute
-	defaultTelemetryShutdownPeriod = 5 * time.Second
+	defaultShutdownTimeout        = 10 * time.Second
+	defaultBackgroundDrainTimeout = 10 * time.Second
+	defaultFinalizeJobTimeout     = 5 * time.Second
+	defaultReconcileInterval      = 30 * time.Second
+	defaultJobTimeoutFallback     = 5 * time.Minute
 )
 
 var errOperatorCanceled = errors.New("forecast job canceled by operator")
@@ -90,28 +87,21 @@ func runService(logger *slog.Logger) error {
 		OTLPEndpoint: strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")),
 	})
 	metrics := telemetry.Metrics
-	var telemetryShutdownOnce sync.Once
-	shutdownTelemetry := func() {
-		telemetryShutdownOnce.Do(func() {
-			shutdownCtx, cancel := context.WithTimeout(context.Background(), defaultTelemetryShutdownPeriod)
-			defer cancel()
-			_ = telemetry.Shutdown(shutdownCtx)
-		})
-	}
+	shutdownTelemetry := servicehost.NewTelemetryShutdown(telemetry, servicehost.DefaultTelemetryShutdownPeriod)
 	// Defer telemetry shutdown after pool closers are registered above so LIFO flushes telemetry first and closes pools last.
 	defer shutdownTelemetry()
 
-	clickHouseURL, err := requiredEnv("FORECAST_CLICKHOUSE_HTTP_URL")
+	clickHouseURL, err := servicehost.RequiredEnv("FORECAST_CLICKHOUSE_HTTP_URL")
 	if err != nil {
 		return err
 	}
 	sink, err := forecast.NewClickHouseSink(forecast.ClickHouseConfig{
 		BaseURL:        clickHouseURL,
-		Database:       envOrDefault("FORECAST_CLICKHOUSE_DATABASE", "analytics"),
-		Table:          envOrDefault("FORECAST_CLICKHOUSE_TABLE", "forecast_series"),
-		Username:       envOrDefault("FORECAST_CLICKHOUSE_USERNAME", "forecast_service_writer"),
+		Database:       servicehost.EnvOrDefault("FORECAST_CLICKHOUSE_DATABASE", "analytics"),
+		Table:          servicehost.EnvOrDefault("FORECAST_CLICKHOUSE_TABLE", "forecast_series"),
+		Username:       servicehost.EnvOrDefault("FORECAST_CLICKHOUSE_USERNAME", "forecast_service_writer"),
 		Password:       os.Getenv("FORECAST_CLICKHOUSE_PASSWORD"),
-		ReaderUsername: envOrDefault("FORECAST_CLICKHOUSE_READER_USERNAME", "forecast_service_reader"),
+		ReaderUsername: servicehost.EnvOrDefault("FORECAST_CLICKHOUSE_READER_USERNAME", "forecast_service_reader"),
 		ReaderPassword: os.Getenv("FORECAST_CLICKHOUSE_READER_PASSWORD"),
 	})
 	if err != nil {
@@ -119,7 +109,7 @@ func runService(logger *slog.Logger) error {
 	}
 	closers = append(closers, sink.CloseIdleConnections)
 
-	dsn, err := requiredEnv("FORECAST_POSTGRES_DSN")
+	dsn, err := servicehost.RequiredEnv("FORECAST_POSTGRES_DSN")
 	if err != nil {
 		return err
 	}
@@ -135,7 +125,7 @@ func runService(logger *slog.Logger) error {
 	}
 	history, err := forecast.NewClickHouseHistoryReader(forecast.HistoryConfig{
 		BaseURL:  clickHouseURL,
-		Username: envOrDefault("FORECAST_CLICKHOUSE_READER_USERNAME", "forecast_service_reader"),
+		Username: servicehost.EnvOrDefault("FORECAST_CLICKHOUSE_READER_USERNAME", "forecast_service_reader"),
 		Password: os.Getenv("FORECAST_CLICKHOUSE_READER_PASSWORD"),
 	})
 	if err != nil {
@@ -155,21 +145,21 @@ func runService(logger *slog.Logger) error {
 	preparer, err := forecast.NewPreparerWithOptions(publication, history, time.Now, forecast.PreparerOptions{
 		WeatherHistory:  history,
 		WeatherForecast: openMeteoProvider,
-		DefaultTimezone: envOrDefault("FORECAST_DEFAULT_TIMEZONE", "Asia/Shanghai"),
+		DefaultTimezone: servicehost.EnvOrDefault("FORECAST_DEFAULT_TIMEZONE", "Asia/Shanghai"),
 	})
 	if err != nil {
 		return err
 	}
 
-	certPath, err := requiredEnv("FORECAST_TLS_CERT")
+	certPath, err := servicehost.RequiredEnv("FORECAST_TLS_CERT")
 	if err != nil {
 		return err
 	}
-	keyPath, err := requiredEnv("FORECAST_TLS_KEY")
+	keyPath, err := servicehost.RequiredEnv("FORECAST_TLS_KEY")
 	if err != nil {
 		return err
 	}
-	caPath, err := requiredEnv("FORECAST_TLS_CA")
+	caPath, err := servicehost.RequiredEnv("FORECAST_TLS_CA")
 	if err != nil {
 		return err
 	}
@@ -181,7 +171,7 @@ func runService(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	delegationCert, err := requiredEnv("FORECAST_GATEWAY_DELEGATION_CERT")
+	delegationCert, err := servicehost.RequiredEnv("FORECAST_GATEWAY_DELEGATION_CERT")
 	if err != nil {
 		return err
 	}
@@ -191,7 +181,7 @@ func runService(logger *slog.Logger) error {
 	}
 	handler, err := forecast.NewHTTPHandler(service, forecast.AuthConfig{
 		GatewayPublicKey: gatewayKey,
-		GatewaySPIFFE:    envOrDefault("FORECAST_GATEWAY_SPIFFE", forecast.DefaultGatewaySPIFFEID),
+		GatewaySPIFFE:    servicehost.EnvOrDefault("FORECAST_GATEWAY_SPIFFE", forecast.DefaultGatewaySPIFFEID),
 	})
 	if err != nil {
 		return err
@@ -201,20 +191,20 @@ func runService(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	workerID := envOrDefault("FORECAST_WORKER_ID", defaultWorkerID())
-	claimInterval, err := durationEnv("FORECAST_CLAIM_INTERVAL", 5*time.Second)
+	workerID := servicehost.EnvOrDefault("FORECAST_WORKER_ID", servicehost.DefaultWorkerID("forecast"))
+	claimInterval, err := servicehost.DurationEnv("FORECAST_CLAIM_INTERVAL", 5*time.Second)
 	if err != nil {
 		return err
 	}
-	leaseDuration, err := durationEnv("FORECAST_LEASE_DURATION", 2*time.Minute)
+	leaseDuration, err := servicehost.DurationEnv("FORECAST_LEASE_DURATION", 2*time.Minute)
 	if err != nil {
 		return err
 	}
-	leaseRenew, err := durationEnv("FORECAST_LEASE_RENEW", 30*time.Second)
+	leaseRenew, err := servicehost.DurationEnv("FORECAST_LEASE_RENEW", 30*time.Second)
 	if err != nil {
 		return err
 	}
-	claimBatch, err := integerEnv("FORECAST_CLAIM_BATCH", 8)
+	claimBatch, err := servicehost.BoundedIntEnv("FORECAST_CLAIM_BATCH", 8, 1, 100)
 	if err != nil {
 		return err
 	}
@@ -222,18 +212,18 @@ func runService(logger *slog.Logger) error {
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
 	defer cancelWorkers()
 	var bgWG sync.WaitGroup
-	runSupervised(workerCtx, &bgWG, logger, metrics, "forecast.worker", defaultPanicRestartDelay, func() {
+	servicehost.RunSupervised(workerCtx, &bgWG, logger, metrics, "forecast.worker", servicehost.DefaultPanicRestartDelay, func() {
 		runForecastWorker(workerCtx, queue, publication, service, preparer, workerID, claimInterval, claimBatch, leaseDuration, leaseRenew, logger, metrics)
 	})
 
 	// Cross-store repair is part of the Forecast runtime itself. It only repairs
 	// stale PERSISTING jobs after proving the expected result count in ClickHouse.
-	runSupervised(workerCtx, &bgWG, logger, metrics, "forecast.reconcile", defaultPanicRestartDelay, func() {
+	servicehost.RunSupervised(workerCtx, &bgWG, logger, metrics, "forecast.reconcile", servicehost.DefaultPanicRestartDelay, func() {
 		runReconcileLoop(workerCtx, defaultReconcileInterval, service, logger)
 	})
 
 	server := &http.Server{
-		Addr:              envOrDefault("FORECAST_HTTP_ADDR", ":19092"),
+		Addr:              servicehost.EnvOrDefault("FORECAST_HTTP_ADDR", ":19092"),
 		Handler:           handler,
 		TLSConfig:         serverTLS,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -243,8 +233,8 @@ func runService(logger *slog.Logger) error {
 	}
 	// The container health check has no client certificate, so it asks a plain port that answers nothing else.
 	diagnostics := &http.Server{
-		Addr:              envOrDefault("FORECAST_DIAGNOSTICS_ADDR", ":19099"),
-		Handler:           forecast.NewDiagnosticsHandler(telemetry),
+		Addr:              servicehost.EnvOrDefault("FORECAST_DIAGNOSTICS_ADDR", ":19099"),
+		Handler:           telemetry.DiagnosticsHandler(),
 		ReadHeaderTimeout: 2 * time.Second,
 		ReadTimeout:       3 * time.Second,
 		WriteTimeout:      3 * time.Second,
@@ -252,46 +242,9 @@ func runService(logger *slog.Logger) error {
 
 	telemetry.MarkReady()
 
-	serveErr := make(chan error, 2)
-	var httpWG sync.WaitGroup
-	httpWG.Add(1)
-	go func() {
-		defer httpWG.Done()
-		defer observability.Recover(logger, metrics, "forecast.diagnostics_server", func(any) {
-			select {
-			case serveErr <- errors.New("diagnostics server panicked"):
-			default:
-			}
-		})
-		if err := diagnostics.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serveErr <- fmt.Errorf("diagnostics server: %w", err)
-		}
-	}()
-	httpWG.Add(1)
-	go func() {
-		defer httpWG.Done()
-		defer observability.Recover(logger, metrics, "forecast.http_server", func(any) {
-			select {
-			case serveErr <- errors.New("http server panicked"):
-			default:
-			}
-		})
-		logger.Info("forecast_service_started", "address", server.Addr, "diagnostics_address", diagnostics.Addr)
-		if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serveErr <- fmt.Errorf("http server: %w", err)
-		}
-	}()
+	httpWG, runErr := servicehost.ServeAndWait(sigCtx, stopSignals, logger, metrics, "forecast", server, diagnostics, true)
 
-	var runErr error
-	select {
-	case <-sigCtx.Done():
-		logger.Info("forecast_service_shutting_down")
-	case err := <-serveErr:
-		runErr = err
-		stopSignals()
-	}
-
-	if shutdownErr := shutdownServiceRuntime(logger, telemetry, defaultShutdownTimeout, defaultBackgroundDrainTimeout, "forecast.shutdown", &httpWG, cancelWorkers, &bgWG, shutdownTelemetry, server, diagnostics); shutdownErr != nil {
+	if shutdownErr := servicehost.ShutdownRuntime(logger, telemetry, defaultShutdownTimeout, defaultBackgroundDrainTimeout, "forecast.shutdown", httpWG, cancelWorkers, &bgWG, shutdownTelemetry, server, diagnostics); shutdownErr != nil {
 		logger.Warn("forecast_server_shutdown_failed", "error_code", "FORECAST_SHUTDOWN_FAILED", "error", shutdownErr)
 		if runErr == nil {
 			runErr = shutdownErr
@@ -299,73 +252,6 @@ func runService(logger *slog.Logger) error {
 	}
 	logger.Info("forecast_service_stopped")
 	return runErr
-}
-
-func shutdownServiceRuntime(
-	logger *slog.Logger,
-	telemetry *observability.Runtime,
-	shutdownTimeout time.Duration,
-	drainTimeout time.Duration,
-	component string,
-	httpWG *sync.WaitGroup,
-	cancelWorkers context.CancelFunc,
-	bgWG *sync.WaitGroup,
-	shutdownTelemetry func(),
-	servers ...*http.Server,
-) error {
-	var metrics *observability.Registry
-	if telemetry != nil {
-		telemetry.MarkNotReady()
-		metrics = telemetry.Metrics
-	}
-	shutdownDone, shutdownResult := startServerShutdown(shutdownTimeout, logger, metrics, component, servers...)
-	<-shutdownDone
-	shutdownErr := shutdownResult()
-	if httpWG != nil {
-		waitBackground(httpWG, shutdownTimeout, logger)
-	}
-	if cancelWorkers != nil {
-		cancelWorkers()
-	}
-	if bgWG != nil {
-		waitBackground(bgWG, drainTimeout, logger)
-	}
-	if shutdownTelemetry != nil {
-		shutdownTelemetry()
-	}
-	return shutdownErr
-}
-
-func runSupervised(ctx context.Context, wg *sync.WaitGroup, logger *slog.Logger, metrics *observability.Registry, component string, restartDelay time.Duration, fn func()) {
-	if fn == nil {
-		return
-	}
-	if restartDelay <= 0 {
-		restartDelay = defaultPanicRestartDelay
-	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for ctx.Err() == nil {
-			panicked := false
-			func() {
-				defer observability.Recover(logger, metrics, component, func(any) {
-					panicked = true
-				})
-				fn()
-			}()
-			if !panicked || ctx.Err() != nil {
-				return
-			}
-			timer := time.NewTimer(restartDelay)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return
-			case <-timer.C:
-			}
-		}
-	}()
 }
 
 func runReconcileLoop(ctx context.Context, interval time.Duration, reconciler forecastReconciler, logger *slog.Logger) {
@@ -387,97 +273,6 @@ func runReconcileLoop(ctx context.Context, interval time.Duration, reconciler fo
 			}
 		}
 	}
-}
-
-func startServerShutdown(timeout time.Duration, logger *slog.Logger, metrics *observability.Registry, component string, servers ...*http.Server) (<-chan struct{}, func() error) {
-	shutdownDone := make(chan struct{})
-	var (
-		mu       sync.Mutex
-		firstErr error
-	)
-	go func() {
-		defer close(shutdownDone)
-		defer observability.Recover(logger, metrics, component, func(r any) {
-			mu.Lock()
-			if firstErr == nil {
-				firstErr = fmt.Errorf("shutdown panicked: %v", r)
-			}
-			mu.Unlock()
-		})
-		if err := shutdownServers(timeout, servers...); err != nil {
-			mu.Lock()
-			if firstErr == nil {
-				firstErr = err
-			}
-			mu.Unlock()
-		}
-	}()
-	return shutdownDone, func() error {
-		mu.Lock()
-		defer mu.Unlock()
-		return firstErr
-	}
-}
-
-func shutdownServers(timeout time.Duration, servers ...*http.Server) error {
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	var (
-		mu       sync.Mutex
-		firstErr error
-		wg       sync.WaitGroup
-	)
-	for _, srv := range servers {
-		if srv == nil {
-			continue
-		}
-		wg.Add(1)
-		go func(server *http.Server) {
-			defer wg.Done()
-			if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = err
-				}
-				mu.Unlock()
-			}
-		}(srv)
-	}
-	wg.Wait()
-	return firstErr
-}
-
-func waitBackground(wg *sync.WaitGroup, timeout time.Duration, logger *slog.Logger) {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		wg.Wait()
-	}()
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case <-done:
-	case <-timer.C:
-		if logger != nil {
-			logger.Warn("forecast_background_wait_timeout", "error_code", "FORECAST_SHUTDOWN_DRAIN_TIMEOUT", "timeout", timeout.String())
-		}
-	}
-}
-
-func envOrDefault(name, fallback string) string {
-	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-		return value
-	}
-	return fallback
-}
-
-func requiredEnv(name string) (string, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return "", fmt.Errorf("%s is required", name)
-	}
-	return value, nil
 }
 
 func runForecastWorker(ctx context.Context, queue forecastJobQueue, store forecastInputLoader, service forecastRunner, preparer forecastPreparer, workerID string, claimInterval time.Duration, claimBatch int, leaseDuration, leaseRenew time.Duration, logger *slog.Logger, metrics *observability.Registry) {
@@ -685,36 +480,4 @@ func executeForecastJob(ctx context.Context, queue forecastJobQueue, store forec
 	if err != nil && logger != nil {
 		logger.Warn("forecast_job_complete_finalize_failed", "error_code", "FORECAST_JOB_FINALIZE_FAILED", "job_id", job.JobID, "error", err)
 	}
-}
-
-func durationEnv(name string, fallback time.Duration) (time.Duration, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := time.ParseDuration(value)
-	if err != nil || parsed <= 0 {
-		return 0, fmt.Errorf("%s must be a positive duration", name)
-	}
-	return parsed, nil
-}
-
-func integerEnv(name string, fallback int) (int, error) {
-	value := strings.TrimSpace(os.Getenv(name))
-	if value == "" {
-		return fallback, nil
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil || parsed <= 0 || parsed > 100 {
-		return 0, fmt.Errorf("%s must be an integer in [1,100]", name)
-	}
-	return parsed, nil
-}
-
-func defaultWorkerID() string {
-	hostname, err := os.Hostname()
-	if err != nil || strings.TrimSpace(hostname) == "" {
-		hostname = "forecast"
-	}
-	return fmt.Sprintf("%s-%d", hostname, os.Getpid())
 }

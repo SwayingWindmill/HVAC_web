@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -1102,7 +1103,7 @@ func (store *Store) resolveActiveGatewayTenant(ctx context.Context, gatewayID st
 	if store == nil || store.pool == nil {
 		return "", errors.New("connectivity store is closed")
 	}
-	if !gatewayIDPattern.MatchString(gatewayID) {
+	if !uuidv7.IsValid(gatewayID) {
 		return "", ErrEnrollmentRejected
 	}
 	var tenantID string
@@ -1443,7 +1444,7 @@ func (store *Store) UpdateGatewayDesiredConfig(ctx context.Context, claims regis
 	if err != nil {
 		return GatewayConfigShadow{}, err
 	}
-	if !gatewayIDPattern.MatchString(claims.PrincipalID) {
+	if !uuidv7.IsValid(claims.PrincipalID) {
 		return GatewayConfigShadow{}, fmt.Errorf("%w: actor principalId must be UUIDv7", ErrConfigShadowInvalid)
 	}
 	var cleanedMappings []GatewayPointMapping
@@ -1954,7 +1955,7 @@ func (store *Store) UpsertConcentratorShadowState(
 	if store == nil || store.pool == nil {
 		return 0, errors.New("connectivity store is closed")
 	}
-	if !gatewayIDPattern.MatchString(tenantID) || !gatewayIDPattern.MatchString(gatewayID) || !gatewayIDPattern.MatchString(actorID) {
+	if !uuidv7.IsValid(tenantID) || !uuidv7.IsValid(gatewayID) || !uuidv7.IsValid(actorID) {
 		return 0, fmt.Errorf("%w: tenantId, gatewayId, and actorId must be UUIDv7", ErrConfigShadowInvalid)
 	}
 	if unitID < 1 || unitID > 247 || IsProtectedConcentratorUID(unitID) {

@@ -15,12 +15,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const MaxObservationBatchSize = 512
 
 var (
-	uuidV7Pattern       = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	uuidPattern         = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	telemetryKeyPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.:-]{0,127}$`)
 )
@@ -67,7 +67,7 @@ func (store *PostgresStore) FilterUnseenObservations(ctx context.Context, source
 	uniqueIDs := make([]string, 0, len(eventIDs))
 	for _, rawID := range eventIDs {
 		id := strings.ToLower(strings.TrimSpace(rawID))
-		if !uuidV7Pattern.MatchString(id) || unseen[id] {
+		if !uuidv7.IsValid(id) || unseen[id] {
 			continue
 		}
 		unseen[id] = true
@@ -1961,13 +1961,13 @@ func nullableStringPtr(value string) *string {
 }
 
 func validateObservationCandidate(candidate ObservationCandidate) error {
-	if len(candidate.SourceID) < 1 || len(candidate.SourceID) > 256 || !uuidV7Pattern.MatchString(candidate.Position.EventID) {
+	if len(candidate.SourceID) < 1 || len(candidate.SourceID) > 256 || !uuidv7.IsValid(candidate.Position.EventID) {
 		return errors.New("telemetry source identity is invalid")
 	}
-	if device := candidate.Device; device != nil && (!uuidV7Pattern.MatchString(device.TenantID) || !uuidV7Pattern.MatchString(device.SiteID) || !uuidV7Pattern.MatchString(device.DeviceID)) {
+	if device := candidate.Device; device != nil && (!uuidv7.IsValid(device.TenantID) || !uuidv7.IsValid(device.SiteID) || !uuidv7.IsValid(device.DeviceID)) {
 		return errors.New("telemetry resolved Device is invalid")
 	}
-	if point := candidate.Point; point != nil && (candidate.Device == nil || !uuidV7Pattern.MatchString(point.PointID) || point.SensorID != nil && !uuidV7Pattern.MatchString(*point.SensorID) || point.PointRevision < 1) {
+	if point := candidate.Point; point != nil && (candidate.Device == nil || !uuidv7.IsValid(point.PointID) || point.SensorID != nil && !uuidv7.IsValid(*point.SensorID) || point.PointRevision < 1) {
 		return errors.New("telemetry resolved Point is invalid")
 	}
 	if !candidate.SourcePath.Valid() {

@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -35,8 +35,6 @@ const (
 	concRegTempBase       uint16 = 0x76c1
 	concRegRSSIBase       uint16 = 0x9089
 )
-
-var concentratorUUIDv7Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // ConcentratorDownlinkTopic returns the canonical MQTT RPC downlink topic for UID 20 concentrator operations.
 func ConcentratorDownlinkTopic(gatewayID string) string {
@@ -284,7 +282,7 @@ func (e *ConcentratorRPCExecutor) Execute(ctx context.Context, req ConcentratorR
 	if req.SchemaVersion != concentratorRPCSchemaVersion {
 		return base("REJECTED", "CONCENTRATOR_SCHEMA_UNSUPPORTED", "unsupported RPC schemaVersion")
 	}
-	if !concentratorUUIDv7Pattern.MatchString(req.RequestID) || !concentratorUUIDv7Pattern.MatchString(req.GatewayID) {
+	if !uuidv7.IsValid(req.RequestID) || !uuidv7.IsValid(req.GatewayID) {
 		return base("REJECTED", "CONCENTRATOR_REQUEST_INVALID", "invalid gatewayId or requestId")
 	}
 	if req.UnitID < 1 || req.UnitID > 247 {

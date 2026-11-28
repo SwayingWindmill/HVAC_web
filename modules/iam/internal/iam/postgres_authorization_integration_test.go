@@ -9,9 +9,9 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
+	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 	"github.com/quanlaihe/hvac-web/modules/iam/internal/iam"
 )
 
@@ -167,8 +167,8 @@ func TestPostgresAlarmAuthorizationReadsAssignmentsAndPersistsAudit(t *testing.T
 	requestID := "alarm-postgres-decision-1"
 	if err := store.RecordAlarmDecision(ctx, iam.AlarmDecisionAudit{
 		PrincipalID: postgresOwnerAPrincipalID, TenantID: postgresTenantAID,
-		SiteID: postgresOwnerASite1ID, Action: alarmauth.ActionRead, Allowed: true,
-		PolicyRevision: "alarm-access:1/iam:1", ReasonCode: alarmauth.ReasonAllowExactScope,
+		SiteID: postgresOwnerASite1ID, Action: alarmmodel.ActionRead, Allowed: true,
+		PolicyRevision: "alarm-access:1/iam:1", ReasonCode: alarmmodel.ReasonAllowExactScope,
 		RequestID: requestID, TraceID: "trace-alarm-postgres-1", OccurredAt: "2026-08-01T00:00:00Z",
 	}); err != nil {
 		t.Fatal(err)
@@ -188,7 +188,7 @@ func TestPostgresAlarmAuthorizationReadsAssignmentsAndPersistsAudit(t *testing.T
 	if err := admin.QueryRow(ctx, `SELECT allowed, policy_revision, reason_code FROM iam.alarm_authorization_decisions WHERE request_id = $1`, requestID).Scan(&allowed, &policyRevision, &reasonCode); err != nil {
 		t.Fatal(err)
 	}
-	if !allowed || policyRevision != "alarm-access:1/iam:1" || reasonCode != string(alarmauth.ReasonAllowExactScope) {
+	if !allowed || policyRevision != "alarm-access:1/iam:1" || reasonCode != string(alarmmodel.ReasonAllowExactScope) {
 		t.Fatalf("durable Alarm decision = allowed=%v policy=%q reason=%q", allowed, policyRevision, reasonCode)
 	}
 }
@@ -224,8 +224,8 @@ func TestPostgresWorkOrderAuthorizationReadsTargetsAndTheAssigneesAccess(t *test
 	if err := store.RecordWorkOrderDecision(ctx, iam.WorkOrderDecisionAudit{
 		PrincipalID: postgresOwnerAPrincipalID, TenantID: postgresTenantAID,
 		SiteID: postgresOwnerASite1ID, WorkOrderID: "01910000-1000-7000-8000-000000000001",
-		Action: workorderauth.ActionRead, Allowed: true,
-		PolicyRevision: "work-order-access:1/iam:1", ReasonCode: workorderauth.ReasonAllowExactScope,
+		Action: workordermodel.ActionRead, Allowed: true,
+		PolicyRevision: "work-order-access:1/iam:1", ReasonCode: workordermodel.ReasonAllowExactScope,
 		RequestID: requestID, TraceID: "trace-work-order-postgres-1", OccurredAt: "2026-08-01T00:00:00Z",
 	}); err != nil {
 		t.Fatal(err)

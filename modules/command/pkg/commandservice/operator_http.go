@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
@@ -221,7 +222,8 @@ func (h *OperatorHTTPHandler) dispatchCommandItem(writer http.ResponseWriter, re
 }
 
 func (h *OperatorHTTPHandler) verifyOperatorContext(request *http.Request) (OperatorIdentity, *ControlError) {
-	claims, err := identitycontext.VerifyDelegation(h.config.GatewayDelegationPublicKey, request.Header.Get(commandControlContextHeader))
+	token, _ := grant.SingleHeader(request.Header, commandControlContextHeader)
+	claims, err := identitycontext.VerifyDelegation(h.config.GatewayDelegationPublicKey, token)
 	if err != nil {
 		return OperatorIdentity{}, &ControlError{
 			HTTPStatus: http.StatusForbidden, Code: "COMMAND_CONTROL_CONTEXT_REJECTED",

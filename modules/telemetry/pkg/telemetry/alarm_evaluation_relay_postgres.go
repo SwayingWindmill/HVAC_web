@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
@@ -291,7 +292,7 @@ func (store *PostgresStore) ReplayAlarmEvaluationDeadLetter(ctx context.Context,
 		return ErrAlarmEvaluationRelayUnavailable
 	}
 	normalized := strings.ToLower(strings.TrimSpace(eventID))
-	if !uuidV7Pattern.MatchString(normalized) {
+	if !uuidv7.IsValid(normalized) {
 		return fmt.Errorf("eventId %q must be UUIDv7", eventID)
 	}
 	command, err := store.pool.Exec(ctx, `
@@ -322,7 +323,7 @@ func optionalUUIDv7Param(raw, field string) (*string, error) {
 	if trimmed == "" {
 		return nil, nil
 	}
-	if !uuidV7Pattern.MatchString(trimmed) {
+	if !uuidv7.IsValid(trimmed) {
 		return nil, fmt.Errorf("%s %q must be UUIDv7", field, raw)
 	}
 	return &trimmed, nil

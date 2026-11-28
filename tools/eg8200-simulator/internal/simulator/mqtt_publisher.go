@@ -2,11 +2,8 @@ package simulator
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -27,6 +24,7 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -1273,20 +1271,7 @@ func mqttPublisherTLSConfig(config MQTTGatewayConfig) (*tls.Config, error) {
 }
 
 func newUUIDV7(at time.Time) (string, error) {
-	milliseconds := at.UTC().UnixMilli()
-	if milliseconds < 0 || milliseconds >= 1<<48 {
-		return "", errors.New("MQTT message timestamp is outside UUIDv7 range")
-	}
-	var raw [16]byte
-	binary.BigEndian.PutUint64(raw[:8], uint64(milliseconds)<<16)
-	if _, err := rand.Read(raw[6:]); err != nil {
-		return "", fmt.Errorf("generate MQTT message identity: %w", err)
-	}
-	raw[6] = 0x70 | (raw[6] & 0x0f)
-	raw[8] = 0x80 | (raw[8] & 0x3f)
-	encoded := make([]byte, 32)
-	hex.Encode(encoded, raw[:])
-	return string(encoded[0:8]) + "-" + string(encoded[8:12]) + "-" + string(encoded[12:16]) + "-" + string(encoded[16:20]) + "-" + string(encoded[20:32]), nil
+	return uuidv7.NewAt(at)
 }
 
 func telemetryDeadband(point PointConfig, policyDeadband float64) float64 {

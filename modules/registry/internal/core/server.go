@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
@@ -184,7 +185,8 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		writeProblem(writer, request, statusCode, "CORE_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.", false)
 		return
 	}
-	claims, errStatus, errCode, errDetail, retryable := server.authorizeDelegationGrant(request, peerSPIFFE, request.Header.Get("X-Delegation-Grant"), func(c registryauth.GrantClaims) registryauth.Action {
+	rawGrant, _ := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	claims, errStatus, errCode, errDetail, retryable := server.authorizeDelegationGrant(request, peerSPIFFE, rawGrant, func(c registryauth.GrantClaims) registryauth.Action {
 		return requiredCoreActionForRoute(route, c)
 	})
 	if errStatus != 0 {

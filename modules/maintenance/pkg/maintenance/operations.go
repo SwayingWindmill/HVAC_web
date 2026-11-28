@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type ExecutionError struct {
@@ -91,7 +92,7 @@ ORDER BY valid_until ASC`, now.UTC().Add(horizon))
 		return 0, err
 	}
 	for _, item := range found {
-		eventID, idErr := uuidv7(now)
+		eventID, idErr := uuidv7.NewAt(now)
 		if idErr != nil {
 			return 0, idErr
 		}
@@ -144,7 +145,7 @@ LIMIT 1000`)
 		return 0, err
 	}
 	for _, item := range jobs {
-		eventID, idErr := uuidv7(now)
+		eventID, idErr := uuidv7.NewAt(now)
 		if idErr != nil {
 			return 0, idErr
 		}
@@ -245,7 +246,7 @@ WHERE retirement_id=$1::uuid FOR UPDATE`, retirementID).Scan(&tenantID, &runStat
 WHERE retirement_id=$1::uuid AND owner_code=$2 FOR UPDATE`, retirementID, ownerCode).Scan(&attemptNo); err != nil {
 		return err
 	}
-	attemptID, err := uuidv7(now)
+	attemptID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return err
 	}
@@ -291,7 +292,7 @@ SET state='INCOMPLETE',revision=revision+1,updated_at=$3
 WHERE retirement_id=$1::uuid AND tenant_id=$2::uuid AND state <> 'COMPLETED'`, retirementID, tenantID, now.UTC()); err != nil {
 			return err
 		}
-		eventID, idErr := uuidv7(now)
+		eventID, idErr := uuidv7.NewAt(now)
 		if idErr != nil {
 			return idErr
 		}

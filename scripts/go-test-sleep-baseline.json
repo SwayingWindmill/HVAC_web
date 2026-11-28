@@ -1,5 +1,5 @@
 {
-  "maxTotal": 64,
+  "maxTotal": 55,
   "counts": {
     "cmd/connectivity/main_test.go": 1,
     "cmd/energy-api/internal/gateway/gateway_concentrator_test.go": 1,
@@ -26,13 +26,8 @@
     "modules/maintenance/pkg/maintenance/worker_test.go": 1,
     "modules/telemetry/pkg/telemetry/history_clickhouse_benchmark_test.go": 1,
     "modules/telemetry/pkg/telemetry/history_test.go": 3,
-    "services/fdd-service/cmd/fdd-service/main_test.go": 2,
-    "services/forecast-service/cmd/forecast-service/main_test.go": 2,
     "services/identity-service/cmd/identity-service/main_test.go": 1,
-    "services/mv-service/cmd/mv-service/main_test.go": 2,
-    "services/optimization-service/cmd/optimization-service/main_test.go": 1,
     "services/optimization-service/internal/optimization/solver_router_test.go": 1,
-    "services/report-service/cmd/report-service/main_test.go": 2,
     "tools/eg8200-simulator/internal/simulator/mqtt_command_test.go": 1
   }
 }

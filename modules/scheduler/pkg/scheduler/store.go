@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const maxCatchUpPerSchedule = 10000
@@ -549,7 +550,7 @@ WHERE schedule_id=$1::uuid AND state IN ('PENDING','READY','CLAIMED','RUNNING','
 		active = false
 	}
 
-	jobID, err := uuidv7(nowUTC)
+	jobID, err := uuidv7.NewAt(nowUTC)
 	if err != nil {
 		return false, false, err
 	}
@@ -629,19 +630,6 @@ func retryDelay(attempt int) time.Duration {
 	default:
 		return 30 * time.Minute
 	}
-}
-
-func uuidv7(now time.Time) (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	ms := uint64(now.UnixMilli())
-	b[0], b[1], b[2], b[3], b[4], b[5] = byte(ms>>40), byte(ms>>32), byte(ms>>24), byte(ms>>16), byte(ms>>8), byte(ms)
-	b[6] = (b[6] & 0x0f) | 0x70
-	b[8] = (b[8] & 0x3f) | 0x80
-	h := hex.EncodeToString(b)
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32], nil
 }
 
 func randomHex(bytes int) (string, error) {

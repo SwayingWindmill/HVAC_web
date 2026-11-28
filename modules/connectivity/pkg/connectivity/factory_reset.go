@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -87,7 +88,7 @@ func (service *CredentialService) IssueFactoryReset(
 		return GatewayFactoryResetRecord{}, errors.New("credential service is not configured")
 	}
 	gateway := strings.ToLower(strings.TrimSpace(gatewayID))
-	if !gatewayIDPattern.MatchString(gateway) || !gatewayIDPattern.MatchString(claims.PrincipalID) {
+	if !uuidv7.IsValid(gateway) || !uuidv7.IsValid(claims.PrincipalID) {
 		return GatewayFactoryResetRecord{}, ErrEnrollmentRejected
 	}
 	trimmedReason := strings.TrimSpace(input.Reason)
@@ -194,7 +195,7 @@ LIMIT 100
 }
 
 func (service *CredentialService) operatorForDirectoryOrGateway(ctx context.Context, claims registryauth.GrantClaims, gatewayID string) (pgx.Tx, error) {
-	if !gatewayIDPattern.MatchString(gatewayID) {
+	if !uuidv7.IsValid(gatewayID) {
 		return nil, ErrEnrollmentRejected
 	}
 	var tenant, site string
@@ -228,8 +229,8 @@ func (service *CredentialService) DecommissionTransferredGateway(
 	if actor == "" {
 		actor = gateway
 	}
-	if !gatewayIDPattern.MatchString(tenant) || !gatewayIDPattern.MatchString(gateway) ||
-		!gatewayIDPattern.MatchString(transferID) || !gatewayIDPattern.MatchString(actor) {
+	if !uuidv7.IsValid(tenant) || !uuidv7.IsValid(gateway) ||
+		!uuidv7.IsValid(transferID) || !uuidv7.IsValid(actor) {
 		return DecommissionTransferResult{}, ErrEnrollmentRejected
 	}
 
@@ -370,7 +371,7 @@ func (store *Store) RecordFactoryResetAck(
 		return GatewayFactoryResetRecord{}, errors.New("connectivity store is not configured")
 	}
 	gateway := strings.ToLower(strings.TrimSpace(gatewayID))
-	if !gatewayIDPattern.MatchString(gateway) {
+	if !uuidv7.IsValid(gateway) {
 		return GatewayFactoryResetRecord{}, ErrEnrollmentRejected
 	}
 	if err := ack.Validate(); err != nil {

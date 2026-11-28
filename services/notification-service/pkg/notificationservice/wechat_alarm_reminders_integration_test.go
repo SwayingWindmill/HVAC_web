@@ -2,8 +2,6 @@ package notificationservice
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +11,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 // WeChat reminders of Alarms (#664, docs/specs/miniprogram-wechat.md): a new urgent or important
@@ -180,7 +179,7 @@ func (fixture *reminderFixture) leftDaily(person WeChatPerson) int {
 
 func (fixture *reminderFixture) uuid() string {
 	fixture.t.Helper()
-	id, err := uuidv7(time.Now())
+	id, err := uuidv7.New()
 	if err != nil {
 		fixture.t.Fatal(err)
 	}
@@ -473,17 +472,4 @@ func openNotificationTestStore(t *testing.T) *PostgresStore {
 		t.Fatal(err)
 	}
 	return store
-}
-
-func uuidv7(now time.Time) (string, error) {
-	buffer := make([]byte, 16)
-	if _, err := rand.Read(buffer); err != nil {
-		return "", fmt.Errorf("generate uuidv7 randomness: %w", err)
-	}
-	milliseconds := uint64(now.UnixMilli())
-	buffer[0], buffer[1], buffer[2], buffer[3], buffer[4], buffer[5] = byte(milliseconds>>40), byte(milliseconds>>32), byte(milliseconds>>24), byte(milliseconds>>16), byte(milliseconds>>8), byte(milliseconds)
-	buffer[6] = (buffer[6] & 0x0f) | 0x70
-	buffer[8] = (buffer[8] & 0x3f) | 0x80
-	hexValue := hex.EncodeToString(buffer)
-	return hexValue[0:8] + "-" + hexValue[8:12] + "-" + hexValue[12:16] + "-" + hexValue[16:20] + "-" + hexValue[20:32], nil
 }

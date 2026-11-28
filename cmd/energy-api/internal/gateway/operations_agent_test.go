@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
@@ -23,7 +23,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
+	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
 type fakeOperationsRateLimiter struct {
@@ -230,34 +230,34 @@ func (fixture *operationsGatewayFixture) iamClient(t *testing.T) *http.Client {
 			}
 			return telemetryJSONResponse(http.StatusOK, telemetryauth.DecisionResponse{Decision: decision, DelegationGrant: delegation}), nil
 		case workOrderDecisionPath:
-			var input workorderauth.DecisionRequest
-			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.TenantID != fixture.tenantID || input.Action != workorderauth.ActionList || input.WorkOrderID != "" {
+			var input workordermodel.DecisionRequest
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.TenantID != fixture.tenantID || input.Action != workordermodel.ActionList || input.WorkOrderID != "" {
 				t.Fatal("invalid Work Order authorization request")
 			}
 			allowed := !fixture.denySite.Load() && input.SiteID == fixture.siteID
-			decision := workorderauth.Decision{
+			decision := workordermodel.Decision{
 				Allowed: allowed, SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, TenantID: fixture.tenantID,
-				SiteID: input.SiteID, Action: input.Action, PolicyRevision: "work-order-access:1", ReasonCode: workorderauth.ReasonDenyScope,
+				SiteID: input.SiteID, Action: input.Action, PolicyRevision: "work-order-access:1", ReasonCode: workordermodel.ReasonDenyScope,
 				DecidedAt: now.Format(time.RFC3339Nano),
 			}
 			if allowed {
-				decision.PrincipalID, decision.ReasonCode = "018f3e00-5000-7000-8000-000000000001", workorderauth.ReasonAllowExactScope
+				decision.PrincipalID, decision.ReasonCode = "018f3e00-5000-7000-8000-000000000001", workordermodel.ReasonAllowExactScope
 			}
-			return telemetryJSONResponse(http.StatusOK, workorderauth.DecisionResponse{Decision: decision}), nil
+			return telemetryJSONResponse(http.StatusOK, workordermodel.DecisionResponse{Decision: decision}), nil
 		case alarmDecisionPath:
 			if len(parent.Actions) != 1 || parent.Actions[0] != "alarm:authorize" {
 				t.Fatalf("unexpected Alarm parent claims: %+v", parent)
 			}
-			var input alarmauth.DecisionRequest
-			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.TenantID != fixture.tenantID || input.Action != alarmauth.ActionRead || input.AlarmID != "" {
+			var input alarmmodel.DecisionRequest
+			if err := json.NewDecoder(request.Body).Decode(&input); err != nil || input.TenantID != fixture.tenantID || input.Action != alarmmodel.ActionRead || input.AlarmID != "" {
 				t.Fatal("invalid Alarm authorization request")
 			}
 			allowed := !fixture.denySite.Load() && input.SiteID == fixture.siteID
-			reason := alarmauth.ReasonDenyScope
+			reason := alarmmodel.ReasonDenyScope
 			if allowed {
-				reason = alarmauth.ReasonAllowExactScope
+				reason = alarmmodel.ReasonAllowExactScope
 			}
-			return telemetryJSONResponse(http.StatusOK, alarmauth.DecisionResponse{Decision: alarmauth.Decision{
+			return telemetryJSONResponse(http.StatusOK, alarmmodel.DecisionResponse{Decision: alarmmodel.Decision{
 				Allowed: allowed, PrincipalID: "018f3e00-5000-7000-8000-000000000001",
 				SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, TenantID: fixture.tenantID,
 				SiteID: input.SiteID, Action: input.Action, PolicyRevision: "alarm-policy-3",

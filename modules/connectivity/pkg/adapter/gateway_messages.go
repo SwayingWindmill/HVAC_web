@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/quanlaihe/hvac-web/libs/mqttclient"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -48,7 +49,7 @@ func ParseMessageTopic(topic string) (MessageTopic, error) {
 	if len(parts) != 5 || parts[0] != "hvac" || parts[1] != "v1" || parts[3] != "up" {
 		return MessageTopic{}, errors.New("MQTT topic is invalid")
 	}
-	if !uuidV7Pattern.MatchString(parts[2]) || parts[2] != strings.ToLower(parts[2]) {
+	if !uuidv7.IsValid(parts[2]) {
 		return MessageTopic{}, errors.New("MQTT topic Gateway id is invalid")
 	}
 	switch parts[4] {
@@ -65,7 +66,7 @@ func ParseMessageTopic(topic string) (MessageTopic, error) {
 func TopicGatewayID(topic string) string {
 	parts := strings.Split(mqttclient.StripSharePrefix(topic), "/")
 	if len(parts) == 5 && parts[0] == "hvac" && parts[1] == "v1" && parts[3] == "up" &&
-		uuidV7Pattern.MatchString(parts[2]) && parts[2] == strings.ToLower(parts[2]) {
+		uuidv7.IsValid(parts[2]) {
 		return parts[2]
 	}
 	return "invalid"
@@ -147,7 +148,7 @@ func validateMessageHeader(schemaVersion, messageID, envelopeGatewayID string, t
 	if _, _, ok := parseV2SchemaVersion(schemaVersion); !ok {
 		return fmt.Errorf("unsupported MQTT envelope schemaVersion %s", schemaVersion)
 	}
-	if !uuidV7Pattern.MatchString(strings.TrimSpace(messageID)) {
+	if !uuidv7.IsValidAnyCase(strings.TrimSpace(messageID)) {
 		return errors.New("MQTT messageId must be UUIDv7")
 	}
 	if strings.TrimSpace(envelopeGatewayID) != topicGatewayID {

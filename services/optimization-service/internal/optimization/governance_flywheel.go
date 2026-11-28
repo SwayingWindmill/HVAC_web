@@ -14,6 +14,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -185,7 +186,7 @@ func (store *PostgresStore) RecordControlTick(ctx context.Context, tick ControlT
 			return err
 		}
 		id = generated
-	} else if !isUUIDv7(id) {
+	} else if !uuidv7.IsValidLowerTrimmed(id) {
 		return errors.New("control tick id must be UUIDv7")
 	}
 	runID, err := optionalUUIDPtr(tick.OptimizationRunID)
@@ -282,7 +283,7 @@ func (store *PostgresStore) RecordNegativeSample(ctx context.Context, sample Neg
 			return err
 		}
 		id = generated
-	} else if !isUUIDv7(id) {
+	} else if !uuidv7.IsValidLowerTrimmed(id) {
 		return errors.New("negative sample id must be UUIDv7")
 	}
 	recID, err := optionalUUIDPtr(sample.RecommendationID)

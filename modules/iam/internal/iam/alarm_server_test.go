@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/modules/iam/internal/iam"
 )
 
@@ -21,10 +21,10 @@ func TestIAMAlarmDecisionPublishesExactAllowAndAuditEvidence(t *testing.T) {
 	})
 	claims := validIAMClaims(harness.now, "fixture-user", "alarm:authorize")
 	claims.TenantID = iam.S1FixtureTenantAID
-	input := alarmauth.DecisionRequest{
+	input := alarmmodel.DecisionRequest{
 		TenantID: iam.S1FixtureTenantAID,
 		SiteID:   iam.S1FixtureOwnerASite1ID,
-		Action:   alarmauth.ActionRead,
+		Action:   alarmmodel.ActionRead,
 	}
 	body, _ := json.Marshal(input)
 	request := harness.request(t, iam.AlarmDecisionPath, strings.NewReader(string(body)), claims, harness.gatewaySigner)
@@ -34,8 +34,8 @@ func TestIAMAlarmDecisionPublishesExactAllowAndAuditEvidence(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var response alarmauth.DecisionResponse
-	if json.NewDecoder(recorder.Body).Decode(&response) != nil || !response.Decision.Allowed || response.Decision.Action != alarmauth.ActionRead || response.Decision.SiteID != iam.S1FixtureOwnerASite1ID {
+	var response alarmmodel.DecisionResponse
+	if json.NewDecoder(recorder.Body).Decode(&response) != nil || !response.Decision.Allowed || response.Decision.Action != alarmmodel.ActionRead || response.Decision.SiteID != iam.S1FixtureOwnerASite1ID {
 		t.Fatalf("unexpected Alarm decision: %#v", response)
 	}
 	if len(sink.events) != 1 || !sink.events[0].Allowed || sink.events[0].RequestID != "alarm-decision-request-1" || sink.events[0].PolicyRevision != principalCapabilityAlarmPolicy {
@@ -51,10 +51,10 @@ func TestIAMAlarmDecisionDeniesCrossSiteWithoutGrantMaterial(t *testing.T) {
 	})
 	claims := validIAMClaims(harness.now, "fixture-user", "alarm:authorize")
 	claims.TenantID = iam.S1FixtureTenantAID
-	input := alarmauth.DecisionRequest{
+	input := alarmmodel.DecisionRequest{
 		TenantID: iam.S1FixtureTenantAID,
 		SiteID:   "01910000-0002-7000-8000-000000000001",
-		Action:   alarmauth.ActionRead,
+		Action:   alarmmodel.ActionRead,
 	}
 	body, _ := json.Marshal(input)
 	request := harness.request(t, iam.AlarmDecisionPath, strings.NewReader(string(body)), claims, harness.gatewaySigner)
@@ -63,8 +63,8 @@ func TestIAMAlarmDecisionDeniesCrossSiteWithoutGrantMaterial(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var response alarmauth.DecisionResponse
-	if json.NewDecoder(recorder.Body).Decode(&response) != nil || response.Decision.Allowed || response.Decision.ReasonCode != alarmauth.ReasonDenyScope {
+	var response alarmmodel.DecisionResponse
+	if json.NewDecoder(recorder.Body).Decode(&response) != nil || response.Decision.Allowed || response.Decision.ReasonCode != alarmmodel.ReasonDenyScope {
 		t.Fatalf("unexpected cross-Site decision: %#v", response)
 	}
 	if strings.Contains(recorder.Body.String(), "delegation") || len(sink.events) != 1 || sink.events[0].Allowed {
@@ -84,7 +84,7 @@ func TestIAMAlarmDecisionRejectsExpandedBodyWrongActionAndAuditFailure(t *testin
 	assertIAMProblem(t, recorder, http.StatusBadRequest, "IAM_ALARM_DECISION_REQUEST_INVALID")
 
 	wrongAction := validIAMClaims(harness.now, "fixture-user", "principal:read")
-	body, _ := json.Marshal(alarmauth.DecisionRequest{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmauth.ActionRead})
+	body, _ := json.Marshal(alarmmodel.DecisionRequest{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: alarmmodel.ActionRead})
 	request = harness.request(t, iam.AlarmDecisionPath, strings.NewReader(string(body)), wrongAction, harness.gatewaySigner)
 	recorder = httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)

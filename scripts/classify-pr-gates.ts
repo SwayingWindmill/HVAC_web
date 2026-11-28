@@ -287,6 +287,17 @@ for (const file of files) {
     else selectBroad(file, 'shared contract changed');
   });
 
+  // libs/uuidv7 is imported across Go domains for ID generation and validation.
+  match(file.startsWith('libs/uuidv7/'), () => {
+    selectPlatform(file, 'shared UUIDv7 library changed');
+    selectRegistry(file, 'shared UUIDv7 library changed');
+    selectTelemetry(file, 'shared UUIDv7 library changed');
+    selectCommand(file, 'shared UUIDv7 library changed');
+    selectAlarm(file, 'shared UUIDv7 library changed');
+    selectWorkOrder(file, 'shared UUIDv7 library changed');
+    selectAnalytics(file, 'shared UUIDv7 library changed');
+  });
+
   // libs/grant signs and verifies every registry, telemetry, command and delegation grant.
   match(file.startsWith('libs/grant/'), () => {
     selectPlatform(file, 'shared grant signing changed');
@@ -364,9 +375,9 @@ for (const file of files) {
     selectAlarm(file, 'Shared alarm expression evaluator changed', { integration: true });
     selectCommand(file, 'Shared alarm expression evaluator changed');
   });
-  match(file.startsWith('libs/alarmauth/') || file.startsWith('libs/alarmmodel/') || file.startsWith('modules/alarm/') || file.startsWith('infra/alarm/') || file.startsWith('cmd/wecom-alert-adapter/'), () => selectAlarm(file, 'Alarm or WeCom adapter capability changed', { integration: file.startsWith('cmd/wecom-alert-adapter/') ? false : true }));
-  match(file.startsWith('libs/workorderauth/') || file.startsWith('libs/workordermodel/') || file.startsWith('modules/workorder/') || file.startsWith('infra/workorder/'), () => selectWorkOrder(file, 'Work Order capability changed', { integration: true }));
-  match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/analyticsmodel/') || file.startsWith('libs/energyseries/') || file.startsWith('modules/telemetry/internal/analytics/') || file.startsWith('modules/telemetry/internal/cube/') || file.startsWith('modules/telemetry/internal/history/') || file.startsWith('modules/telemetry/internal/query/') || file.startsWith('modules/telemetry/pkg/queryservice/') || file.startsWith('modules/energy/') || file.startsWith('libs/intelligencemodel/') || file.startsWith('modules/metric/') || file.startsWith('modules/scheduler/') || file.startsWith('cmd/scheduler/') || file.startsWith('cmd/metric-worker/') || file.startsWith('services/forecast-service/') || file.startsWith('services/optimization-service/') || file.startsWith('services/fdd-service/') || file.startsWith('services/mv-service/') || file.startsWith('services/report-service/') || file.startsWith('libs/schedulerjob/') || file.startsWith('libs/tariffmodel/'), () => selectAnalytics(file, 'analytics capability changed', { integration: !file.startsWith('cmd/scheduler/') }));
+  match(file.startsWith('libs/alarmmodel/') || file.startsWith('modules/alarm/') || file.startsWith('infra/alarm/') || file.startsWith('cmd/wecom-alert-adapter/'), () => selectAlarm(file, 'Alarm or WeCom adapter capability changed', { integration: file.startsWith('cmd/wecom-alert-adapter/') ? false : true }));
+  match(file.startsWith('libs/workordermodel/') || file.startsWith('modules/workorder/') || file.startsWith('infra/workorder/'), () => selectWorkOrder(file, 'Work Order capability changed', { integration: true }));
+  match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/analyticsmodel/') || file.startsWith('libs/energyseries/') || file.startsWith('modules/telemetry/internal/analytics/') || file.startsWith('modules/telemetry/internal/cube/') || file.startsWith('modules/telemetry/internal/history/') || file.startsWith('modules/telemetry/internal/query/') || file.startsWith('modules/telemetry/pkg/queryservice/') || file.startsWith('modules/energy/') || file.startsWith('libs/intelligencemodel/') || file.startsWith('modules/metric/') || file.startsWith('modules/scheduler/') || file.startsWith('cmd/scheduler/') || file.startsWith('cmd/metric-worker/') || file.startsWith('services/forecast-service/') || file.startsWith('services/optimization-service/') || file.startsWith('services/fdd-service/') || file.startsWith('services/mv-service/') || file.startsWith('services/report-service/') || file.startsWith('libs/schedulerjob/') || file.startsWith('libs/servicehost/') || file.startsWith('libs/tariffmodel/'), () => selectAnalytics(file, 'analytics capability changed', { integration: !file.startsWith('cmd/scheduler/') }));
   match(file.startsWith('services/ai-solver-service/'), () => selectAnalytics(file, 'Python AI solver service changed', { integration: false }));
   match(file.startsWith('services/operations-agent-service/') || file.startsWith('infra/operations-agent/'), () => selectOperationsAgent(file, 'Operations Agent capability changed', { integration: true }));
 

@@ -246,3 +246,44 @@ func validHTTPWorkOrder() workordermodel.WorkOrder {
 		Version:  1, CreatedAt: "2026-08-01T10:00:00Z", UpdatedAt: "2026-08-01T10:00:00Z",
 	}
 }
+
+func TestWorkOrderHTTPRejectsSmuggledHeaders(t *testing.T) {
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	signer := newSigner(t)
+	store := &fakeStore{item: validHTTPWorkOrder()}
+	handler, err := newGatewayHandler(HTTPConfig{Store: store, GatewayPublicKey: &signer.PublicKey, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	readToken := signContext(t, signer, now, []string{WorkOrderListAction}, httpTestTenantID, httpTestSiteID, "")
+	writeToken := signContext(t, signer, now, []string{WorkOrderCreateAction}, httpTestTenantID, httpTestSiteID, mutationKeyScope("idem-key-0001"))
+
+	forged := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
+	forged.Header.Add("X-Principal", "")
+	forged.Header.Add("X-Principal", "alice")
+	forged.Header.Set(WorkOrderReadContextHeader, readToken)
+	forgedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(forgedRecorder, forged)
+	if forgedRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("empty-first forged header status=%d, want 400", forgedRecorder.Code)
+	}
+
+	duplicate := httptest.NewRequest(http.MethodGet, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", nil)
+	duplicate.Header.Add(WorkOrderReadContextHeader, readToken)
+	duplicate.Header.Add(WorkOrderReadContextHeader, readToken)
+	duplicateRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(duplicateRecorder, duplicate)
+	if duplicateRecorder.Code != http.StatusForbidden {
+		t.Fatalf("duplicate read header status=%d, want 403", duplicateRecorder.Code)
+	}
+
+	mixed := httptest.NewRequest(http.MethodPost, InternalSiteWorkOrdersPrefix+httpTestSiteID+"/work-orders", strings.NewReader(`{"title":"x","description":"y","priority":"HIGH"}`))
+	mixed.Header.Set("Idempotency-Key", "idem-key-0001")
+	mixed.Header.Set(WorkOrderWriteContextHeader, writeToken)
+	mixed.Header.Add(WorkOrderReadContextHeader, "")
+	mixedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(mixedRecorder, mixed)
+	if mixedRecorder.Code != http.StatusForbidden {
+		t.Fatalf("mixed write+empty read header status=%d, want 403", mixedRecorder.Code)
+	}
+}

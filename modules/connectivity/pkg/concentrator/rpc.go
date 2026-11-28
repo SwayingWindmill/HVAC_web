@@ -12,7 +12,6 @@ import (
 	"math"
 	"net"
 	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -22,6 +21,7 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -31,8 +31,6 @@ const (
 	maxReplyPayloadSize = 256 << 10
 	mqttConnectTimeout  = 10 * time.Second
 )
-
-var uuidV7Pattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 type TransportConfig struct {
 	BrokerURL  string
@@ -56,7 +54,7 @@ func ParseReplyTopic(topic string) (string, bool) {
 	if len(parts) != 5 || parts[0] != "hvac" || parts[1] != "v1" || parts[3] != "up" || parts[4] != "concentrator" {
 		return "", false
 	}
-	if !uuidV7Pattern.MatchString(parts[2]) {
+	if !uuidv7.IsValid(parts[2]) {
 		return "", false
 	}
 	return parts[2], true
@@ -524,7 +522,7 @@ func (t *MQTTTransport) lookupReplyTraceID(gatewayID string, payload []byte) str
 	if err := json.Unmarshal(payload, &header); err != nil {
 		return ""
 	}
-	if header.GatewayID != gatewayID || !uuidV7Pattern.MatchString(header.RequestID) {
+	if header.GatewayID != gatewayID || !uuidv7.IsValid(header.RequestID) {
 		return ""
 	}
 	t.mu.Lock()
@@ -548,7 +546,7 @@ func (t *MQTTTransport) DeliverReply(topic string, payload []byte) bool {
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return false
 	}
-	if resp.SchemaVersion != rpcSchemaVersion || resp.GatewayID != gatewayID || !uuidV7Pattern.MatchString(resp.RequestID) {
+	if resp.SchemaVersion != rpcSchemaVersion || resp.GatewayID != gatewayID || !uuidv7.IsValid(resp.RequestID) {
 		return false
 	}
 	key := waiterKey{gatewayID: gatewayID, requestID: resp.RequestID}

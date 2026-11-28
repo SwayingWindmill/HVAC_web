@@ -1,24 +1,16 @@
 package core
 
 import (
-	"encoding/hex"
 	"errors"
 	"sort"
 	"strings"
 
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 func validUUIDv7(value string) bool {
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
-		return false
-	}
-	compact := strings.ReplaceAll(value, "-", "")
-	decoded := make([]byte, 16)
-	if _, err := hex.Decode(decoded, []byte(compact)); err != nil {
-		return false
-	}
-	return decoded[6]>>4 == 7 && decoded[8]>>6 == 2
+	return uuidv7.IsValidAnyCase(value)
 }
 
 func validateGrantScopeIDs(claims registryauth.GrantClaims) error {

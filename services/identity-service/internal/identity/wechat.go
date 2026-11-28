@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
@@ -212,7 +213,12 @@ type wechatBindRequest struct {
 
 // wechatAccount is the account the Gateway's grant names, or false after answering the refusal.
 func (server *Server) wechatAccount(writer http.ResponseWriter, request *http.Request) (string, bool) {
-	claims, err := identitycontext.VerifyDelegation(server.gatewayKey, request.Header.Get("X-Delegation-Grant"))
+	token, ok := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	if !ok {
+		writeOAuthError(writer, http.StatusUnauthorized, "access_denied", "a Gateway grant for the signed-in account is required")
+		return "", false
+	}
+	claims, err := identitycontext.VerifyDelegation(server.gatewayKey, token)
 	if err == nil {
 		err = identitycontext.ValidateDelegationFromIssuer(claims, server.now(), server.gatewaySPIFFE, server.gatewaySPIFFE, WeChatAudience, WeChatAction, "session:"+claims.SessionID)
 	}

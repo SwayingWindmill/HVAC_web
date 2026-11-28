@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 )
 
@@ -82,4 +83,35 @@ func Verify[C any](format Format, publicKey crypto.PublicKey, token string) (C, 
 		return zero, fmt.Errorf("%s payload is invalid", format.Name)
 	}
 	return claims, nil
+}
+
+// SingleHeader extracts a single non-empty trimmed header value, returning false when missing, empty, or duplicated.
+func SingleHeader(header http.Header, name string) (string, bool) {
+	if header == nil {
+		return "", false
+	}
+	values := header.Values(name)
+	if len(values) != 1 {
+		return "", false
+	}
+	value := strings.TrimSpace(values[0])
+	if value == "" {
+		return "", false
+	}
+	return value, true
+}
+
+// HasNonEmptyHeader reports whether any listed header carries a non-empty value across all instances.
+func HasNonEmptyHeader(header http.Header, names ...string) bool {
+	if header == nil {
+		return false
+	}
+	for _, name := range names {
+		for _, value := range header.Values(name) {
+			if value != "" {
+				return true
+			}
+		}
+	}
+	return false
 }

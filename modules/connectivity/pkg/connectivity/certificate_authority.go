@@ -13,15 +13,13 @@ import (
 	"errors"
 	"math/big"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
-var (
-	gatewayIDPattern      = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	ErrCRLSignUnsupported = errors.New("gateway CA lacks CRLSign key usage")
-)
+var ErrCRLSignUnsupported = errors.New("gateway CA lacks CRLSign key usage")
 
 type CertificateAuthority struct {
 	certificate    *x509.Certificate
@@ -73,7 +71,7 @@ func parseAndValidateCSR(csrPEM string) (*x509.CertificateRequest, error) {
 
 func parseGatewayCSR(csrPEM string) (*x509.CertificateRequest, error) {
 	csr, err := parseAndValidateCSR(csrPEM)
-	if err != nil || !gatewayIDPattern.MatchString(csr.Subject.CommonName) {
+	if err != nil || !uuidv7.IsValid(csr.Subject.CommonName) {
 		return nil, ErrEnrollmentRejected
 	}
 	return csr, nil
@@ -129,7 +127,7 @@ func (authority *CertificateAuthority) IssueEphemeralGatewayTLS(gatewayID string
 		return tls.Certificate{}, errors.New("gateway CA lacks certificate signing capability")
 	}
 	normalizedID := strings.ToLower(strings.TrimSpace(gatewayID))
-	if !gatewayIDPattern.MatchString(normalizedID) {
+	if !uuidv7.IsValid(normalizedID) {
 		return tls.Certificate{}, ErrEnrollmentRejected
 	}
 	if ttl <= 0 {

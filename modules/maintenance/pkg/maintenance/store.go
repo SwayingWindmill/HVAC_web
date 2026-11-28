@@ -2,8 +2,6 @@ package maintenance
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type Job struct {
@@ -134,7 +133,7 @@ WHERE job_id=$1::uuid AND state='READY'`, job.ID, workerID, now.UTC().Add(leaseD
 }
 
 func (s *Store) StartJob(ctx context.Context, job Job, leaseDuration time.Duration, now time.Time) (bool, error) {
-	attemptID, err := uuidv7(now)
+	attemptID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return false, err
 	}
@@ -291,19 +290,6 @@ func retryDelayWithJitter(attempt int) time.Duration {
 		base = 30 * time.Minute
 	}
 	return time.Duration(float64(base) * (0.8 + mathrand.Float64()*0.4))
-}
-
-func uuidv7(now time.Time) (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	ms := uint64(now.UnixMilli())
-	b[0], b[1], b[2], b[3], b[4], b[5] = byte(ms>>40), byte(ms>>32), byte(ms>>24), byte(ms>>16), byte(ms>>8), byte(ms)
-	b[6] = (b[6] & 0x0f) | 0x70
-	b[8] = (b[8] & 0x3f) | 0x80
-	h := hex.EncodeToString(b)
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32], nil
 }
 
 func validateJob(job Job) error {

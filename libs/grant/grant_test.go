@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -105,5 +106,29 @@ func TestVerifyFailsClosed(t *testing.T) {
 func TestSignRequiresASigner(t *testing.T) {
 	if _, err := grant.Sign(format, nil, claims{}); err == nil || err.Error() != "fixture grant signer is required" {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSingleHeaderRejectsMissingBlankAndDuplicateValues(t *testing.T) {
+	if value, ok := grant.SingleHeader(nil, "X-Delegation-Grant"); ok || value != "" {
+		t.Fatalf("nil header = (%q, %v), want empty false", value, ok)
+	}
+	headers := http.Header{}
+	headers.Add("X-Delegation-Grant", "  token-1  ")
+	if value, ok := grant.SingleHeader(headers, "X-Delegation-Grant"); !ok || value != "token-1" {
+		t.Fatalf("single header = (%q, %v), want token-1 true", value, ok)
+	}
+	headers.Add("X-Delegation-Grant", "token-2")
+	if value, ok := grant.SingleHeader(headers, "X-Delegation-Grant"); ok || value != "" {
+		t.Fatalf("duplicate header = (%q, %v), want empty false", value, ok)
+	}
+	if value, ok := grant.SingleHeader(http.Header{"X-Delegation-Grant": {"   "}}, "X-Delegation-Grant"); ok || value != "" {
+		t.Fatalf("blank header = (%q, %v), want empty false", value, ok)
+	}
+	if !grant.HasNonEmptyHeader(http.Header{"X-Principal": {"", "alice"}}, "X-Principal") {
+		t.Fatal("HasNonEmptyHeader missed non-empty second header value")
+	}
+	if grant.HasNonEmptyHeader(http.Header{"X-Principal": {""}}, "X-Principal") {
+		t.Fatal("HasNonEmptyHeader flagged empty header value")
 	}
 }

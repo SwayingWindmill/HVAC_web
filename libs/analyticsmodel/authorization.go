@@ -3,6 +3,8 @@ package analyticsmodel
 import (
 	"errors"
 	"strings"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type AuthorizationReason string
@@ -22,7 +24,7 @@ type AuthorizationDecisionRequest struct {
 }
 
 func (request AuthorizationDecisionRequest) Validate() error {
-	if !validUUIDv7(request.TenantID) || !validUUIDv7(request.SiteID) {
+	if !uuidv7.IsValidAnyCase(request.TenantID) || !uuidv7.IsValidAnyCase(request.SiteID) {
 		return errors.New("analytics authorization tenant and site must be UUIDv7")
 	}
 	if strings.TrimSpace(request.Action) != EnergySeriesAction {

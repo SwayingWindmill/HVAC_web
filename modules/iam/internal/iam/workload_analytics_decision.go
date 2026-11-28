@@ -1,13 +1,12 @@
 package iam
 
 import (
-	"encoding/json"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
@@ -27,7 +26,7 @@ func (h *handler) handleAnalyticsWorkloadDecision(writer http.ResponseWriter, re
 		writeProblem(writer, http.StatusMethodNotAllowed, "IAM_METHOD_NOT_ALLOWED", "This IAM route only supports POST.")
 		return http.StatusMethodNotAllowed
 	}
-	if hasForgedIdentityHeader(request.Header) || strings.TrimSpace(request.Header.Get("X-Delegation-Grant")) != "" {
+	if hasForgedIdentityHeader(request.Header) || grant.HasNonEmptyHeader(request.Header, "X-Delegation-Grant") {
 		writeProblem(writer, http.StatusBadRequest, "IAM_FORGED_IDENTITY_HEADER", "Caller-supplied identity headers are not accepted.")
 		return http.StatusBadRequest
 	}
@@ -36,12 +35,8 @@ func (h *handler) handleAnalyticsWorkloadDecision(writer http.ResponseWriter, re
 		writeProblem(writer, http.StatusUnauthorized, "IAM_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.")
 		return http.StatusUnauthorized
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
-	var query analyticsmodel.EnergySeriesQuery
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&query) != nil || ensureJSONEOF(decoder) != nil || query.Validate() != nil {
-		writeProblem(writer, http.StatusBadRequest, "IAM_ANALYTICS_DECISION_REQUEST_INVALID", "The Analytics authorization request is invalid.")
+	query, ok := decodeStrictDecisionJSON[analyticsmodel.EnergySeriesQuery](writer, request, "IAM_ANALYTICS_DECISION_REQUEST_INVALID", "The Analytics authorization request is invalid.")
+	if !ok {
 		return http.StatusBadRequest
 	}
 	scope, err := query.ScopeDigest()

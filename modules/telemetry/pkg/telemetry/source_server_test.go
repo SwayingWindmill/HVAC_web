@@ -14,6 +14,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const mqttSourceSPIFFE = "spiffe://hvac.local/mqtt-telemetry-adapter"
@@ -140,7 +141,7 @@ func TestHistoricalReplayRouteOwnsProvenanceAndEventIdentity(t *testing.T) {
 	if candidate.SourcePath != SourcePathHistoryReplay || candidate.ExternalEntityType != "DEVICE" || candidate.ExternalID != deviceA || candidate.SourceID != historicalReplaySourceID || candidate.ReceivedAt != now || candidate.Position.Offset != 7 {
 		t.Fatalf("candidate=%#v", candidate)
 	}
-	if !strings.HasPrefix(candidate.Position.Partition, "history-replay:01991f00-0000-7000-8000-000000000001:") || !uuidV7Pattern.MatchString(candidate.Position.EventID) {
+	if !strings.HasPrefix(candidate.Position.Partition, "history-replay:01991f00-0000-7000-8000-000000000001:") || !uuidv7.IsValid(candidate.Position.EventID) {
 		t.Fatalf("position=%#v", candidate.Position)
 	}
 

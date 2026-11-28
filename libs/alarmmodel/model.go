@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const SchemaVersion = 2
@@ -22,7 +24,6 @@ const maximumSuppressionDuration = 30 * 24 * time.Hour
 const maximumEvidenceReferences = 32
 
 var (
-	uuidV7Pattern        = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	fingerprintPattern   = regexp.MustCompile(`^[a-f0-9]{64}$`)
 	ErrVersionConflict   = errors.New("alarm version conflict")
 	ErrInvalidOperation  = errors.New("alarm operation is invalid")
@@ -226,7 +227,7 @@ type OperationInput struct {
 	OccurredAt      string
 }
 
-func IsUUIDv7(value string) bool { return uuidV7Pattern.MatchString(value) }
+func IsUUIDv7(value string) bool { return uuidv7.IsValid(value) }
 
 func Fingerprint(tenantID, siteID string, sourceType SourceType, sourceReference, alarmType string, deviceID, pointID *string) (string, error) {
 	if !IsUUIDv7(tenantID) || !IsUUIDv7(siteID) || !validSource(sourceType) || !validBoundedText(sourceReference, 512) || !validBoundedText(alarmType, 128) {

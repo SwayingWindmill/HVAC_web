@@ -13,10 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
@@ -680,13 +682,13 @@ func (h *handler) checkpointIdentity(writer http.ResponseWriter, request *http.R
 		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.", false)
 		return CheckpointIdentity{}, false
 	}
-	values := request.Header.Values(telemetryContextGrantHeader)
-	if len(values) != 1 || strings.TrimSpace(values[0]) == "" {
+	rawGrant, ok := grant.SingleHeader(request.Header, telemetryContextGrantHeader)
+	if !ok {
 		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_CONTEXT_GRANT_REQUIRED", "A bounded Telemetry context grant is required.", false)
 		return CheckpointIdentity{}, false
 	}
-	claims, err := identitycontext.VerifyDelegation(request.TLS.PeerCertificates[0].PublicKey, strings.TrimSpace(values[0]))
-	if err != nil || !uuidV7Pattern.MatchString(claims.TenantID) {
+	claims, err := identitycontext.VerifyDelegation(request.TLS.PeerCertificates[0].PublicKey, rawGrant)
+	if err != nil || !uuidv7.IsValid(claims.TenantID) {
 		writeProblem(writer, request, http.StatusUnauthorized, "TELEMETRY_CONTEXT_GRANT_INVALID", "The Telemetry context grant is invalid.", false)
 		return CheckpointIdentity{}, false
 	}
@@ -782,9 +784,9 @@ func (h *handler) handleSubscriptionRevoke(writer http.ResponseWriter, request *
 	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil ||
 		(input.TenantID == "") != (input.SessionID == "") ||
 		(input.PrincipalID == "" && input.DeviceID == "" && input.SessionID == "") ||
-		(input.PrincipalID != "" && !uuidV7Pattern.MatchString(input.PrincipalID)) ||
-		(input.DeviceID != "" && !uuidV7Pattern.MatchString(input.DeviceID)) ||
-		(input.TenantID != "" && !uuidV7Pattern.MatchString(input.TenantID)) ||
+		(input.PrincipalID != "" && !uuidv7.IsValid(input.PrincipalID)) ||
+		(input.DeviceID != "" && !uuidv7.IsValid(input.DeviceID)) ||
+		(input.TenantID != "" && !uuidv7.IsValid(input.TenantID)) ||
 		(input.SessionID != "" && (strings.TrimSpace(input.SessionID) == "" || len(input.SessionID) > 512)) ||
 		strings.TrimSpace(input.Reason) == "" || len(input.Reason) > 128 {
 		writeProblem(writer, request, http.StatusBadRequest, "TELEMETRY_REVOCATION_INVALID", "The telemetry revocation request is invalid.", false)

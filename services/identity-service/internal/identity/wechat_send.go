@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
@@ -147,7 +148,12 @@ func (store *Store) WeChatOpenID(ctx context.Context, userID, appID string) (str
 // sendWeChatMessage serves POST /app/wechat/messages: a grant the Gateway's workload signed for
 // itself names the one account to send to.
 func (server *Server) sendWeChatMessage(writer http.ResponseWriter, request *http.Request) {
-	claims, err := identitycontext.VerifyDelegation(server.gatewayKey, request.Header.Get("X-Delegation-Grant"))
+	token, ok := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	if !ok {
+		writeOAuthError(writer, http.StatusUnauthorized, "access_denied", "a Gateway workload grant to send to one account is required")
+		return
+	}
+	claims, err := identitycontext.VerifyDelegation(server.gatewayKey, token)
 	account := ""
 	if err == nil && len(claims.Scopes) == 1 {
 		account = strings.TrimPrefix(claims.Scopes[0], "account:")

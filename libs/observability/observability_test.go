@@ -490,3 +490,23 @@ func TestOTLPHTTPExporterDrainsResponseBodyBeforeClose(t *testing.T) {
 		t.Fatalf("expected response body drained (%v) and closed (%v)", body.drained, body.closed)
 	}
 }
+
+func TestNewRuntimeExposesHealthzAndServiceUpGauge(t *testing.T) {
+	runtime := NewRuntime(RuntimeConfig{Service: "diagnostics-fixture", QueueSize: 1})
+	handler := runtime.DiagnosticsHandler()
+
+	health := httptest.NewRecorder()
+	handler.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if health.Code != http.StatusOK {
+		t.Fatalf("GET /healthz = %d, want 200", health.Code)
+	}
+
+	metricsRec := httptest.NewRecorder()
+	handler.ServeHTTP(metricsRec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if metricsRec.Code != http.StatusOK {
+		t.Fatalf("GET /metrics = %d, want 200", metricsRec.Code)
+	}
+	if !strings.Contains(metricsRec.Body.String(), `hvac_service_up{service="diagnostics-fixture"} 1`) {
+		t.Fatalf("GET /metrics missing hvac_service_up gauge:\n%s", metricsRec.Body.String())
+	}
+}

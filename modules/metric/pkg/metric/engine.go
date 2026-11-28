@@ -2,8 +2,6 @@ package metric
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +14,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/measurement"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type Dependency struct {
@@ -180,12 +179,12 @@ func (e *Engine) Execute(ctx context.Context, request RunRequest) (Result, error
 	schedulerJobID := strings.TrimSpace(request.SchedulerJobID)
 	runID := schedulerJobID
 	if runID == "" {
-		runID, err = uuidv7(now)
+		runID, err = uuidv7.NewAt(now)
 		if err != nil {
 			return Result{}, err
 		}
 	}
-	resultID, err := uuidv7(now)
+	resultID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return Result{}, err
 	}
@@ -1092,24 +1091,6 @@ func max(v []float64) float64 {
 		}
 	}
 	return r
-}
-
-func uuidv7(now time.Time) (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	ms := uint64(now.UnixMilli())
-	b[0] = byte(ms >> 40)
-	b[1] = byte(ms >> 32)
-	b[2] = byte(ms >> 24)
-	b[3] = byte(ms >> 16)
-	b[4] = byte(ms >> 8)
-	b[5] = byte(ms)
-	b[6] = (b[6] & 0x0f) | 0x70
-	b[8] = (b[8] & 0x3f) | 0x80
-	h := hex.EncodeToString(b)
-	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32], nil
 }
 
 func SortedInputs(inputs []Input) []Input {

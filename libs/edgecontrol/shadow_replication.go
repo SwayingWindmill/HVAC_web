@@ -2,7 +2,6 @@ package edgecontrol
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -13,6 +12,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -334,13 +335,15 @@ func DecodeShadowChangeAck(payload []byte, topicGatewayID string) (ShadowReplica
 
 // NewReplicationUUIDv7 generates a lowercase RFC 9562 UUIDv7 using timestamp now.
 func NewReplicationUUIDv7(now time.Time) (string, error) {
-	var raw [16]byte
-	ms := uint64(max(now.UTC().UnixMilli(), 0))
-	binary.BigEndian.PutUint64(raw[:8], ms<<16)
-	if _, err := rand.Read(raw[6:]); err != nil {
+	ts := now.UTC()
+	if ts.UnixMilli() < 0 {
+		ts = time.UnixMilli(0).UTC()
+	}
+	id, err := uuidv7.NewAt(ts)
+	if err != nil {
 		return "", fmt.Errorf("generate shadow replication UUID: %w", err)
 	}
-	return formatReplicationUUIDv7(raw), nil
+	return id, nil
 }
 
 // DeterministicReplicationUUIDv7 derives a deterministic RFC 9562 UUIDv7 from now
@@ -361,21 +364,5 @@ func DeterministicReplicationUUIDv7(now time.Time, keyParts ...string) string {
 	var raw [16]byte
 	binary.BigEndian.PutUint64(raw[:8], ms<<16)
 	copy(raw[6:], sum[:10])
-	return formatReplicationUUIDv7(raw)
-}
-
-func formatReplicationUUIDv7(raw [16]byte) string {
-	raw[6] = 0x70 | (raw[6] & 0x0f)
-	raw[8] = 0x80 | (raw[8] & 0x3f)
-	dst := make([]byte, 36)
-	hex.Encode(dst[0:8], raw[0:4])
-	dst[8] = '-'
-	hex.Encode(dst[9:13], raw[4:6])
-	dst[13] = '-'
-	hex.Encode(dst[14:18], raw[6:8])
-	dst[18] = '-'
-	hex.Encode(dst[19:23], raw[8:10])
-	dst[23] = '-'
-	hex.Encode(dst[24:36], raw[10:16])
-	return string(dst)
+	return uuidv7.FormatRaw(raw)
 }

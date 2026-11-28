@@ -2,8 +2,6 @@ package optimization
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
 	"github.com/quanlaihe/hvac-web/libs/planttwin"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type PublishedRecommendation struct {
@@ -522,16 +521,7 @@ func unmarshalAuxiliaryTargets(raw []byte) ([]intelligencemodel.OptimizationAuxi
 }
 
 func optimizationUUIDv7(at time.Time) (string, error) {
-	bytes := make([]byte, 16)
-	if _, err := rand.Read(bytes); err != nil {
-		return "", err
-	}
-	milliseconds := uint64(at.UTC().UnixMilli())
-	bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5] = byte(milliseconds>>40), byte(milliseconds>>32), byte(milliseconds>>24), byte(milliseconds>>16), byte(milliseconds>>8), byte(milliseconds)
-	bytes[6] = (bytes[6] & 0x0f) | 0x70
-	bytes[8] = (bytes[8] & 0x3f) | 0x80
-	h := hex.EncodeToString(bytes)
-	return h[:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:], nil
+	return uuidv7.NewAt(at)
 }
 
 // LatestPreparation reads the Site's latest Optimization schedule firing and readiness status.

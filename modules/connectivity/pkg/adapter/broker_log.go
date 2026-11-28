@@ -10,6 +10,7 @@ import (
 
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -342,7 +343,7 @@ func resolveBrokerGatewayID(clientID, username string) string {
 
 func normalizeLowerUUIDv7(raw string) string {
 	trimmed := strings.TrimSpace(raw)
-	if !uuidV7Pattern.MatchString(trimmed) {
+	if !uuidv7.IsValidAnyCase(trimmed) {
 		return ""
 	}
 	return strings.ToLower(trimmed)

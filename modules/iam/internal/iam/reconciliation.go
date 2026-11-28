@@ -2,7 +2,6 @@ package iam
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type ReconciliationStatus string
@@ -106,13 +107,13 @@ func prepareReconciliationRequest(request ReconciliationRequest) (Reconciliation
 	request.Principal.Subject = strings.TrimSpace(request.Principal.Subject)
 	request.Principal.DisplayName = strings.TrimSpace(request.Principal.DisplayName)
 	request.Principal.Email = strings.TrimSpace(request.Principal.Email)
-	if !isUUIDv7(request.TenantID) {
+	if !uuidv7.IsValidAnyCase(request.TenantID) {
 		return ReconciliationRequest{}, "", errors.New("reconciliation Tenant requires UUIDv7 id")
 	}
 	if request.SourceSystem == "" || request.SourceKey == "" || request.SourceVersion <= 0 {
 		return ReconciliationRequest{}, "", errors.New("reconciliation source identity and positive version are required")
 	}
-	if !isUUIDv7(request.Principal.ID) || request.Principal.SubjectIssuer == "" || request.Principal.Subject == "" {
+	if !uuidv7.IsValidAnyCase(request.Principal.ID) || request.Principal.SubjectIssuer == "" || request.Principal.Subject == "" {
 		return ReconciliationRequest{}, "", errors.New("reconciliation principal requires UUIDv7 id, issuer and immutable subject")
 	}
 	if request.Principal.DisplayName == "" || request.Principal.Email == "" {
@@ -140,7 +141,7 @@ func prepareReconciliationRequest(request ReconciliationRequest) (Reconciliation
 	for index := range request.RoleBindings {
 		binding := &request.RoleBindings[index]
 		binding.RoleKey = strings.TrimSpace(binding.RoleKey)
-		if binding.TenantID != request.TenantID || binding.RoleKey == "" || (binding.SiteID != "" && !isUUIDv7(binding.SiteID)) || !validEffectiveRange(binding.ValidFrom, binding.ValidTo) {
+		if binding.TenantID != request.TenantID || binding.RoleKey == "" || (binding.SiteID != "" && !uuidv7.IsValidAnyCase(binding.SiteID)) || !validEffectiveRange(binding.ValidFrom, binding.ValidTo) {
 			return ReconciliationRequest{}, "", fmt.Errorf("invalid role binding at index %d", index)
 		}
 		roleIdentity := binding.TenantID + "\x00" + binding.RoleKey + "\x00" + binding.SiteID
@@ -153,7 +154,7 @@ func prepareReconciliationRequest(request ReconciliationRequest) (Reconciliation
 	for index := range request.ExplicitDenies {
 		deny := &request.ExplicitDenies[index]
 		deny.ReasonCode = strings.TrimSpace(deny.ReasonCode)
-		if deny.TenantID != request.TenantID || (deny.SiteID != "" && !isUUIDv7(deny.SiteID)) || !catalogCapabilityValid(deny.Action) || deny.ReasonCode == "" || !validEffectiveRange(deny.ValidFrom, deny.ValidTo) {
+		if deny.TenantID != request.TenantID || (deny.SiteID != "" && !uuidv7.IsValidAnyCase(deny.SiteID)) || !catalogCapabilityValid(deny.Action) || deny.ReasonCode == "" || !validEffectiveRange(deny.ValidFrom, deny.ValidTo) {
 			return ReconciliationRequest{}, "", fmt.Errorf("invalid explicit deny at index %d", index)
 		}
 		denyIdentity := deny.TenantID + "\x00" + deny.SiteID + "\x00" + string(deny.Action)
@@ -207,32 +208,6 @@ func normalizeTimes(validFrom *time.Time, validTo **time.Time) {
 	}
 }
 
-func isUUIDv7(value string) bool {
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
-		return false
-	}
-	compact := strings.ReplaceAll(value, "-", "")
-	decoded := make([]byte, 16)
-	if _, err := hex.Decode(decoded, []byte(compact)); err != nil {
-		return false
-	}
-	return decoded[6]>>4 == 7 && decoded[8]>>6 == 2
-}
-
 func newUUIDv7(now time.Time) (string, error) {
-	var value [16]byte
-	milliseconds := uint64(now.UTC().UnixMilli())
-	value[0] = byte(milliseconds >> 40)
-	value[1] = byte(milliseconds >> 32)
-	value[2] = byte(milliseconds >> 24)
-	value[3] = byte(milliseconds >> 16)
-	value[4] = byte(milliseconds >> 8)
-	value[5] = byte(milliseconds)
-	if _, err := rand.Read(value[6:]); err != nil {
-		return "", fmt.Errorf("generate UUIDv7 entropy: %w", err)
-	}
-	value[6] = (value[6] & 0x0f) | 0x70
-	value[8] = (value[8] & 0x3f) | 0x80
-	encoded := hex.EncodeToString(value[:])
-	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
+	return uuidv7.NewAt(now)
 }

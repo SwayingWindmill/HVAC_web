@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
@@ -66,10 +65,10 @@ func dispatchWorkOrderRoute(h *handler, writer http.ResponseWriter, request *htt
 	case publicWorkOrderCollection:
 		switch request.Method {
 		case http.MethodGet:
-			route.action = workorderauth.ActionList
+			route.action = workordermodel.ActionList
 			dispatchWorkOrderReadRoute(h, writer, request, route)
 		case http.MethodPost:
-			route.action = workorderauth.ActionCreate
+			route.action = workordermodel.ActionCreate
 			dispatchWorkOrderMutationRoute(h, writer, request, route)
 		default:
 			writeMethodNotAllowedFor(writer, request, http.MethodGet+", "+http.MethodPost)
@@ -79,14 +78,14 @@ func dispatchWorkOrderRoute(h *handler, writer http.ResponseWriter, request *htt
 			writeMethodNotAllowedFor(writer, request, http.MethodGet)
 			return
 		}
-		route.action = workorderauth.ActionRead
+		route.action = workordermodel.ActionRead
 		dispatchWorkOrderReadRoute(h, writer, request, route)
 	case publicWorkOrderAssignment:
 		if request.Method != http.MethodPost {
 			writeMethodNotAllowedFor(writer, request, http.MethodPost)
 			return
 		}
-		route.action = workorderauth.ActionAssign
+		route.action = workordermodel.ActionAssign
 		dispatchWorkOrderMutationRoute(h, writer, request, route)
 	case publicWorkOrderLifecycle:
 		if request.Method != http.MethodPost {
@@ -328,7 +327,7 @@ func decodePublicNullableWorkOrderIdentity(raw json.RawMessage) (*string, bool) 
 	return &trimmed, true
 }
 
-func (h *handler) signWorkOrderWriteContext(session bffSession, route publicWorkOrderRoute, decision workorderauth.Decision, idempotencyKey, tenantID string) (string, *workOrderFailure) {
+func (h *handler) signWorkOrderWriteContext(session bffSession, route publicWorkOrderRoute, decision workordermodel.Decision, idempotencyKey, tenantID string) (string, *workOrderFailure) {
 	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.workOrder == nil || !isLowerUUIDv7(tenantID) || session.TenantID != tenantID {
 		failure := workOrderUnavailable("Work Order write context signing is unavailable.")
 		return "", &failure

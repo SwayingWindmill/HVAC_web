@@ -2,7 +2,6 @@ package iam
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
@@ -291,7 +291,7 @@ func (h *handler) handleCommandWorkloadDecision(writer http.ResponseWriter, requ
 		writeProblem(writer, http.StatusMethodNotAllowed, "IAM_METHOD_NOT_ALLOWED", "This IAM route only supports POST.")
 		return http.StatusMethodNotAllowed
 	}
-	if hasForgedIdentityHeader(request.Header) || strings.TrimSpace(request.Header.Get("X-Delegation-Grant")) != "" || strings.TrimSpace(request.Header.Get("X-Command-Grant")) != "" {
+	if hasForgedIdentityHeader(request.Header) || grant.HasNonEmptyHeader(request.Header, "X-Delegation-Grant", "X-Command-Grant") {
 		writeProblem(writer, http.StatusBadRequest, "IAM_FORGED_IDENTITY_HEADER", "Caller-supplied identity headers are not accepted.")
 		return http.StatusBadRequest
 	}
@@ -301,12 +301,8 @@ func (h *handler) handleCommandWorkloadDecision(writer http.ResponseWriter, requ
 		return http.StatusUnauthorized
 	}
 
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
-	var input commandauth.WorkloadDecisionRequest
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || input.Validate() != nil {
-		writeProblem(writer, http.StatusBadRequest, "IAM_COMMAND_DECISION_REQUEST_INVALID", "The workload Command authorization request is invalid.")
+	input, ok := decodeStrictDecisionJSON[commandauth.WorkloadDecisionRequest](writer, request, "IAM_COMMAND_DECISION_REQUEST_INVALID", "The workload Command authorization request is invalid.")
+	if !ok {
 		return http.StatusBadRequest
 	}
 

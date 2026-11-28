@@ -1,4 +1,4 @@
-package alarmauth
+package alarmmodel
 
 import "testing"
 

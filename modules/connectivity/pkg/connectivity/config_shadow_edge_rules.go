@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -234,7 +235,7 @@ func (store *Store) GetSiteEdgeRuleSyncStatus(
 	}
 	tenantID = strings.ToLower(strings.TrimSpace(tenantID))
 	siteID = strings.ToLower(strings.TrimSpace(siteID))
-	if !gatewayIDPattern.MatchString(tenantID) || !gatewayIDPattern.MatchString(siteID) {
+	if !uuidv7.IsValid(tenantID) || !uuidv7.IsValid(siteID) {
 		return SiteEdgeRuleSyncStatus{}, fmt.Errorf("%w: tenantId and siteId must be valid UUIDs", ErrConfigShadowInvalid)
 	}
 	summaries := []GatewayEdgeRuleSyncSummary{}

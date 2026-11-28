@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type PostgresStore struct{ pool *pgxpool.Pool }
@@ -282,7 +283,7 @@ func (s *PostgresStore) BeginPublication(ctx context.Context, r Result, at time.
 	if err = scope(ctx, tx, r.Binding.TenantID, r.Binding.SiteID); err != nil {
 		return Result{}, err
 	}
-	publicationID, err := uuidv7(at)
+	publicationID, err := uuidv7.NewAt(at)
 	if err != nil {
 		return Result{}, err
 	}
@@ -372,7 +373,7 @@ WHERE tenant_id=$1::uuid AND site_id=$2::uuid AND metric_id=$3::uuid
 	if err != nil {
 		return err
 	}
-	eventID, err := uuidv7(at)
+	eventID, err := uuidv7.NewAt(at)
 	if err != nil {
 		return err
 	}
@@ -626,7 +627,7 @@ func (s *PostgresStore) EnqueueDirtyWindow(ctx context.Context, req DirtyWindowR
 	}
 	id := strings.TrimSpace(req.ID)
 	if id == "" {
-		generated, err := uuidv7(now)
+		generated, err := uuidv7.NewAt(now)
 		if err != nil {
 			return DirtyWindowRecord{}, err
 		}
@@ -646,7 +647,7 @@ func (s *PostgresStore) EnqueueDirtyWindow(ctx context.Context, req DirtyWindowR
 	}
 	requestedBy := strings.TrimSpace(req.RequestedBy)
 	if requestedBy == "" {
-		generated, err := uuidv7(now)
+		generated, err := uuidv7.NewAt(now)
 		if err != nil {
 			return DirtyWindowRecord{}, err
 		}

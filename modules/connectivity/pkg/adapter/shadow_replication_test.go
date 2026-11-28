@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 func TestEncodeAndDecodeShadowReplicationEnvelope(t *testing.T) {
@@ -26,7 +27,7 @@ func TestEncodeAndDecodeShadowReplicationEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EncodeShadowChangeBatch failed: %v", err)
 	}
-	if !uuidV7Pattern.MatchString(msgID) {
+	if !uuidv7.IsValid(msgID) {
 		t.Fatalf("expected UUIDv7 messageId, got %q", msgID)
 	}
 

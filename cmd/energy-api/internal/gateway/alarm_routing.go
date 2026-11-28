@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
@@ -71,7 +70,7 @@ func (h *handler) getSiteAlarmRouting(writer http.ResponseWriter, request *http.
 		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
 		return
 	}
-	if _, failure := h.decideAlarm(request.Context(), h.alarmCaller(session), string(alarmauth.ActionRead), ownerScope{tenantID: session.TenantID, siteID: siteID}); failure != nil {
+	if _, failure := h.decideAlarm(request.Context(), h.alarmCaller(session), string(alarmmodel.ActionRead), ownerScope{tenantID: session.TenantID, siteID: siteID}); failure != nil {
 		writeProblem(writer, request, failure.status, failure.code, failure.title, failure.detail, failure.retryable, nil)
 		return
 	}

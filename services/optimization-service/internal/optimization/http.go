@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
-	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 // Optimization serves only the Gateway, with a context it signed for the Site (#612). Before, any
@@ -64,41 +63,6 @@ func NewHTTPHandler(service *Service, preparer *Preparer, auth AuthConfig) (http
 	mux.HandleFunc("POST /v1/sites/{siteId}/edge-models/deployments/{deploymentId}/rollback", handler.guard(WriteAction, handler.handleRollbackEdgeModelDeployment))
 	mux.HandleFunc("POST /v1/sites/{siteId}/edge-models/evaluations", handler.guard(WriteAction, handler.handleRecordEdgeModelEvaluation))
 	return mux, nil
-}
-
-// HealthHandler answers the container health check on the plain diagnostics port.
-func HealthHandler() http.Handler {
-	return NewDiagnosticsHandler(nil)
-}
-
-// NewDiagnosticsHandler serves /healthz, /metrics (preserving hvac_service_up), and runtime readiness probes.
-func NewDiagnosticsHandler(runtime *observability.Runtime) http.Handler {
-	metrics := observability.NewRegistry()
-	var runtimeHandler http.Handler
-	if runtime != nil {
-		if runtime.Metrics != nil {
-			metrics = runtime.Metrics
-		}
-		runtimeHandler = runtime.DiagnosticsHandler()
-	}
-	_ = metrics.SetGauge(
-		"hvac_service_up",
-		"1 when this diagnostics server is serving.",
-		map[string]string{"service": Audience},
-		1,
-	)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"status":"ok"}`))
-	})
-	if runtimeHandler != nil {
-		mux.Handle("/", runtimeHandler)
-	} else {
-		mux.Handle("GET /metrics", metrics.Handler())
-	}
-	return mux
 }
 
 func (handler *HTTPHandler) guard(action string, next func(http.ResponseWriter, *http.Request, identitycontext.SiteContext)) http.HandlerFunc {

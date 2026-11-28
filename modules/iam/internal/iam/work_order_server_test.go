@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
+	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 	"github.com/quanlaihe/hvac-web/modules/iam/internal/iam"
 )
 
@@ -21,10 +21,10 @@ func TestIAMWorkOrderDecisionPublishesExactAllowAndAuditEvidence(t *testing.T) {
 	})
 	claims := validIAMClaims(harness.now, "fixture-user", "work-order:authorize")
 	claims.TenantID = iam.S1FixtureTenantAID
-	input := workorderauth.DecisionRequest{
+	input := workordermodel.DecisionRequest{
 		TenantID: iam.S1FixtureTenantAID,
 		SiteID:   iam.S1FixtureOwnerASite1ID,
-		Action:   workorderauth.ActionList,
+		Action:   workordermodel.ActionList,
 	}
 	body, _ := json.Marshal(input)
 	request := harness.request(t, iam.WorkOrderDecisionPath, strings.NewReader(string(body)), claims, harness.gatewaySigner)
@@ -34,8 +34,8 @@ func TestIAMWorkOrderDecisionPublishesExactAllowAndAuditEvidence(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var response workorderauth.DecisionResponse
-	if json.NewDecoder(recorder.Body).Decode(&response) != nil || !response.Decision.Allowed || response.Decision.Action != workorderauth.ActionList || response.Decision.SiteID != iam.S1FixtureOwnerASite1ID {
+	var response workordermodel.DecisionResponse
+	if json.NewDecoder(recorder.Body).Decode(&response) != nil || !response.Decision.Allowed || response.Decision.Action != workordermodel.ActionList || response.Decision.SiteID != iam.S1FixtureOwnerASite1ID {
 		t.Fatalf("unexpected Work Order decision: %#v", response)
 	}
 	if len(sink.events) != 1 || !sink.events[0].Allowed || sink.events[0].RequestID != "work-order-decision-request-1" || sink.events[0].PolicyRevision != principalCapabilityWorkOrderPolicy {
@@ -51,10 +51,10 @@ func TestIAMWorkOrderDecisionDeniesCrossSiteWithoutGrantMaterial(t *testing.T) {
 	})
 	claims := validIAMClaims(harness.now, "fixture-user", "work-order:authorize")
 	claims.TenantID = iam.S1FixtureTenantAID
-	input := workorderauth.DecisionRequest{
+	input := workordermodel.DecisionRequest{
 		TenantID: iam.S1FixtureTenantAID,
 		SiteID:   "01910000-0002-7000-8000-000000000001",
-		Action:   workorderauth.ActionList,
+		Action:   workordermodel.ActionList,
 	}
 	body, _ := json.Marshal(input)
 	request := harness.request(t, iam.WorkOrderDecisionPath, strings.NewReader(string(body)), claims, harness.gatewaySigner)
@@ -63,8 +63,8 @@ func TestIAMWorkOrderDecisionDeniesCrossSiteWithoutGrantMaterial(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var response workorderauth.DecisionResponse
-	if json.NewDecoder(recorder.Body).Decode(&response) != nil || response.Decision.Allowed || response.Decision.ReasonCode != workorderauth.ReasonDenyScope {
+	var response workordermodel.DecisionResponse
+	if json.NewDecoder(recorder.Body).Decode(&response) != nil || response.Decision.Allowed || response.Decision.ReasonCode != workordermodel.ReasonDenyScope {
 		t.Fatalf("unexpected cross-Site decision: %#v", response)
 	}
 	if strings.Contains(recorder.Body.String(), "delegation") || len(sink.events) != 1 || sink.events[0].Allowed {
@@ -91,7 +91,7 @@ func TestIAMWorkOrderDecisionRejectsExpandedBodyWrongActionAndAuditFailure(t *te
 	assertIAMProblem(t, recorder, http.StatusBadRequest, "IAM_WORK_ORDER_DECISION_REQUEST_INVALID")
 
 	wrongAction := validIAMClaims(harness.now, "fixture-user", "principal:read")
-	body, _ := json.Marshal(workorderauth.DecisionRequest{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workorderauth.ActionList})
+	body, _ := json.Marshal(workordermodel.DecisionRequest{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, Action: workordermodel.ActionList})
 	request = harness.request(t, iam.WorkOrderDecisionPath, strings.NewReader(string(body)), wrongAction, harness.gatewaySigner)
 	recorder = httptest.NewRecorder()
 	harness.handler.ServeHTTP(recorder, request)

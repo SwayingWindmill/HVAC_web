@@ -123,14 +123,13 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       npmRun('command:formal'),
     ]),
     alarm: Object.freeze([
-      nodeRun('scripts/run-go.mjs', 'test', './libs/alarmexpr/...', './libs/alarmauth/...', './libs/alarmmodel/...', './modules/alarm/...', './cmd/wecom-alert-adapter/...'),
+      nodeRun('scripts/run-go.mjs', 'test', './libs/alarmexpr/...', './libs/alarmmodel/...', './modules/alarm/...', './cmd/wecom-alert-adapter/...'),
       npmRun('alarm:test'),
     ]),
     workorder: Object.freeze([
       nodeRun(
         'scripts/run-go.mjs',
         'test',
-        './libs/workorderauth/...',
         './libs/workordermodel/...',
         './modules/iam/...',
         './modules/workorder/...',

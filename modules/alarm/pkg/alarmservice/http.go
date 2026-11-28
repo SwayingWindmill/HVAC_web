@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
@@ -140,11 +141,9 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 
 func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "private, no-store")
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant"} {
-		if request.Header.Get(header) != "" {
-			handler.writeProblem(writer, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted by Alarm Service.", false)
-			return
-		}
+	if grant.HasNonEmptyHeader(request.Header, "X-Principal", "X-Roles", "X-Tenant-ID", "X-Organization-ID", "X-Site-ID", "X-Admin", "X-Delegation-Grant") {
+		handler.writeProblem(writer, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted by Alarm Service.", false)
+		return
 	}
 	if alarmID, matches := matchAlarmScopePath(request.URL.Path); matches {
 		if request.Method != http.MethodGet {
@@ -335,7 +334,10 @@ func (handler *httpHandler) authorizeSiteRuleRoute(
 }
 
 func (handler *httpHandler) authorize(request *http.Request, header, action string, resourceScopes []string) (identitycontext.DelegationClaims, bool) {
-	token := strings.TrimSpace(request.Header.Get(header))
+	token, ok := grant.SingleHeader(request.Header, header)
+	if !ok {
+		return identitycontext.DelegationClaims{}, false
+	}
 	claims, err := identitycontext.VerifyDelegation(handler.gatewayPublicKey, token)
 	if err != nil || !alarmmodel.IsUUIDv7(claims.TenantID) || len(claims.Actions) != 1 || claims.Actions[0] != action {
 		return identitycontext.DelegationClaims{}, false

@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -247,7 +248,7 @@ func NormalizeOTAPackageInput(input CreateOTAPackageInput) (CreateOTAPackageInpu
 	out := input
 	if strings.TrimSpace(out.PackageID) != "" {
 		out.PackageID = strings.ToLower(strings.TrimSpace(out.PackageID))
-		if !gatewayIDPattern.MatchString(out.PackageID) {
+		if !uuidv7.IsValid(out.PackageID) {
 			return CreateOTAPackageInput{}, fmt.Errorf("%w: packageId must be UUIDv7", ErrOTAInvalid)
 		}
 	}
@@ -665,7 +666,7 @@ func (store *Store) beginTenantWithSites(ctx context.Context, claims registryaut
 	if store == nil || store.pool == nil {
 		return nil, errors.New("connectivity store is closed")
 	}
-	if !gatewayIDPattern.MatchString(claims.TenantID) {
+	if !uuidv7.IsValid(claims.TenantID) {
 		return nil, ErrCredentialForbidden
 	}
 	opts := pgx.TxOptions{IsoLevel: pgx.ReadCommitted}
@@ -704,7 +705,7 @@ func effectiveAuthorizedSites(claims registryauth.GrantClaims) []string {
 	seen := make(map[string]struct{}, len(claims.AllowedSiteIDs))
 	for _, raw := range claims.AllowedSiteIDs {
 		id := strings.ToLower(strings.TrimSpace(raw))
-		if !gatewayIDPattern.MatchString(id) {
+		if !uuidv7.IsValid(id) {
 			continue
 		}
 		if _, isDenied := denied[id]; isDenied {
@@ -752,7 +753,7 @@ func validateOTAReason(reason string) (string, error) {
 }
 
 func campaignScopeAllows(claims registryauth.GrantClaims, targetSiteIDs []string, tasks []OTADeviceTask) bool {
-	if !gatewayIDPattern.MatchString(claims.TenantID) {
+	if !uuidv7.IsValid(claims.TenantID) {
 		return false
 	}
 	for _, siteID := range targetSiteIDs {
@@ -772,7 +773,7 @@ func (store *Store) ListOTAPackages(ctx context.Context, claims registryauth.Gra
 	if store == nil || store.pool == nil {
 		return nil, errors.New("connectivity store is closed")
 	}
-	if !gatewayIDPattern.MatchString(claims.TenantID) {
+	if !uuidv7.IsValid(claims.TenantID) {
 		return nil, ErrCredentialForbidden
 	}
 	limit := filter.Limit
@@ -832,7 +833,7 @@ func (store *Store) CreateOTAPackage(ctx context.Context, claims registryauth.Gr
 	if store == nil || store.pool == nil {
 		return OTAPackage{}, errors.New("connectivity store is closed")
 	}
-	if !gatewayIDPattern.MatchString(claims.TenantID) || !gatewayIDPattern.MatchString(claims.PrincipalID) {
+	if !uuidv7.IsValid(claims.TenantID) || !uuidv7.IsValid(claims.PrincipalID) {
 		return OTAPackage{}, ErrCredentialForbidden
 	}
 	normalized, err := NormalizeOTAPackageInput(input)
@@ -897,7 +898,7 @@ RETURNING id::text, tenant_id::text, component, version, target_os, target_arch,
 }
 
 func (store *Store) GetOTAPackageForGateway(ctx context.Context, gatewayID, packageID string) (OTAPackage, error) {
-	if !gatewayIDPattern.MatchString(packageID) {
+	if !uuidv7.IsValid(packageID) {
 		return OTAPackage{}, fmt.Errorf("%w: packageId must be UUIDv7", ErrOTAInvalid)
 	}
 	tenantID, err := store.resolveActiveGatewayTenant(ctx, gatewayID)
@@ -1009,7 +1010,7 @@ WHERE tenant_id = $1::uuid AND campaign_id = ANY($2::uuid[])
 }
 
 func (store *Store) GetOTACampaign(ctx context.Context, claims registryauth.GrantClaims, campaignID string) (OTACampaignDetail, error) {
-	if !gatewayIDPattern.MatchString(campaignID) {
+	if !uuidv7.IsValid(campaignID) {
 		return OTACampaignDetail{}, fmt.Errorf("%w: campaignId must be UUIDv7", ErrOTAInvalid)
 	}
 	tx, err := store.beginTenantWithSites(ctx, claims, true)
@@ -1021,7 +1022,7 @@ func (store *Store) GetOTACampaign(ctx context.Context, claims registryauth.Gran
 }
 
 func (store *Store) CreateOTACampaign(ctx context.Context, claims registryauth.GrantClaims, input CreateOTACampaignInput) (OTACampaignDetail, []OTAStageDispatch, error) {
-	if !gatewayIDPattern.MatchString(claims.TenantID) || !gatewayIDPattern.MatchString(claims.PrincipalID) {
+	if !uuidv7.IsValid(claims.TenantID) || !uuidv7.IsValid(claims.PrincipalID) {
 		return OTACampaignDetail{}, nil, ErrCredentialForbidden
 	}
 	name := strings.TrimSpace(input.Name)
@@ -1030,7 +1031,7 @@ func (store *Store) CreateOTACampaign(ctx context.Context, claims registryauth.G
 		return OTACampaignDetail{}, nil, fmt.Errorf("%w: name must be 1..%d characters", ErrOTAInvalid, maxOTACampaignName)
 	}
 	pkgID := strings.ToLower(strings.TrimSpace(input.PackageID))
-	if !gatewayIDPattern.MatchString(pkgID) {
+	if !uuidv7.IsValid(pkgID) {
 		return OTACampaignDetail{}, nil, fmt.Errorf("%w: packageId must be UUIDv7", ErrOTAInvalid)
 	}
 	if input.CanaryPercent < 1 || input.CanaryPercent > 100 {
@@ -1068,7 +1069,7 @@ func (store *Store) CreateOTACampaign(ctx context.Context, claims registryauth.G
 		seen := make(map[string]struct{}, len(input.TargetSiteIDs))
 		for _, raw := range input.TargetSiteIDs {
 			sID := strings.ToLower(strings.TrimSpace(raw))
-			if !gatewayIDPattern.MatchString(sID) {
+			if !uuidv7.IsValid(sID) {
 				return OTACampaignDetail{}, nil, fmt.Errorf("%w: targetSiteIds entry %q must be UUIDv7", ErrOTAInvalid, raw)
 			}
 			if !registryauth.ScopeAllows(claims, sID) {
@@ -1256,10 +1257,10 @@ INSERT INTO connectivity.ota_device_tasks (
 }
 
 func (store *Store) PauseOTACampaign(ctx context.Context, claims registryauth.GrantClaims, campaignID, reason string) (OTACampaignDetail, error) {
-	if !gatewayIDPattern.MatchString(campaignID) {
+	if !uuidv7.IsValid(campaignID) {
 		return OTACampaignDetail{}, fmt.Errorf("%w: campaignId must be UUIDv7", ErrOTAInvalid)
 	}
-	if !gatewayIDPattern.MatchString(claims.PrincipalID) {
+	if !uuidv7.IsValid(claims.PrincipalID) {
 		return OTACampaignDetail{}, ErrCredentialForbidden
 	}
 	cleanedReason := OTAPauseReasonManual
@@ -1311,10 +1312,10 @@ WHERE tenant_id = $1::uuid AND id = $2::uuid
 }
 
 func (store *Store) ResumeOTACampaign(ctx context.Context, claims registryauth.GrantClaims, campaignID, reason string) (OTACampaignDetail, []OTAStageDispatch, error) {
-	if !gatewayIDPattern.MatchString(campaignID) {
+	if !uuidv7.IsValid(campaignID) {
 		return OTACampaignDetail{}, nil, fmt.Errorf("%w: campaignId must be UUIDv7", ErrOTAInvalid)
 	}
-	if !gatewayIDPattern.MatchString(claims.PrincipalID) {
+	if !uuidv7.IsValid(claims.PrincipalID) {
 		return OTACampaignDetail{}, nil, ErrCredentialForbidden
 	}
 	cleanedReason := "RESUME_CAMPAIGN"
@@ -1423,10 +1424,10 @@ WHERE tenant_id = $1::uuid AND id = $2::uuid
 }
 
 func (store *Store) RollbackOTACampaign(ctx context.Context, claims registryauth.GrantClaims, campaignID, reason string) (OTACampaignDetail, []OTAStageDispatch, error) {
-	if !gatewayIDPattern.MatchString(campaignID) {
+	if !uuidv7.IsValid(campaignID) {
 		return OTACampaignDetail{}, nil, fmt.Errorf("%w: campaignId must be UUIDv7", ErrOTAInvalid)
 	}
-	if !gatewayIDPattern.MatchString(claims.PrincipalID) {
+	if !uuidv7.IsValid(claims.PrincipalID) {
 		return OTACampaignDetail{}, nil, ErrCredentialForbidden
 	}
 	cleanedReason := "MANUAL_ROLLBACK"

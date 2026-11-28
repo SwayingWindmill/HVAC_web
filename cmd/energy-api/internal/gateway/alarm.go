@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
@@ -39,7 +38,7 @@ type publicAlarmRoute struct {
 	template string
 	siteID   string
 	alarmID  string
-	action   alarmauth.Action
+	action   alarmmodel.Action
 	// siteRules is the Site's rules in effect (#693), read with the same grant as its alarm list.
 	siteRules                bool
 	siteRulesDiff            bool
@@ -94,11 +93,11 @@ type alarmLifecycleSpec struct {
 	label     string
 }
 
-var alarmLifecycleSpecs = map[alarmauth.Action]alarmLifecycleSpec{
-	alarmauth.ActionAssign:     {operation: alarmmodel.OperationAssign, suffix: ":assign", noun: "assignment", label: "assigned"},
-	alarmauth.ActionUnassign:   {operation: alarmmodel.OperationUnassign, suffix: ":unassign", noun: "unassignment", label: "unassigned"},
-	alarmauth.ActionSuppress:   {operation: alarmmodel.OperationSuppress, suffix: ":suppress", noun: "suppression", label: "suppressed"},
-	alarmauth.ActionUnsuppress: {operation: alarmmodel.OperationUnsuppress, suffix: ":unsuppress", noun: "unsuppression", label: "unsuppressed"},
+var alarmLifecycleSpecs = map[alarmmodel.Action]alarmLifecycleSpec{
+	alarmmodel.ActionAssign:     {operation: alarmmodel.OperationAssign, suffix: ":assign", noun: "assignment", label: "assigned"},
+	alarmmodel.ActionUnassign:   {operation: alarmmodel.OperationUnassign, suffix: ":unassign", noun: "unassignment", label: "unassigned"},
+	alarmmodel.ActionSuppress:   {operation: alarmmodel.OperationSuppress, suffix: ":suppress", noun: "suppression", label: "suppressed"},
+	alarmmodel.ActionUnsuppress: {operation: alarmmodel.OperationUnsuppress, suffix: ":unsuppress", noun: "unsuppression", label: "unsuppressed"},
 }
 
 type directAlarmAdapter struct {
@@ -205,7 +204,7 @@ func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Re
 		return bytes, http.StatusOK, nil
 	}
 
-	if route.action == alarmauth.ActionRead && route.evaluations {
+	if route.action == alarmmodel.ActionRead && route.evaluations {
 		limit, valid := validatePublicAlarmEvaluationsQuery(query)
 		if !valid {
 			failure := alarmInvalid("The Alarm evaluation query is invalid.")
@@ -228,7 +227,7 @@ func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Re
 		return bytes, http.StatusOK, nil
 	}
 
-	if route.action == alarmauth.ActionRead {
+	if route.action == alarmmodel.ActionRead {
 		alarm, err := a.store.Get(ctx, tenantID, route.siteID, route.alarmID)
 		if err != nil {
 			if errors.Is(err, alarmservice.ErrNotFound) {
@@ -246,7 +245,7 @@ func (a *directAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Re
 		return bytes, http.StatusOK, nil
 	}
 
-	if route.action == alarmauth.ActionAck {
+	if route.action == alarmmodel.ActionAck {
 		var payload struct {
 			Reason          string  `json:"reason"`
 			AssigneeID      *string `json:"assigneeId"`
@@ -515,7 +514,7 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 			upstreamURL += "?" + encoded
 		}
 	}
-	if route.action == alarmauth.ActionAck {
+	if route.action == alarmmodel.ActionAck {
 		method = http.MethodPost
 		path += ":acknowledge"
 		upstreamURL = a.baseURL + path
@@ -552,7 +551,7 @@ func (a *httpAlarmAdapter) Execute(ctx context.Context, publicRequest *http.Requ
 		} else {
 			request.Header.Set("Content-Type", "application/json")
 		}
-	} else if route.siteRulesPublish || route.siteRuleRollback || route.siteRuleDeadLetterReplay || route.action == alarmauth.ActionAck || isMutation {
+	} else if route.siteRulesPublish || route.siteRuleRollback || route.siteRuleDeadLetterReplay || route.action == alarmmodel.ActionAck || isMutation {
 		request.Header.Set(alarmWriteContextHeader, serviceContext)
 		if ct := publicRequest.Header.Get("Content-Type"); strings.TrimSpace(ct) != "" {
 			request.Header.Set("Content-Type", ct)
@@ -634,22 +633,22 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 		return publicAlarmRoute{template: tmplRoute.template, templateRoute: tmplRoute}, true
 	}
 	if path == "/api/v1/alarms" {
-		return publicAlarmRoute{template: "/api/v1/alarms", action: alarmauth.ActionRead}, true
+		return publicAlarmRoute{template: "/api/v1/alarms", action: alarmmodel.ActionRead}, true
 	}
 	if path == "/api/v1/alarm-rules" {
-		return publicAlarmRoute{template: "/api/v1/alarm-rules", action: alarmauth.ActionRead, siteRules: true}, true
+		return publicAlarmRoute{template: "/api/v1/alarm-rules", action: alarmmodel.ActionRead, siteRules: true}, true
 	}
 	if path == "/api/v1/alarm-rules/diff" {
-		return publicAlarmRoute{template: "/api/v1/alarm-rules/diff", action: alarmauth.ActionRead, siteRulesDiff: true}, true
+		return publicAlarmRoute{template: "/api/v1/alarm-rules/diff", action: alarmmodel.ActionRead, siteRulesDiff: true}, true
 	}
 	if path == "/api/v1/alarm-rules/compile-edge" {
-		return publicAlarmRoute{template: "/api/v1/alarm-rules/compile-edge", action: alarmauth.ActionRead, siteRulesCompileEdge: true}, true
+		return publicAlarmRoute{template: "/api/v1/alarm-rules/compile-edge", action: alarmmodel.ActionRead, siteRulesCompileEdge: true}, true
 	}
 	if path == "/api/v1/alarm-rules/simulate" {
-		return publicAlarmRoute{template: "/api/v1/alarm-rules/simulate", action: alarmauth.ActionRead, siteRulesSimulate: true}, true
+		return publicAlarmRoute{template: "/api/v1/alarm-rules/simulate", action: alarmmodel.ActionRead, siteRulesSimulate: true}, true
 	}
 	if path == "/api/v1/alarm-rules/revisions" {
-		return publicAlarmRoute{template: "/api/v1/alarm-rules/revisions", action: alarmauth.ActionRead, siteRuleRevisions: true}, true
+		return publicAlarmRoute{template: "/api/v1/alarm-rules/revisions", action: alarmmodel.ActionRead, siteRuleRevisions: true}, true
 	}
 	if rest, ok := strings.CutPrefix(path, "/api/v1/alarm-rules/revisions/"); ok {
 		parts := strings.Split(rest, "/")
@@ -668,7 +667,7 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 		return publicAlarmRoute{}, false
 	}
 	if path == "/api/v1/alarm-rules/dead-letters" {
-		return publicAlarmRoute{template: "/api/v1/alarm-rules/dead-letters", action: alarmauth.ActionRead, siteRuleDeadLetters: true}, true
+		return publicAlarmRoute{template: "/api/v1/alarm-rules/dead-letters", action: alarmmodel.ActionRead, siteRuleDeadLetters: true}, true
 	}
 	if rest, ok := strings.CutPrefix(path, "/api/v1/alarm-rules/dead-letters/"); ok {
 		parts := strings.Split(rest, "/")
@@ -698,33 +697,33 @@ func matchPublicAlarmRoute(path string) (publicAlarmRoute, bool) {
 	}
 	if len(segments) == 1 {
 		return publicAlarmRoute{
-			template: "/api/v1/alarms/{alarmId}", alarmID: alarmID, action: alarmauth.ActionRead,
+			template: "/api/v1/alarms/{alarmId}", alarmID: alarmID, action: alarmmodel.ActionRead,
 		}, true
 	}
 	switch segments[1] {
 	case "ack":
 		return publicAlarmRoute{
-			template: "/api/v1/alarms/{alarmId}/ack", alarmID: alarmID, action: alarmauth.ActionAck,
+			template: "/api/v1/alarms/{alarmId}/ack", alarmID: alarmID, action: alarmmodel.ActionAck,
 		}, true
 	case "assign":
 		return publicAlarmRoute{
-			template: "/api/v1/alarms/{alarmId}/assign", alarmID: alarmID, action: alarmauth.ActionAssign,
+			template: "/api/v1/alarms/{alarmId}/assign", alarmID: alarmID, action: alarmmodel.ActionAssign,
 		}, true
 	case "unassign":
 		return publicAlarmRoute{
-			template: "/api/v1/alarms/{alarmId}/unassign", alarmID: alarmID, action: alarmauth.ActionUnassign,
+			template: "/api/v1/alarms/{alarmId}/unassign", alarmID: alarmID, action: alarmmodel.ActionUnassign,
 		}, true
 	case "suppress":
 		return publicAlarmRoute{
-			template: "/api/v1/alarms/{alarmId}/suppress", alarmID: alarmID, action: alarmauth.ActionSuppress,
+			template: "/api/v1/alarms/{alarmId}/suppress", alarmID: alarmID, action: alarmmodel.ActionSuppress,
 		}, true
 	case "unsuppress":
 		return publicAlarmRoute{
-			template: "/api/v1/alarms/{alarmId}/unsuppress", alarmID: alarmID, action: alarmauth.ActionUnsuppress,
+			template: "/api/v1/alarms/{alarmId}/unsuppress", alarmID: alarmID, action: alarmmodel.ActionUnsuppress,
 		}, true
 	case "evaluations":
 		return publicAlarmRoute{
-			template: "/api/v1/alarms/{alarmId}/evaluations", alarmID: alarmID, action: alarmauth.ActionRead, evaluations: true,
+			template: "/api/v1/alarms/{alarmId}/evaluations", alarmID: alarmID, action: alarmmodel.ActionRead, evaluations: true,
 		}, true
 	default:
 		return publicAlarmRoute{}, false
@@ -777,7 +776,7 @@ func dispatchAlarmRoute(h *handler, writer http.ResponseWriter, request *http.Re
 		return
 	}
 	expectedMethod := http.MethodGet
-	if route.action == alarmauth.ActionAck {
+	if route.action == alarmmodel.ActionAck {
 		expectedMethod = http.MethodPost
 	}
 	if _, isMutation := alarmLifecycleSpecs[route.action]; isMutation {
@@ -1808,11 +1807,11 @@ func (h *handler) decideAlarm(ctx context.Context, caller ownerCaller, action st
 		failure := alarmUnavailable("The Alarm authorization request could not be signed.")
 		return ownerDecision{}, &failure
 	}
-	input := alarmauth.DecisionRequest{
+	input := alarmmodel.DecisionRequest{
 		TenantID: scope.tenantID,
 		SiteID:   scope.siteID,
 		AlarmID:  scope.resourceID,
-		Action:   alarmauth.Action(action),
+		Action:   alarmmodel.Action(action),
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
@@ -1846,7 +1845,7 @@ func (h *handler) decideAlarm(ctx context.Context, caller ownerCaller, action st
 		failure := alarmUnavailable("IAM returned an unreadable Alarm authorization decision.")
 		return ownerDecision{}, &failure
 	}
-	var output alarmauth.DecisionResponse
+	var output alarmmodel.DecisionResponse
 	if decodeStrictAlarmJSON(raw, &output) != nil || output.Decision.Validate() != nil {
 		failure := alarmUnavailable("IAM returned an invalid Alarm authorization decision.")
 		return ownerDecision{}, &failure
@@ -1943,7 +1942,7 @@ func (h *handler) forwardAlarmProblem(writer http.ResponseWriter, request *http.
 		h.writeAlarmFailure(writer, request, alarmInvalidCursor())
 	case status == http.StatusBadRequest || status == http.StatusUnprocessableEntity || status == http.StatusUnsupportedMediaType:
 		detail := "The Alarm request is invalid."
-		if route.action == alarmauth.ActionAck {
+		if route.action == alarmmodel.ActionAck {
 			detail = "The Alarm acknowledgement request is invalid."
 		}
 		h.writeAlarmFailure(writer, request, alarmInvalid(detail))
@@ -2055,7 +2054,7 @@ func validatePublicAlarmEvaluationsQuery(query url.Values) (int, bool) {
 	return limit, true
 }
 
-func parseAlarmLifecycleMutation(publicRequest *http.Request, action alarmauth.Action, referenceNow time.Time) (alarmservice.Mutation, []byte, *ownerFailure) {
+func parseAlarmLifecycleMutation(publicRequest *http.Request, action alarmmodel.Action, referenceNow time.Time) (alarmservice.Mutation, []byte, *ownerFailure) {
 	spec, ok := alarmLifecycleSpecs[action]
 	if !ok {
 		failure := alarmInvalid("Unsupported Alarm lifecycle action.")
@@ -2101,7 +2100,7 @@ func parseAlarmLifecycleMutation(publicRequest *http.Request, action alarmauth.A
 		mutation.ActorID = session.Principal.Subject
 	}
 	switch action {
-	case alarmauth.ActionAssign:
+	case alarmmodel.ActionAssign:
 		if payload.AssigneeID == nil || payload.SuppressedUntil != nil {
 			return alarmservice.Mutation{}, nil, invalid()
 		}
@@ -2110,7 +2109,7 @@ func parseAlarmLifecycleMutation(publicRequest *http.Request, action alarmauth.A
 			return alarmservice.Mutation{}, nil, invalid()
 		}
 		mutation.AssigneeID = &assigneeID
-	case alarmauth.ActionSuppress:
+	case alarmmodel.ActionSuppress:
 		if payload.AssigneeID != nil || payload.SuppressedUntil == nil {
 			return alarmservice.Mutation{}, nil, invalid()
 		}
@@ -2120,7 +2119,7 @@ func parseAlarmLifecycleMutation(publicRequest *http.Request, action alarmauth.A
 			return alarmservice.Mutation{}, nil, invalid()
 		}
 		mutation.SuppressedUntil = &suppressedUntil
-	case alarmauth.ActionUnassign, alarmauth.ActionUnsuppress:
+	case alarmmodel.ActionUnassign, alarmmodel.ActionUnsuppress:
 		if payload.AssigneeID != nil || payload.SuppressedUntil != nil {
 			return alarmservice.Mutation{}, nil, invalid()
 		}

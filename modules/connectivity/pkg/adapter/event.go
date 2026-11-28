@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 func sourcePartition(gatewayID, deviceID, pointCode string) string {
@@ -52,9 +54,5 @@ func deterministicPointEventID(messageID string, deviceTimestamp int64, point En
 	var raw [16]byte
 	binary.BigEndian.PutUint64(raw[:8], uint64(deviceTimestamp)<<16)
 	copy(raw[6:], digest[:10])
-	raw[6] = 0x70 | (raw[6] & 0x0f)
-	raw[8] = 0x80 | (raw[8] & 0x3f)
-	encoded := make([]byte, 32)
-	hex.Encode(encoded, raw[:])
-	return string(encoded[0:8]) + "-" + string(encoded[8:12]) + "-" + string(encoded[12:16]) + "-" + string(encoded[16:20]) + "-" + string(encoded[20:32]), nil
+	return uuidv7.FormatRaw(raw), nil
 }

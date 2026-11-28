@@ -12,7 +12,6 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
@@ -44,7 +43,7 @@ func TestGatewayWorkOrderCreateParserUsesTenantScope(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "create-gateway-0001")
 
-	parsed, failure := h.parseWorkOrderMutation(request, session, publicWorkOrderRoute{kind: publicWorkOrderCollection, siteID: gatewayWorkOrderSiteID, action: workorderauth.ActionCreate})
+	parsed, failure := h.parseWorkOrderMutation(request, session, publicWorkOrderRoute{kind: publicWorkOrderCollection, siteID: gatewayWorkOrderSiteID, action: workordermodel.ActionCreate})
 	if failure != nil || parsed.create == nil || parsed.expectedCreate == nil {
 		t.Fatalf("valid Work Order create rejected: parsed=%#v failure=%#v", parsed, failure)
 	}
@@ -104,7 +103,7 @@ func TestGatewayWorkOrderAssignmentParserBindsOwnershipTuple(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "assign-gateway-0001")
 
-	parsed, failure := h.parseWorkOrderMutation(request, session, publicWorkOrderRoute{kind: publicWorkOrderAssignment, siteID: gatewayWorkOrderSiteID, workOrderID: gatewayWorkOrderID, action: workorderauth.ActionAssign})
+	parsed, failure := h.parseWorkOrderMutation(request, session, publicWorkOrderRoute{kind: publicWorkOrderAssignment, siteID: gatewayWorkOrderSiteID, workOrderID: gatewayWorkOrderID, action: workordermodel.ActionAssign})
 	if failure != nil || parsed.assignment == nil || parsed.assignmentTarget == nil || parsed.assignmentTeam == nil {
 		t.Fatalf("valid Work Order assignment rejected: parsed=%#v failure=%#v", parsed, failure)
 	}

@@ -1,21 +1,16 @@
 package iam
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
+	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
 func (h *handler) handleWorkOrderDecision(writer http.ResponseWriter, request *http.Request, inbound identitycontext.DelegationClaims) int {
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
-	var input workorderauth.DecisionRequest
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil || input.Validate() != nil {
-		writeProblem(writer, http.StatusBadRequest, "IAM_WORK_ORDER_DECISION_REQUEST_INVALID", "The Work Order authorization request is invalid.")
+	input, ok := decodeStrictDecisionJSON[workordermodel.DecisionRequest](writer, request, "IAM_WORK_ORDER_DECISION_REQUEST_INVALID", "The Work Order authorization request is invalid.")
+	if !ok {
 		return http.StatusBadRequest
 	}
 	if input.TenantID != inbound.TenantID {
@@ -52,6 +47,6 @@ func (h *handler) handleWorkOrderDecision(writer http.ResponseWriter, request *h
 		map[string]string{"result": decisionResult(decision.Allowed), "action": string(decision.Action), "reason": string(decision.ReasonCode)},
 		1,
 	)
-	writeJSON(writer, http.StatusOK, workorderauth.DecisionResponse{Decision: decision})
+	writeJSON(writer, http.StatusOK, workordermodel.DecisionResponse{Decision: decision})
 	return http.StatusOK
 }

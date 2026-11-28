@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -341,7 +343,7 @@ func (sink *ClickHouseHistorySink) InsertObservations(ctx context.Context, seque
 }
 
 func validateHistoryObservation(observation HistoryObservation) error {
-	if !uuidV7Pattern.MatchString(observation.ObservationID) {
+	if !uuidv7.IsValid(observation.ObservationID) {
 		return fmt.Errorf("%w: ClickHouse history observation ID must be UUIDv7", ErrHistoryBatchPermanent)
 	}
 	if !clickHousePayloadDigestPattern.MatchString(observation.PayloadSHA256) {
@@ -352,9 +354,9 @@ func validateHistoryObservation(observation HistoryObservation) error {
 		return nil
 	}
 	if observation.TenantID == nil || observation.SiteID == nil || observation.DeviceID == nil || observation.PointID == nil ||
-		!uuidV7Pattern.MatchString(*observation.TenantID) || !uuidV7Pattern.MatchString(*observation.SiteID) ||
-		!uuidV7Pattern.MatchString(*observation.DeviceID) || !uuidV7Pattern.MatchString(*observation.PointID) ||
-		(observation.SensorID != nil && !uuidV7Pattern.MatchString(*observation.SensorID)) {
+		!uuidv7.IsValid(*observation.TenantID) || !uuidv7.IsValid(*observation.SiteID) ||
+		!uuidv7.IsValid(*observation.DeviceID) || !uuidv7.IsValid(*observation.PointID) ||
+		(observation.SensorID != nil && !uuidv7.IsValid(*observation.SensorID)) {
 		return fmt.Errorf("%w: resolved ClickHouse history observation requires UUIDv7 Tenant, Site, Device and Point scope", ErrHistoryBatchPermanent)
 	}
 	if observation.PointType == nil || observation.PointRevision == nil || *observation.PointRevision < 1 {

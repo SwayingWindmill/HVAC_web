@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export type BoundaryRuleKind = 'cross-schema-sql' | 'peer-module-import' | 'go-layer-import' | 'untyped-map';
+export type BoundaryRuleKind = 'cross-schema-sql' | 'peer-module-import' | 'go-layer-import' | 'untyped-map' | 'raw-uuidv7';
 
 export interface BoundaryViolation {
   readonly rule: BoundaryRuleKind;
@@ -880,6 +880,36 @@ export const checkUntypedMapsInFile = (filePath: string, content: string): Bound
   return violations;
 };
 
+const rawUUIDv7Pattern = /\|\s*0x70\b|\b0x70\s*\|/gu;
+
+/**
+ * Prevents hand-rolled UUIDv7 bit-twiddling (`0x70`) outside the canonical `libs/uuidv7` package.
+ */
+export const checkRawUUIDv7BitTwiddlingInFile = (filePath: string, content: string): BoundaryViolation[] => {
+  const normalizedPath = normalizePath(filePath);
+  if (!normalizedPath.endsWith('.go') || normalizedPath.startsWith('libs/uuidv7/')) return [];
+
+  const lexed = lexGoSource(content);
+  const lineOffsets = computeLineOffsets(lexed.codeWithoutCommentsOrStrings);
+  const violations: BoundaryViolation[] = [];
+  rawUUIDv7Pattern.lastIndex = 0;
+
+  let match: RegExpExecArray | null = rawUUIDv7Pattern.exec(lexed.codeWithoutCommentsOrStrings);
+  while (match !== null) {
+    const line = lineForOffset(lineOffsets, match.index);
+    violations.push({
+      rule: 'raw-uuidv7',
+      file: normalizedPath,
+      line,
+      symbol: '0x70',
+      message: `${normalizedPath}:${line}: forbidden hand-rolled UUIDv7 bit-twiddling (0x70); import github.com/quanlaihe/hvac-web/libs/uuidv7 instead.`,
+    });
+    match = rawUUIDv7Pattern.exec(lexed.codeWithoutCommentsOrStrings);
+  }
+
+  return violations;
+};
+
 const collectGoFiles = (rootDir: string): string[] => {
   const files: string[] = [];
   const visit = (absDir: string): void => {
@@ -915,6 +945,7 @@ export const inspectOwnershipBoundaries = (rootDir: string = repositoryRoot): Ow
       ...checkPeerModuleImportsInFile(relPath, content),
       ...checkGoLayerImportsInFile(relPath, content),
       ...checkUntypedMapsInFile(relPath, content),
+      ...checkRawUUIDv7BitTwiddlingInFile(relPath, content),
     );
   }
 

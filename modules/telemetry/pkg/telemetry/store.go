@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
@@ -850,21 +850,7 @@ func availabilityStrings(values []telemetryapi.AvailabilityReasonCode) []string 
 }
 
 func newUUIDv7(now time.Time) (string, error) {
-	var value [16]byte
-	if _, err := rand.Read(value[:]); err != nil {
-		return "", err
-	}
-	milliseconds := now.UTC().UnixMilli()
-	value[0] = byte(milliseconds >> 40)
-	value[1] = byte(milliseconds >> 32)
-	value[2] = byte(milliseconds >> 24)
-	value[3] = byte(milliseconds >> 16)
-	value[4] = byte(milliseconds >> 8)
-	value[5] = byte(milliseconds)
-	value[6] = value[6]&0x0f | 0x70
-	value[8] = value[8]&0x3f | 0x80
-	encoded := hex.EncodeToString(value[:])
-	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
+	return uuidv7.NewAt(now)
 }
 
 var _ SnapshotStore = (*PostgresStore)(nil)

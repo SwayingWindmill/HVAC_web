@@ -22,7 +22,6 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
@@ -242,7 +241,7 @@ func alarmRouteMethod(route publicAlarmRoute) string {
 	if route.siteRulesSimulate || route.siteRulesCompileEdge || route.siteRulesDiff {
 		return http.MethodPost
 	}
-	if route.action == alarmauth.ActionRead {
+	if route.action == alarmmodel.ActionRead {
 		return http.MethodGet
 	}
 	return http.MethodPost
@@ -393,16 +392,16 @@ func (fixture *alarmContractFixture) iamClient(t *testing.T, signer *ecdsa.Priva
 			}
 			return telemetryJSONResponse(http.StatusOK, registryauth.DecisionResponse{Decision: decision, DelegationGrant: commandUnsignedRegistryGrant(claims)}), nil
 		case alarmDecisionPath:
-			var input alarmauth.DecisionRequest
+			var input alarmmodel.DecisionRequest
 			if json.NewDecoder(request.Body).Decode(&input) != nil || input.TenantID != fixture.tenantID {
 				t.Fatal("invalid Alarm decision request")
 			}
 			allowed := !fixture.deny.Load() && input.SiteID == fixture.siteID
-			reason := alarmauth.ReasonDenyScope
+			reason := alarmmodel.ReasonDenyScope
 			if allowed {
-				reason = alarmauth.ReasonAllowExactScope
+				reason = alarmmodel.ReasonAllowExactScope
 			}
-			return telemetryJSONResponse(http.StatusOK, alarmauth.DecisionResponse{Decision: alarmauth.Decision{
+			return telemetryJSONResponse(http.StatusOK, alarmmodel.DecisionResponse{Decision: alarmmodel.Decision{
 				Allowed: allowed, PrincipalID: "01910000-5000-7000-8000-000000000001", SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject,
 				TenantID: input.TenantID, SiteID: input.SiteID, AlarmID: input.AlarmID, Action: input.Action,
 				PolicyRevision: "alarm-policy-3", ReasonCode: reason, DecidedAt: now.Format(time.RFC3339Nano),

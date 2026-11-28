@@ -16,6 +16,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -225,7 +226,7 @@ func NewOTAHandler(
 		pkgID := strings.ToLower(fields["packageId"])
 		if pkgID == "" {
 			pkgID = fileKeyID
-		} else if !gatewayIDPattern.MatchString(pkgID) {
+		} else if !uuidv7.IsValid(pkgID) {
 			cleanupFile()
 			writeOTAErrorJSON(w, http.StatusUnprocessableEntity, "OTA_INVALID", "packageId must be UUIDv7")
 			return

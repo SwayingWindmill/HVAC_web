@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const InternalEdgeAlarmEventsPath = "/internal/v1/alarms/edge-events"
@@ -195,9 +196,9 @@ func (relay *EdgeAlarmEventRelay) deliverWithTimeout(ctx context.Context, event 
 }
 
 func validPendingEdgeAlarmEvent(event PendingEdgeAlarmEvent) bool {
-	return uuidV7Pattern.MatchString(strings.ToLower(strings.TrimSpace(event.MessageID))) &&
-		uuidV7Pattern.MatchString(strings.ToLower(strings.TrimSpace(event.TenantID))) &&
-		uuidV7Pattern.MatchString(strings.ToLower(strings.TrimSpace(event.SiteID))) &&
+	return uuidv7.IsValid(strings.ToLower(strings.TrimSpace(event.MessageID))) &&
+		uuidv7.IsValid(strings.ToLower(strings.TrimSpace(event.TenantID))) &&
+		uuidv7.IsValid(strings.ToLower(strings.TrimSpace(event.SiteID))) &&
 		strings.TrimSpace(event.GatewayID) != "" &&
 		IsEdgeRuleAlarmEventType(event.EventType) &&
 		strings.TrimSpace(event.SourceID) != "" &&

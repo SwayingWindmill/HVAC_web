@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
@@ -161,7 +160,7 @@ func (h *handler) executeWorkOrderLifecycle(publicRequest *http.Request, route p
 }
 
 func workOrderMutationKeyScope(idempotencyKey string) string {
-	return workorderauth.MutationKeyScope(idempotencyKey)
+	return workordermodel.MutationKeyScope(idempotencyKey)
 }
 
 func decodePublicNullableInstant(raw json.RawMessage) (*string, bool) {
@@ -180,7 +179,7 @@ func decodePublicNullableInstant(raw json.RawMessage) (*string, bool) {
 	return &normalized, true
 }
 
-func validPublicLifecycleProjection(workOrder workordermodel.WorkOrder, route publicWorkOrderRoute, mutation parsedPublicWorkOrderLifecycle, decision workorderauth.Decision) bool {
+func validPublicLifecycleProjection(workOrder workordermodel.WorkOrder, route publicWorkOrderRoute, mutation parsedPublicWorkOrderLifecycle, decision workordermodel.Decision) bool {
 	if workOrder.Version != mutation.expectedVersion+1 || len(workOrder.Timeline) != int(workOrder.Version) {
 		return false
 	}

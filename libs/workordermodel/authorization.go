@@ -1,4 +1,4 @@
-package workorderauth
+package workordermodel
 
 import (
 	"crypto/sha256"
@@ -6,8 +6,6 @@ import (
 	"errors"
 	"strings"
 	"time"
-
-	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
 type Action string
@@ -46,7 +44,7 @@ type DecisionRequest struct {
 }
 
 func (request DecisionRequest) Validate() error {
-	if !workordermodel.IsUUIDv7(request.TenantID) || !workordermodel.IsUUIDv7(request.SiteID) {
+	if !IsUUIDv7(request.TenantID) || !IsUUIDv7(request.SiteID) {
 		return errors.New("work order authorization scope is invalid")
 	}
 	switch request.Action {
@@ -55,7 +53,7 @@ func (request DecisionRequest) Validate() error {
 			return errors.New("work order list authorization cannot include resource or ownership targets")
 		}
 	case ActionRead:
-		if !workordermodel.IsUUIDv7(request.WorkOrderID) || request.AssigneeID != nil || request.TeamID != nil {
+		if !IsUUIDv7(request.WorkOrderID) || request.AssigneeID != nil || request.TeamID != nil {
 			return errors.New("work order read authorization requires only Work Order identity")
 		}
 	case ActionCreate:
@@ -63,11 +61,11 @@ func (request DecisionRequest) Validate() error {
 			return errors.New("work order create authorization scope is invalid")
 		}
 	case ActionAssign:
-		if !workordermodel.IsUUIDv7(request.WorkOrderID) || !validOptionalTarget(request.AssigneeID) || !validOptionalTarget(request.TeamID) {
+		if !IsUUIDv7(request.WorkOrderID) || !validOptionalTarget(request.AssigneeID) || !validOptionalTarget(request.TeamID) {
 			return errors.New("work order assignment authorization scope is invalid")
 		}
 	case ActionPlan, ActionStart, ActionBlock, ActionResume, ActionComplete, ActionCancel, ActionReopen:
-		if !workordermodel.IsUUIDv7(request.WorkOrderID) || request.AssigneeID != nil || request.TeamID != nil {
+		if !IsUUIDv7(request.WorkOrderID) || request.AssigneeID != nil || request.TeamID != nil {
 			return errors.New("work order lifecycle authorization requires only Work Order identity")
 		}
 	default:

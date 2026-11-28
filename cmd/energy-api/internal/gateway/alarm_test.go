@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
@@ -25,25 +24,25 @@ func TestMatchPublicAlarmRoutesUsesDomainV1Shape(t *testing.T) {
 	tests := []struct {
 		path     string
 		template string
-		action   alarmauth.Action
+		action   alarmmodel.Action
 		alarmID  string
 	}{
-		{path: "/api/v1/alarms", template: "/api/v1/alarms", action: alarmauth.ActionRead},
-		{path: "/api/v1/alarm-rules", template: "/api/v1/alarm-rules", action: alarmauth.ActionRead},
-		{path: "/api/v1/alarm-rules/diff", template: "/api/v1/alarm-rules/diff", action: alarmauth.ActionRead},
-		{path: "/api/v1/alarm-rules/compile-edge", template: "/api/v1/alarm-rules/compile-edge", action: alarmauth.ActionRead},
-		{path: "/api/v1/alarm-rules/simulate", template: "/api/v1/alarm-rules/simulate", action: alarmauth.ActionRead},
-		{path: "/api/v1/alarm-rules/revisions", template: "/api/v1/alarm-rules/revisions", action: alarmauth.ActionRead},
+		{path: "/api/v1/alarms", template: "/api/v1/alarms", action: alarmmodel.ActionRead},
+		{path: "/api/v1/alarm-rules", template: "/api/v1/alarm-rules", action: alarmmodel.ActionRead},
+		{path: "/api/v1/alarm-rules/diff", template: "/api/v1/alarm-rules/diff", action: alarmmodel.ActionRead},
+		{path: "/api/v1/alarm-rules/compile-edge", template: "/api/v1/alarm-rules/compile-edge", action: alarmmodel.ActionRead},
+		{path: "/api/v1/alarm-rules/simulate", template: "/api/v1/alarm-rules/simulate", action: alarmmodel.ActionRead},
+		{path: "/api/v1/alarm-rules/revisions", template: "/api/v1/alarm-rules/revisions", action: alarmmodel.ActionRead},
 		{path: "/api/v1/alarm-rules/revisions/12/rollback", template: "/api/v1/alarm-rules/revisions/{revision}/rollback"},
-		{path: "/api/v1/alarm-rules/dead-letters", template: "/api/v1/alarm-rules/dead-letters", action: alarmauth.ActionRead},
+		{path: "/api/v1/alarm-rules/dead-letters", template: "/api/v1/alarm-rules/dead-letters", action: alarmmodel.ActionRead},
 		{path: "/api/v1/alarm-rules/dead-letters/" + gatewayAlarmID + "/replay", template: "/api/v1/alarm-rules/dead-letters/{outboxId}/replay"},
-		{path: "/api/v1/alarms/" + gatewayAlarmID, template: "/api/v1/alarms/{alarmId}", action: alarmauth.ActionRead, alarmID: gatewayAlarmID},
-		{path: "/api/v1/alarms/" + gatewayAlarmID + "/ack", template: "/api/v1/alarms/{alarmId}/ack", action: alarmauth.ActionAck, alarmID: gatewayAlarmID},
-		{path: "/api/v1/alarms/" + gatewayAlarmID + "/assign", template: "/api/v1/alarms/{alarmId}/assign", action: alarmauth.ActionAssign, alarmID: gatewayAlarmID},
-		{path: "/api/v1/alarms/" + gatewayAlarmID + "/unassign", template: "/api/v1/alarms/{alarmId}/unassign", action: alarmauth.ActionUnassign, alarmID: gatewayAlarmID},
-		{path: "/api/v1/alarms/" + gatewayAlarmID + "/suppress", template: "/api/v1/alarms/{alarmId}/suppress", action: alarmauth.ActionSuppress, alarmID: gatewayAlarmID},
-		{path: "/api/v1/alarms/" + gatewayAlarmID + "/unsuppress", template: "/api/v1/alarms/{alarmId}/unsuppress", action: alarmauth.ActionUnsuppress, alarmID: gatewayAlarmID},
-		{path: "/api/v1/alarms/" + gatewayAlarmID + "/evaluations", template: "/api/v1/alarms/{alarmId}/evaluations", action: alarmauth.ActionRead, alarmID: gatewayAlarmID},
+		{path: "/api/v1/alarms/" + gatewayAlarmID, template: "/api/v1/alarms/{alarmId}", action: alarmmodel.ActionRead, alarmID: gatewayAlarmID},
+		{path: "/api/v1/alarms/" + gatewayAlarmID + "/ack", template: "/api/v1/alarms/{alarmId}/ack", action: alarmmodel.ActionAck, alarmID: gatewayAlarmID},
+		{path: "/api/v1/alarms/" + gatewayAlarmID + "/assign", template: "/api/v1/alarms/{alarmId}/assign", action: alarmmodel.ActionAssign, alarmID: gatewayAlarmID},
+		{path: "/api/v1/alarms/" + gatewayAlarmID + "/unassign", template: "/api/v1/alarms/{alarmId}/unassign", action: alarmmodel.ActionUnassign, alarmID: gatewayAlarmID},
+		{path: "/api/v1/alarms/" + gatewayAlarmID + "/suppress", template: "/api/v1/alarms/{alarmId}/suppress", action: alarmmodel.ActionSuppress, alarmID: gatewayAlarmID},
+		{path: "/api/v1/alarms/" + gatewayAlarmID + "/unsuppress", template: "/api/v1/alarms/{alarmId}/unsuppress", action: alarmmodel.ActionUnsuppress, alarmID: gatewayAlarmID},
+		{path: "/api/v1/alarms/" + gatewayAlarmID + "/evaluations", template: "/api/v1/alarms/{alarmId}/evaluations", action: alarmmodel.ActionRead, alarmID: gatewayAlarmID},
 	}
 	for _, test := range tests {
 		route, ok := matchPublicAlarmRoute(test.path)
@@ -140,7 +139,7 @@ func TestDirectAlarmAdapterResolvesAndExecutes(t *testing.T) {
 
 	// Test Execute List
 	reqList, _ := http.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/alarms?siteId="+siteID, nil)
-	listBytes, status, failure := adapter.Execute(ctx, reqList, publicAlarmRoute{template: "/api/v1/alarms", siteID: siteID, action: alarmauth.ActionRead}, "")
+	listBytes, status, failure := adapter.Execute(ctx, reqList, publicAlarmRoute{template: "/api/v1/alarms", siteID: siteID, action: alarmmodel.ActionRead}, "")
 	if failure != nil || status != http.StatusOK {
 		t.Fatalf("List failed: status=%d failure=%#v", status, failure)
 	}
@@ -150,7 +149,7 @@ func TestDirectAlarmAdapterResolvesAndExecutes(t *testing.T) {
 
 	// Test Execute Get
 	reqGet, _ := http.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/alarms/"+alarm.AlarmID, nil)
-	getBytes, status, failure := adapter.Execute(ctx, reqGet, publicAlarmRoute{template: "/api/v1/alarms/{alarmId}", siteID: siteID, alarmID: alarm.AlarmID, action: alarmauth.ActionRead}, "")
+	getBytes, status, failure := adapter.Execute(ctx, reqGet, publicAlarmRoute{template: "/api/v1/alarms/{alarmId}", siteID: siteID, alarmID: alarm.AlarmID, action: alarmmodel.ActionRead}, "")
 	if failure != nil || status != http.StatusOK {
 		t.Fatalf("Get failed: status=%d failure=%#v", status, failure)
 	}
@@ -163,7 +162,7 @@ func TestDirectAlarmAdapterResolvesAndExecutes(t *testing.T) {
 	reqAck, _ := http.NewRequestWithContext(ctx, http.MethodPost, "/api/v1/alarms/"+alarm.AlarmID+"/ack", ackBody)
 	reqAck.Header.Set("Idempotency-Key", "idemp-test-ack-001")
 	reqAck.Header.Set("Content-Type", "application/json")
-	ackBytes, status, failure := adapter.Execute(ctx, reqAck, publicAlarmRoute{template: "/api/v1/alarms/{alarmId}/ack", siteID: siteID, alarmID: alarm.AlarmID, action: alarmauth.ActionAck}, "")
+	ackBytes, status, failure := adapter.Execute(ctx, reqAck, publicAlarmRoute{template: "/api/v1/alarms/{alarmId}/ack", siteID: siteID, alarmID: alarm.AlarmID, action: alarmmodel.ActionAck}, "")
 	if failure != nil || status != http.StatusOK {
 		t.Fatalf("Ack failed: status=%d failure=%#v", status, failure)
 	}
@@ -224,14 +223,14 @@ func TestDirectAndHTTPAlarmAdaptersHandleSuppressionUnassignAndEvaluations(t *te
 	// Suppress rejects past timestamp before modifying store.
 	pastReq := httptest.NewRequest(http.MethodPost, "/api/v1/alarms/"+alarm.AlarmID+"/suppress", strings.NewReader(`{"expectedVersion":1,"reason":"Maintenance","suppressedUntil":"2026-08-24T01:00:00Z"}`)).WithContext(ctx)
 	pastReq.Header.Set("Idempotency-Key", "idem-past-1")
-	if _, _, fail := adapter.Execute(ctx, pastReq, publicAlarmRoute{siteID: siteID, alarmID: alarm.AlarmID, action: alarmauth.ActionSuppress, now: now}, ""); fail == nil || fail.status != http.StatusBadRequest {
+	if _, _, fail := adapter.Execute(ctx, pastReq, publicAlarmRoute{siteID: siteID, alarmID: alarm.AlarmID, action: alarmmodel.ActionSuppress, now: now}, ""); fail == nil || fail.status != http.StatusBadRequest {
 		t.Fatalf("past suppressedUntil failure = %#v, want 400", fail)
 	}
 
 	// Valid suppress -> assign -> unassign -> unsuppress -> evaluations.
 	suppressReq := httptest.NewRequest(http.MethodPost, "/api/v1/alarms/"+alarm.AlarmID+"/suppress", strings.NewReader(`{"expectedVersion":1,"reason":"Maintenance","suppressedUntil":"2026-08-24T05:00:00Z"}`)).WithContext(ctx)
 	suppressReq.Header.Set("Idempotency-Key", "idem-supp-1")
-	suppBytes, status, fail := adapter.Execute(ctx, suppressReq, publicAlarmRoute{siteID: siteID, alarmID: alarm.AlarmID, action: alarmauth.ActionSuppress, now: now}, "")
+	suppBytes, status, fail := adapter.Execute(ctx, suppressReq, publicAlarmRoute{siteID: siteID, alarmID: alarm.AlarmID, action: alarmmodel.ActionSuppress, now: now}, "")
 	if fail != nil || status != http.StatusOK {
 		t.Fatalf("direct suppress failed: status=%d fail=%#v", status, fail)
 	}
@@ -241,7 +240,7 @@ func TestDirectAndHTTPAlarmAdaptersHandleSuppressionUnassignAndEvaluations(t *te
 	}
 
 	evalReq := httptest.NewRequest(http.MethodGet, "/api/v1/alarms/"+alarm.AlarmID+"/evaluations?limit=5", nil).WithContext(ctx)
-	evalBytes, status, fail := adapter.Execute(ctx, evalReq, publicAlarmRoute{siteID: siteID, alarmID: alarm.AlarmID, action: alarmauth.ActionRead, evaluations: true}, "")
+	evalBytes, status, fail := adapter.Execute(ctx, evalReq, publicAlarmRoute{siteID: siteID, alarmID: alarm.AlarmID, action: alarmmodel.ActionRead, evaluations: true}, "")
 	if fail != nil || status != http.StatusOK {
 		t.Fatalf("direct evaluations failed: status=%d fail=%#v", status, fail)
 	}
@@ -269,7 +268,7 @@ func TestDirectAndHTTPAlarmAdaptersHandleSuppressionUnassignAndEvaluations(t *te
 	httpSuppReq := httptest.NewRequest(http.MethodPost, "/api/v1/alarms/"+alarm.AlarmID+"/suppress", strings.NewReader(`{"expectedVersion":2,"reason":"Upstream forward","suppressedUntil":"2026-08-24T06:00:00Z"}`))
 	httpSuppReq.Header.Set("Content-Type", "application/json")
 	httpSuppReq.Header.Set("Idempotency-Key", "idem-http-1")
-	if _, status, fail := httpAdapter.Execute(ctx, httpSuppReq, publicAlarmRoute{siteID: siteID, alarmID: alarm.AlarmID, action: alarmauth.ActionSuppress, now: now}, "signed-write-ctx"); fail != nil || status != http.StatusOK {
+	if _, status, fail := httpAdapter.Execute(ctx, httpSuppReq, publicAlarmRoute{siteID: siteID, alarmID: alarm.AlarmID, action: alarmmodel.ActionSuppress, now: now}, "signed-write-ctx"); fail != nil || status != http.StatusOK {
 		t.Fatalf("http suppress failed: status=%d fail=%#v", status, fail)
 	}
 	if seenMethod != http.MethodPost || seenPath != "/internal/v1/sites/"+siteID+"/alarms/"+alarm.AlarmID+":suppress" || seenWriteCtx != "signed-write-ctx" || seenReadCtx != "" {
@@ -277,7 +276,7 @@ func TestDirectAndHTTPAlarmAdaptersHandleSuppressionUnassignAndEvaluations(t *te
 	}
 
 	httpEvalReq := httptest.NewRequest(http.MethodGet, "/api/v1/alarms/"+alarm.AlarmID+"/evaluations?limit=5", nil)
-	if _, status, fail := httpAdapter.Execute(ctx, httpEvalReq, publicAlarmRoute{siteID: siteID, alarmID: alarm.AlarmID, action: alarmauth.ActionRead, evaluations: true}, "signed-read-ctx"); fail != nil || status != http.StatusOK {
+	if _, status, fail := httpAdapter.Execute(ctx, httpEvalReq, publicAlarmRoute{siteID: siteID, alarmID: alarm.AlarmID, action: alarmmodel.ActionRead, evaluations: true}, "signed-read-ctx"); fail != nil || status != http.StatusOK {
 		t.Fatalf("http evaluations failed: status=%d fail=%#v", status, fail)
 	}
 	if seenMethod != http.MethodGet || seenPath != "/internal/v1/sites/"+siteID+"/alarms/"+alarm.AlarmID+"/evaluations" || seenQuery != "limit=5" || seenReadCtx != "signed-read-ctx" || seenWriteCtx != "" {

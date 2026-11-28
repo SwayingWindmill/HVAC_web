@@ -214,6 +214,16 @@ test('unit classification splits go lint, web, and domain Go tests cleanly', () 
   assert.deepEqual(webOnly.unitDomainProfiles, []);
 });
 
+test('shared UUIDv7 library changes trigger multi-domain Go unit checks without DB fan-out', () => {
+  const classification = runClassification(['libs/uuidv7/uuidv7.go']);
+  assert.equal(classification.unknown, false);
+  assert.equal(classification.broad, false);
+  for (const profile of ['platform', 'registry', 'telemetry', 'command', 'alarm', 'workorder', 'analytics']) {
+    assert.ok(classification.unitProfiles.includes(profile), `expected unit profile ${profile}`);
+  }
+  assert.deepEqual(classification.integrationProfiles, []);
+});
+
 test('package, workflow, and central task-matrix changes fail closed to broad contract and unit coverage', () => {
   for (const file of [
     'package.json',
@@ -765,6 +775,12 @@ test('classifier preserves deployment secret check on .gitignore, spatial model 
   const schedCmd = runClassification(['cmd/scheduler/main.go']);
   assert.ok(schedCmd.unitProfiles.includes('analytics'));
   assert.ok(runPlan('unit', schedCmd.unitProfiles).commands.includes('npm run test:analytics'));
+
+  for (const sharedLib of ['libs/servicehost/servicehost.go', 'libs/schedulerjob/schedulerjob.go']) {
+    const libClassification = runClassification([sharedLib]);
+    assert.equal(libClassification.unknown, false, sharedLib);
+    assert.ok(libClassification.unitProfiles.includes('analytics'), sharedLib);
+  }
 
   const edgeTunnel = runClassification(['libs/edgetunnel/tunnel.go']);
   assert.deepEqual(edgeTunnel.unitProfiles, ['command', 'go', 'telemetry']);
