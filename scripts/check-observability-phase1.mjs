@@ -50,7 +50,7 @@ const [commandSource, moduleSource, serviceSource] = await Promise.all([
   collectText('services'),
 ]);
 const edgeSource = await collectText('tools/eg8200-simulator');
-const observabilitySource = await collectText('libs/observability');
+const libsSource = await collectText('libs');
 const dashboardFiles = [
   'infra/observability/dashboards/iot-edge-phase1.json',
   'infra/observability/dashboards/control-safety-phase1.json',
@@ -64,7 +64,7 @@ for (const path of dashboardFiles) {
   dashboardText += JSON.stringify(dashboard);
 }
 const alertText = `${await read('infra/observability/alerts/domain-phase1.yaml')}\n${await read('infra/observability/alerts/s2-telemetry.yaml')}`;
-const allImplementationText = `${commandSource}\n${moduleSource}\n${serviceSource}\n${edgeSource}\n${observabilitySource}\n${dashboardText}\n${alertText}`;
+const allImplementationText = `${commandSource}\n${moduleSource}\n${serviceSource}\n${edgeSource}\n${libsSource}\n${dashboardText}\n${alertText}`;
 for (const family of catalog.families) {
   if (!allImplementationText.includes(family.name)) throw new Error(`metric catalog family is not referenced by implementation or operations assets: ${family.name}`);
 }
