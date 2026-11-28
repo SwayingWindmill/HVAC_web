@@ -35,6 +35,7 @@ interface ClassificationReport {
   unitProfiles: string[];
   unitDomainProfiles: string[];
   integrationProfiles: string[];
+  reasons: Array<{ file: string; reason: string }>;
 }
 
 interface GatePlan {
@@ -736,4 +737,31 @@ test('every tracked repository path is classified with unknown=false', () => {
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
   }
+});
+
+test('classifier preserves deployment secret check on .gitignore, spatial model coupling, and unit test execution for classified Go packages', () => {
+  const gitignore = runClassification(['.gitignore']);
+  assert.deepEqual(gitignore.contractProfiles, ['core']);
+  assert.equal(gitignore.broad, false);
+  assert.equal(gitignore.unknown, false);
+
+  const archScript = runClassification(['scripts/check-backend-architecture-v2.ts']);
+  assert.deepEqual(archScript.contractProfiles, ['core']);
+  assert.ok(archScript.reasons.length > 0);
+
+  const spatial = runClassification(['scripts/central-plant-spatial-model.mjs']);
+  assert.ok(spatial.unitProfiles.includes('registry'));
+  assert.ok(spatial.unitProfiles.includes('command'));
+
+  const wecom = runClassification(['cmd/wecom-alert-adapter/main.go']);
+  assert.ok(wecom.unitProfiles.includes('alarm'));
+  assert.ok(runPlan('unit', wecom.unitProfiles).commands.some((cmd) => cmd.includes('./cmd/wecom-alert-adapter/...')));
+
+  const maintenance = runClassification(['modules/maintenance/pkg/maintenance/domain.go']);
+  assert.ok(maintenance.unitProfiles.includes('platform'));
+  assert.ok(runPlan('unit', maintenance.unitProfiles).commands.some((cmd) => cmd.includes('./modules/maintenance/...')));
+
+  const schedCmd = runClassification(['cmd/scheduler/main.go']);
+  assert.ok(schedCmd.unitProfiles.includes('analytics'));
+  assert.ok(runPlan('unit', schedCmd.unitProfiles).commands.includes('npm run test:analytics'));
 });

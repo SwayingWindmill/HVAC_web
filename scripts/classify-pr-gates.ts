@@ -186,7 +186,6 @@ for (const file of files) {
       '.mcp.json',
       '.mwgrc',
       '.gitattributes',
-      '.gitignore',
       '.gitleaksignore',
       '.dockerignore',
       'codegraph.json',
@@ -203,6 +202,10 @@ for (const file of files) {
       addReason(file, 'repository documentation or metadata only');
     },
   );
+  match(file === '.gitignore', () => {
+    add(contractProfiles, ['core']);
+    addReason(file, 'gitignore rules changed; verify secret and runtime exclusions in contracts core');
+  });
   match(file === 'tsr.config.json', () => selectWeb(file, 'TanStack Router configuration changed'));
   match(file === 'CHANGELOG.md', () => {
     add(contractProfiles, ['core']);
@@ -425,7 +428,11 @@ for (const file of files) {
     );
     scriptMatch(lower.includes('rms') || lower.includes('browser-audit') || lower.includes('design-system') || lower.includes('verify-runtime') || lower.includes('verify-live') || lower.includes('local-administrator-browser') || lower.startsWith('scripts/test-real-'), () => selectWeb(file, 'browser, RMS or Web model test automation changed'));
     scriptMatch(lower.includes('s0-') || lower.includes('durable'), () => selectPlatform(file, 'platform automation changed', { integration: lower.includes('postgres') }));
-    scriptMatch(lower.includes('s1-') || lower.includes('registry') || file === 'scripts/central-plant-spatial-model.mjs' || file === 'scripts/lib/site-building-plan.ts', () => selectRegistry(file, 'registry or spatial model automation changed', { integration: lower.includes('postgres') }));
+    scriptMatch(lower.includes('s1-') || lower.includes('registry') || file === 'scripts/lib/site-building-plan.ts', () => selectRegistry(file, 'registry or spatial model automation changed', { integration: lower.includes('postgres') }));
+    scriptMatch(file === 'scripts/central-plant-spatial-model.mjs', () => {
+      selectRegistry(file, 'central plant spatial model changed');
+      selectCommand(file, 'central plant spatial model changed');
+    });
     scriptMatch(lower.includes('s2-') || lower.includes('telemetry') || file === 'scripts/local-history-replay.mjs' || file === 'scripts/thingsboard-history-import.mjs', () => {
       const integration = lower.includes('realtime') || lower.includes('history') || lower.includes('ingest') || lower.includes('postgres');
       selectTelemetry(file, 'telemetry automation changed', { integration: file === 'scripts/local-history-replay.mjs' || file === 'scripts/thingsboard-history-import.mjs' ? false : integration });
@@ -471,7 +478,10 @@ for (const file of files) {
         file === 'scripts/check-phase1-simulator-acceptance.mjs' ||
         file === 'scripts/check-s16-notification.mjs' ||
         file === 'scripts/generate-semantic-catalog.mjs',
-      () => add(contractProfiles, ['core']),
+      () => {
+        add(contractProfiles, ['core']);
+        addReason(file, 'contract, schema, or architecture checker script changed');
+      },
     );
     scriptMatch(
       [

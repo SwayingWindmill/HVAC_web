@@ -68,15 +68,31 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
     // Every Go module, whatever the domain: selected by the classifier for any Go code, dependency or lint-rule change.
     go: Object.freeze([npmRun('go:lint'), npmRun('security:go-vuln')]),
     web: Object.freeze([npmRun('web:shell:test'), npmRun('web:model:test'), npmRun('web:e2e')]),
-    platform: Object.freeze([npmRun('test:identity'), npmRun('test:durable-unit'), npmRun('test:phase1-scripts')]),
+    platform: Object.freeze([
+      npmRun('test:identity'),
+      npmRun('test:durable-unit'),
+      npmRun('test:phase1-scripts'),
+      nodeRun(
+        'scripts/run-go.mjs',
+        'test',
+        './libs/limitpolicy/...',
+        './libs/schemagate/...',
+        './libs/workloadtls/...',
+        './modules/maintenance/...',
+        './cmd/maintenance-worker/...',
+      ),
+    ]),
     registry: Object.freeze([
-      nodeRun('scripts/run-go.mjs', 'test', './libs/planttwin/...', './modules/registry/...'),
+      nodeRun('scripts/run-go.mjs', 'test', './libs/fixedpoint/...', './libs/planttwin/...', './libs/schemagate/...', './modules/registry/...'),
       npmRun('test:registry-routing'),
     ]),
     telemetry: Object.freeze([
       nodeRun(
         'scripts/run-go.mjs',
         'test',
+        './libs/limitpolicy/...',
+        './libs/mqttclient/...',
+        './libs/schemagate/...',
         './libs/telemetryauth/...',
         './libs/telemetryhistorymodel/...',
         './libs/measurement/...',
@@ -95,6 +111,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
         './libs/commandauth/...',
         './libs/alarmexpr/...',
         './libs/commandmodel/...',
+        './libs/mqttclient/...',
         './libs/planttwin/...',
         './modules/command/...',
         './libs/edgecontrol/...',
@@ -104,7 +121,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       npmRun('command:formal'),
     ]),
     alarm: Object.freeze([
-      nodeRun('scripts/run-go.mjs', 'test', './libs/alarmexpr/...', './libs/alarmauth/...', './libs/alarmmodel/...', './modules/alarm/...'),
+      nodeRun('scripts/run-go.mjs', 'test', './libs/alarmexpr/...', './libs/alarmauth/...', './libs/alarmmodel/...', './modules/alarm/...', './cmd/wecom-alert-adapter/...'),
       npmRun('alarm:test'),
     ]),
     workorder: Object.freeze([
