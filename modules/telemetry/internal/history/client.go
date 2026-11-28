@@ -2,14 +2,12 @@ package history
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -18,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
 	"github.com/quanlaihe/hvac-web/libs/uuidv7"
@@ -48,6 +47,7 @@ type Client struct {
 	username   string
 	password   string
 	httpClient *http.Client
+	ch         *clickhousehttp.Client
 }
 
 type pointRow struct {
@@ -86,8 +86,8 @@ type historyCursor struct {
 }
 
 func NewClient(config Config) (*Client, error) {
-	endpoint, err := url.Parse(strings.TrimSpace(config.BaseURL))
-	if err != nil || endpoint == nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.Host == "" || endpoint.User != nil || (endpoint.Path != "" && endpoint.Path != "/") || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+	endpoint, err := clickhousehttp.ParseOriginURL(config.BaseURL)
+	if err != nil {
 		return nil, errors.New("ClickHouse history base URL must be an HTTP(S) origin")
 	}
 	if !identifierPattern.MatchString(config.Database) || !identifierPattern.MatchString(config.Table) {
@@ -95,69 +95,34 @@ func NewClient(config Config) (*Client, error) {
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = newDefaultClickHouseHTTPClient(8 * time.Second)
+		client = clickhousehttp.NewPooledHTTPClient(clickhousehttp.DataPlaneTransportConfig(8 * time.Second))
 	}
+	trimmedUser := strings.TrimSpace(config.Username)
+	creds := clickhousehttp.Credentials{Username: trimmedUser, Password: config.Password}
 	return &Client{
 		endpoint: endpoint, database: config.Database, table: config.Table,
-		username: strings.TrimSpace(config.Username), password: config.Password, httpClient: client,
+		username: trimmedUser, password: config.Password, httpClient: client,
+		ch: clickhousehttp.NewClient(endpoint, client, creds),
 	}, nil
 }
 
-func newDefaultClickHouseHTTPClient(timeout time.Duration) *http.Client {
-	var transport *http.Transport
-	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
-		transport = base.Clone()
-	} else {
-		transport = &http.Transport{}
+func (client *Client) transportClient() *clickhousehttp.Client {
+	if client.ch != nil {
+		return client.ch
 	}
-	transport.DialContext = (&net.Dialer{
-		Timeout:   5 * time.Second,
-		KeepAlive: 30 * time.Second,
-	}).DialContext
-	transport.MaxConnsPerHost = 16
-	transport.MaxIdleConns = 64
-	transport.MaxIdleConnsPerHost = 16
-	transport.IdleConnTimeout = 90 * time.Second
-	transport.TLSHandshakeTimeout = 10 * time.Second
-	transport.ResponseHeaderTimeout = 30 * time.Second
-	transport.ExpectContinueTimeout = 1 * time.Second
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-	}
+	return clickhousehttp.NewClient(client.endpoint, client.httpClient, clickhousehttp.Credentials{Username: client.username, Password: client.password})
 }
 
 func (client *Client) Ping(ctx context.Context) error {
 	if client == nil || client.endpoint == nil || client.httpClient == nil {
 		return errors.New("ClickHouse history client is closed")
 	}
-	endpoint := *client.endpoint
-	q := endpoint.Query()
-	q.Set("query", "SELECT 1")
-	q.Set("enable_http_compression", "1")
-	endpoint.RawQuery = q.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return fmt.Errorf("create ClickHouse history ping request: %w", err)
-	}
-	request.Header.Set("Accept-Encoding", "gzip")
-	if client.username != "" {
-		request.SetBasicAuth(client.username, client.password)
-	}
-	response, err := client.httpClient.Do(request)
-	if err != nil {
+	if err := client.transportClient().Ping(ctx, true); err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return &clickHouseQueryError{statusCode: statusErr.StatusCode, body: statusErr.Body}
+		}
 		return fmt.Errorf("ping ClickHouse history: %w", err)
-	}
-	payload, readErr := readHistoryResponseBody(response, 8<<10)
-	closeErr := response.Body.Close()
-	if readErr != nil {
-		return readErr
-	}
-	if closeErr != nil {
-		return fmt.Errorf("close ClickHouse history ping response: %w", closeErr)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return &clickHouseQueryError{statusCode: response.StatusCode, body: string(payload)}
 	}
 	return nil
 }
@@ -228,69 +193,25 @@ func (client *Client) resolveSnapshot(ctx context.Context, query telemetryhistor
 }
 
 func (client *Client) execute(ctx context.Context, sql string, params url.Values) ([]byte, error) {
-	endpoint := *client.endpoint
-	queryParams := url.Values{}
-	for key, values := range params {
-		queryParams[key] = append([]string(nil), values...)
-	}
-	trimmedUpper := strings.ToUpper(strings.TrimSpace(sql))
-	selectQuery := strings.HasPrefix(trimmedUpper, "SELECT") || strings.HasPrefix(trimmedUpper, "WITH")
-	if selectQuery {
-		queryParams.Set("enable_http_compression", "1")
-	}
-	if len(queryParams) > 0 {
-		endpoint.RawQuery = queryParams.Encode()
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(sql))
+	payload, err := client.transportClient().Query(ctx, clickhousehttp.QueryRequest{
+		Method:           http.MethodPost,
+		SQL:              sql,
+		Params:           params,
+		Accept:           "application/x-ndjson",
+		CompressResponse: clickhousehttp.IsSelectQuery(sql),
+		MaxResponseBytes: maximumResponseBodySize,
+		PrepareHeader:    observability.InjectHTTP,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create ClickHouse history request: %w", err)
-	}
-	request.Header.Set("Accept", "application/x-ndjson")
-	if selectQuery {
-		request.Header.Set("Accept-Encoding", "gzip")
-	}
-	request.Header.Set("Content-Type", "text/plain; charset=utf-8")
-	if client.username != "" {
-		request.SetBasicAuth(client.username, client.password)
-	}
-	observability.InjectHTTP(ctx, request.Header)
-	response, err := client.httpClient.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("query ClickHouse history: %w", err)
-	}
-	payload, readErr := readHistoryResponseBody(response, maximumResponseBodySize+1)
-	closeErr := response.Body.Close()
-	if readErr != nil {
-		return nil, readErr
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("close ClickHouse history response: %w", closeErr)
-	}
-	if int64(len(payload)) > maximumResponseBodySize {
-		return nil, errors.New("ClickHouse history response exceeds 8 MiB")
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, &clickHouseQueryError{statusCode: response.StatusCode, body: string(payload)}
-	}
-	return payload, nil
-}
-
-func readHistoryResponseBody(response *http.Response, maxBytes int64) ([]byte, error) {
-	const maxDrainBytes = 4096
-	reader := io.Reader(io.LimitReader(response.Body, maxBytes))
-	if strings.EqualFold(strings.TrimSpace(response.Header.Get("Content-Encoding")), "gzip") {
-		gz, err := gzip.NewReader(reader)
-		if err != nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxDrainBytes))
-			return nil, fmt.Errorf("decode ClickHouse history gzip response: %w", err)
+		var tooLargeErr *clickhousehttp.ResponseTooLargeError
+		if errors.As(err, &tooLargeErr) {
+			return nil, errors.New("ClickHouse history response exceeds 8 MiB")
 		}
-		defer gz.Close()
-		reader = io.LimitReader(gz, maxBytes)
-	}
-	payload, err := io.ReadAll(reader)
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxDrainBytes))
-	if err != nil {
-		return nil, fmt.Errorf("read ClickHouse history response: %w", err)
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return nil, &clickHouseQueryError{statusCode: statusErr.StatusCode, body: statusErr.Body}
+		}
+		return nil, fmt.Errorf("query ClickHouse history: %w", err)
 	}
 	return payload, nil
 }

@@ -13,7 +13,7 @@ npm run operations-agent:eval -- --only=<题号>                            # Ti
 
 ## 架构不变量与红线
 
-- **只读工具与 mTLS 授权**：严禁新增任何写设备或控制类工具；每次读数必须通过平台网关双向 TLS 接口 `/internal/v1/operations/tool-authorization` 按提问人权限换票，边界检查硬性拦截直连 ClickHouse、Cube、ThingsBoard 或控制指令路径（`scripts/check-operations-agent-service-boundaries.mjs`）。
+- **只读工具与 mTLS 授权**：严禁新增任何写设备或控制类工具；每次读数必须通过平台网关双向 TLS 接口 `/internal/v1/operations/tool-authorization` 按提问人权限换票，边界检查硬性拦截直连 ClickHouse、Cube、ThingsBoard 或控制指令路径（`scripts/check-operations-agent-service-boundaries.ts`）。
 - **模块隔离与租户 RLS**：内部模块（`agent`、`application`、`runtime-pi`、`tools`、`persistence`、`transport-http`、`bootstrap`）仅通过各自 `index.ts` 互相引用；`agent` 与 `application` 严禁引入外部包或适配器；所有持久化读写必须经过 `persistence/internal/postgres-tenant-transaction.ts` 保持租户 RLS 隔离。
 - **不可手改的生成物**：
   - `src/agent/internal/session-contract.gen.ts` → 修改 `contracts/http/operations-agent-sessions-public.openapi.json` 后跑 `npm run operations-agent:contracts:generate`；

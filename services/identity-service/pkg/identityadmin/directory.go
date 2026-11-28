@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/schemagate"
 	"github.com/quanlaihe/hvac-web/services/identity-service/internal/identity"
 )
 
@@ -71,6 +72,14 @@ func Open(ctx context.Context, databaseURL string) (*Directory, error) {
 }
 
 func (directory *Directory) Close() { directory.store.Close() }
+
+// VerifyProductSchema validates the database schema version against PHASE1_PRODUCT_VERSION when set.
+func (directory *Directory) VerifyProductSchema(ctx context.Context) error {
+	if directory == nil || directory.store == nil {
+		return schemagate.VerifyEnvProductSchema(ctx, nil)
+	}
+	return directory.store.VerifyEnvProductSchema(ctx)
+}
 
 func (directory *Directory) CreateUser(ctx context.Context, user NewUser) (User, error) {
 	created, err := directory.store.CreateUser(ctx, identity.CreateUserInput{

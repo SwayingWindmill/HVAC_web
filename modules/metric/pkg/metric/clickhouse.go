@@ -2,62 +2,43 @@ package metric
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 )
 
 type ClickHouseStore struct {
 	base           *url.URL
 	user, password string
 	client         *http.Client
+	ch             *clickhousehttp.Client
 }
 
 func NewClickHouseStore(baseURL, user, password string, client *http.Client) (*ClickHouseStore, error) {
-	u, err := url.Parse(baseURL)
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+	u, err := clickhousehttp.ParseBaseURL(baseURL, false)
+	if err != nil {
 		return nil, errors.New("metric ClickHouse URL must be absolute http/https")
 	}
 	if client == nil {
-		client = newDefaultClickHouseHTTPClient(15 * time.Second)
+		client = clickhousehttp.NewPooledHTTPClient(clickhousehttp.DataPlaneTransportConfig(15 * time.Second))
 	}
-	return &ClickHouseStore{base: u, user: user, password: password, client: client}, nil
-}
-
-func newDefaultClickHouseHTTPClient(timeout time.Duration) *http.Client {
-	var transport *http.Transport
-	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
-		transport = base.Clone()
-	} else {
-		transport = &http.Transport{}
-	}
-	transport.DialContext = (&net.Dialer{
-		Timeout:   5 * time.Second,
-		KeepAlive: 30 * time.Second,
-	}).DialContext
-	transport.MaxConnsPerHost = 16
-	transport.MaxIdleConns = 64
-	transport.MaxIdleConnsPerHost = 16
-	transport.IdleConnTimeout = 90 * time.Second
-	transport.TLSHandshakeTimeout = 10 * time.Second
-	transport.ResponseHeaderTimeout = 30 * time.Second
-	transport.ExpectContinueTimeout = 1 * time.Second
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-	}
+	return &ClickHouseStore{
+		base:     u,
+		user:     user,
+		password: password,
+		client:   client,
+		ch:       clickhousehttp.NewClient(u, client, clickhousehttp.Credentials{Username: user, Password: password}),
+	}, nil
 }
 
 func (s *ClickHouseStore) Ping(ctx context.Context) error {
@@ -73,57 +54,26 @@ func (s *ClickHouseStore) doSQL(ctx context.Context, method, sql string) ([]byte
 	return doClickHouseHTTPQuery(ctx, s.base, s.user, s.password, s.client, method, sql, 1<<20, "metric ClickHouse query")
 }
 
-func isClickHouseSelectQuery(sql string) bool {
-	upper := strings.ToUpper(strings.TrimSpace(sql))
-	return strings.HasPrefix(upper, "SELECT") || strings.HasPrefix(upper, "WITH")
-}
-
 func doClickHouseHTTPQuery(ctx context.Context, base *url.URL, user, password string, client *http.Client, method, sql string, maxBodyBytes int64, label string) ([]byte, error) {
-	u := *base
-	q := u.Query()
-	q.Set("query", sql)
-	q.Set("date_time_output_format", "iso")
-	selectQuery := method == http.MethodGet || isClickHouseSelectQuery(sql)
-	if selectQuery {
-		q.Set("enable_http_compression", "1")
-	}
-	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
+	selectQuery := method == http.MethodGet || clickhousehttp.IsSelectQuery(sql)
+	ch := clickhousehttp.NewClient(base, client, clickhousehttp.Credentials{Username: user, Password: password})
+	body, err := ch.Query(ctx, clickhousehttp.QueryRequest{
+		Method:           method,
+		SQL:              sql,
+		Params:           url.Values{"date_time_output_format": {"iso"}},
+		CompressResponse: selectQuery,
+		MaxResponseBytes: maxBodyBytes,
+		TruncateAtLimit:  true,
+	})
 	if err != nil {
-		return nil, err
-	}
-	if selectQuery {
-		req.Header.Set("Accept-Encoding", "gzip")
-	}
-	if user != "" {
-		req.SetBasicAuth(user, password)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	const maxDrainBytes = 4096
-	bodyReader := io.Reader(io.LimitReader(resp.Body, maxBodyBytes))
-	if strings.EqualFold(strings.TrimSpace(resp.Header.Get("Content-Encoding")), "gzip") {
-		gz, gzErr := gzip.NewReader(bodyReader)
-		if gzErr != nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBytes))
-			if resp.StatusCode/100 != 2 {
-				return nil, fmt.Errorf("%s returned %d", label, resp.StatusCode)
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			if statusErr.Body == "" {
+				return nil, fmt.Errorf("%s returned %d", label, statusErr.StatusCode)
 			}
-			return nil, fmt.Errorf("%s gzip decode: %w", label, gzErr)
+			return nil, fmt.Errorf("%s returned %d: %s", label, statusErr.StatusCode, strings.TrimSpace(statusErr.Body))
 		}
-		defer gz.Close()
-		bodyReader = io.LimitReader(gz, maxBodyBytes)
-	}
-	body, err := io.ReadAll(bodyReader)
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBytes))
-	if err != nil {
 		return nil, err
-	}
-	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("%s returned %d: %s", label, resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return body, nil
 }
@@ -593,57 +543,43 @@ func (s *ClickHouseStore) InsertMetrics(ctx context.Context, results []Result) e
 	}
 
 	raw := body.Bytes()
-	token := fmt.Sprintf("%x", sha256.Sum256(raw))
+	token := clickhousehttp.SHA256Hex(raw)
 	payload := raw
 	compressed := false
 	if len(ordered) > 1 && len(raw) >= 4096 {
-		var gzBuf bytes.Buffer
-		gz, err := gzip.NewWriterLevel(&gzBuf, gzip.BestSpeed)
+		var err error
+		payload, err = clickhousehttp.CompressGzipBestSpeed(raw)
 		if err != nil {
-			return fmt.Errorf("create gzip writer for metric batch: %w", err)
-		}
-		if _, err := gz.Write(raw); err != nil {
-			_ = gz.Close()
 			return fmt.Errorf("compress metric result batch: %w", err)
 		}
-		if err := gz.Close(); err != nil {
-			return fmt.Errorf("finalize compressed metric result batch: %w", err)
-		}
-		payload = gzBuf.Bytes()
 		compressed = true
 	}
 
-	u := *s.base
-	q := u.Query()
-	q.Set("database", "analytics")
-	q.Set("query", "INSERT INTO analytics.metric_result_facts FORMAT JSONEachRow")
-	q.Set("date_time_input_format", "best_effort")
-	q.Set("async_insert", "1")
-	q.Set("wait_for_async_insert", "1")
-	q.Set("async_insert_deduplicate", "1")
-	q.Set("insert_deduplication_token", token)
-	q.Set("wait_end_of_query", "1")
-	u.RawQuery = q.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), bytes.NewReader(payload))
-	if err != nil {
+	params := url.Values{
+		"database":                   {"analytics"},
+		"query":                      {"INSERT INTO analytics.metric_result_facts FORMAT JSONEachRow"},
+		"date_time_input_format":     {"best_effort"},
+		"async_insert":               {"1"},
+		"wait_for_async_insert":      {"1"},
+		"async_insert_deduplicate":   {"1"},
+		"insert_deduplication_token": {token},
+		"wait_end_of_query":          {"1"},
+	}
+	ch := s.ch
+	if ch == nil {
+		ch = clickhousehttp.NewClient(s.base, s.client, clickhousehttp.Credentials{Username: s.user, Password: s.password})
+	}
+	if err := ch.Insert(ctx, clickhousehttp.InsertRequest{
+		Params:         params,
+		Body:           payload,
+		CompressedGzip: compressed,
+		MaxErrorBytes:  2048,
+	}); err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return fmt.Errorf("insert metric result returned %d: %s", statusErr.StatusCode, statusErr.TrimmedBody(512))
+		}
 		return err
 	}
-	req.Header.Set("Content-Type", "application/x-ndjson")
-	if compressed {
-		req.Header.Set("Content-Encoding", "gzip")
-	}
-	if s.user != "" {
-		req.SetBasicAuth(s.user, s.password)
-	}
-	resp, err := s.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		detail, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("insert metric result returned %d: %s", resp.StatusCode, strings.TrimSpace(string(detail)))
-	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	return nil
 }

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -16,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 )
 
 // A day's window of a loop and a dozen gate devices is about 17k rows of ~300 bytes.
@@ -30,84 +31,50 @@ type ClickHouseEvidence struct {
 	username string
 	password string
 	client   *http.Client
-}
-
-func newDefaultClickHouseHTTPClient(timeout time.Duration) *http.Client {
-	if timeout <= 0 {
-		timeout = 10 * time.Second
-	}
-	var transport *http.Transport
-	if base, ok := http.DefaultTransport.(*http.Transport); ok {
-		transport = base.Clone()
-	} else {
-		transport = &http.Transport{}
-	}
-	transport.MaxIdleConns = 64
-	transport.MaxIdleConnsPerHost = 32
-	transport.IdleConnTimeout = 90 * time.Second
-	transport.TLSHandshakeTimeout = 10 * time.Second
-	transport.ExpectContinueTimeout = 1 * time.Second
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-}
-
-func drainAndClose(body io.ReadCloser) {
-	if body == nil {
-		return
-	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(body, 64<<10))
-	_ = body.Close()
+	ch       *clickhousehttp.Client
 }
 
 func NewClickHouseEvidence(baseURL, username, password string, client *http.Client) (*ClickHouseEvidence, error) {
-	parsed, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil || parsed == nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" {
+	parsed, err := clickhousehttp.ParseOriginURL(baseURL)
+	if err != nil {
 		return nil, errors.New("FDD ClickHouse URL must be an HTTP(S) origin")
 	}
-	if strings.TrimSpace(username) == "" {
+	trimmedUser := strings.TrimSpace(username)
+	if trimmedUser == "" {
 		return nil, errors.New("FDD ClickHouse reader username is required")
 	}
 	if client == nil {
-		client = newDefaultClickHouseHTTPClient(10 * time.Second)
+		client = clickhousehttp.NewPooledHTTPClient(clickhousehttp.ServiceTransportConfig(10 * time.Second))
 	}
-	return &ClickHouseEvidence{baseURL: parsed, username: strings.TrimSpace(username), password: password, client: client}, nil
+	creds := clickhousehttp.Credentials{Username: trimmedUser, Password: password}
+	return &ClickHouseEvidence{
+		baseURL:  parsed,
+		username: trimmedUser,
+		password: password,
+		client:   client,
+		ch:       clickhousehttp.NewClient(parsed, client, creds),
+	}, nil
 }
 
 // Ping verifies ClickHouse reader connectivity via a lightweight SELECT 1 query.
 func (evidence *ClickHouseEvidence) Ping(ctx context.Context) error {
-	if evidence == nil || evidence.client == nil || evidence.baseURL == nil {
+	if evidence == nil || evidence.ch == nil {
 		return errors.New("FDD ClickHouse reader is not initialized")
 	}
-	endpoint := *evidence.baseURL
-	query := endpoint.Query()
-	query.Set("query", "SELECT 1")
-	endpoint.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return fmt.Errorf("build FDD ClickHouse ping request: %w", err)
-	}
-	request.SetBasicAuth(evidence.username, evidence.password)
-	response, err := evidence.client.Do(request)
-	if err != nil {
+	if err := evidence.ch.Ping(ctx, false); err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return fmt.Errorf("ping FDD ClickHouse returned %d: %s", statusErr.StatusCode, statusErr.TrimmedBody(512))
+		}
 		return fmt.Errorf("ping FDD ClickHouse: %w", err)
-	}
-	defer drainAndClose(response.Body)
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		return fmt.Errorf("ping FDD ClickHouse returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
 	}
 	return nil
 }
 
 // CloseIdleConnections releases idle HTTP keep-alive connections held by this client.
 func (evidence *ClickHouseEvidence) CloseIdleConnections() {
-	if evidence != nil && evidence.client != nil {
-		evidence.client.CloseIdleConnections()
+	if evidence != nil && evidence.ch != nil {
+		evidence.ch.CloseIdleConnections()
 	}
 }
 
@@ -402,25 +369,22 @@ func buildPointScope(points []PointRef) (string, error) {
 }
 
 func (evidence *ClickHouseEvidence) query(ctx context.Context, sql string) ([]byte, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, evidence.baseURL.String(), strings.NewReader(sql))
+	body, err := evidence.ch.Query(ctx, clickhousehttp.QueryRequest{
+		Method:           http.MethodPost,
+		SQL:              sql,
+		MaxResponseBytes: maximumEvidenceResponseBytes,
+		RequireStatusOK:  true,
+	})
 	if err != nil {
-		return nil, err
-	}
-	request.SetBasicAuth(evidence.username, evidence.password)
-	response, err := evidence.client.Do(request)
-	if err != nil {
+		var tooLargeErr *clickhousehttp.ResponseTooLargeError
+		if errors.As(err, &tooLargeErr) {
+			return nil, errors.New("FDD evidence response is too large")
+		}
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return nil, fmt.Errorf("query FDD evidence: ClickHouse status %d", statusErr.StatusCode)
+		}
 		return nil, fmt.Errorf("query FDD evidence: %w", err)
-	}
-	defer drainAndClose(response.Body)
-	body, err := io.ReadAll(io.LimitReader(response.Body, maximumEvidenceResponseBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(body)) > maximumEvidenceResponseBytes {
-		return nil, errors.New("FDD evidence response is too large")
-	}
-	if response.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("query FDD evidence: ClickHouse status %d", response.StatusCode)
 	}
 	return body, nil
 }

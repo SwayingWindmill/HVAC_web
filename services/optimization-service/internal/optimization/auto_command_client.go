@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/observability"
@@ -83,7 +84,7 @@ func NewWorkloadCommandClient(config WorkloadCommandClientConfig) (*WorkloadComm
 					return nil, err
 				}
 			} else {
-				gatewayClient = newPooledHTTPClient(15*time.Second, true)
+				gatewayClient = clickhousehttp.NewPooledHTTPClient(clickhousehttp.ServiceTransportConfig(15 * time.Second))
 			}
 		}
 	}
@@ -111,7 +112,7 @@ func (client *WorkloadCommandClient) RequestCommandGrant(ctx context.Context, re
 	if err != nil {
 		return "", commandauth.Decision{}, fmt.Errorf("request IAM workload command decision: %w", err)
 	}
-	defer drainAndClose(resp.Body)
+	defer clickhousehttp.DrainAndClose(resp.Body)
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 	if err != nil {
 		return "", commandauth.Decision{}, err
@@ -226,7 +227,7 @@ func (client *WorkloadCommandClient) SubmitAutoCommand(ctx context.Context, gran
 	if err != nil {
 		return "", fmt.Errorf("submit auto optimization command: %w", err)
 	}
-	defer drainAndClose(resp.Body)
+	defer clickhousehttp.DrainAndClose(resp.Body)
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 	if err != nil {
 		return "", err

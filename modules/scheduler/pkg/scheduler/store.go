@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/schemagate"
 	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
@@ -84,6 +85,14 @@ func (s *Store) Ping(ctx context.Context) error {
 		return errors.New("scheduler store is closed")
 	}
 	return s.pool.Ping(ctx)
+}
+
+// VerifyProductSchema validates the database schema version against PHASE1_PRODUCT_VERSION when set.
+func (s *Store) VerifyProductSchema(ctx context.Context) error {
+	if s == nil {
+		return schemagate.VerifyEnvProductSchema(ctx, nil)
+	}
+	return schemagate.VerifyEnvProductSchema(ctx, s.pool)
 }
 
 func (s *Store) Cycle(ctx context.Context, now time.Time, batch int, normalFireTolerance time.Duration) (ScanResult, error) {

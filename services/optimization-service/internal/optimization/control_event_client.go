@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 )
@@ -112,7 +113,7 @@ func NewHTTPControlEventPublisher(config ControlEventClientConfig) (*HTTPControl
 				return nil, fmt.Errorf("create alarm control-event mTLS client: %w", err)
 			}
 		} else {
-			httpClient = newPooledHTTPClient(timeout, true)
+			httpClient = clickhousehttp.NewPooledHTTPClient(clickhousehttp.ServiceTransportConfig(timeout))
 		}
 	}
 
@@ -164,7 +165,7 @@ func (publisher *HTTPControlEventPublisher) PublishControlEvent(ctx context.Cont
 	if err != nil {
 		return fmt.Errorf("post control event to alarm-service: %w", err)
 	}
-	defer drainAndClose(resp.Body)
+	defer clickhousehttp.DrainAndClose(resp.Body)
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	if readErr != nil {
 		return fmt.Errorf("read control event response: %w", readErr)

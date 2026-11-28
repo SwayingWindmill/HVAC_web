@@ -18,6 +18,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 )
 
 const (
@@ -138,14 +140,15 @@ type ColdArchiveExporter struct {
 	password   string
 	archiveDir string
 	httpClient *http.Client
+	ch         *clickhousehttp.Client
 	now        func() time.Time
 }
 
 // NewColdArchiveExporter validates ClickHouse HTTP and directory configuration for cold archival.
 func NewColdArchiveExporter(config ColdArchiveConfig) (*ColdArchiveExporter, error) {
-	parsed, err := validateClickHouseBaseURL(config.BaseURL, "ClickHouse cold archive")
+	parsed, err := clickhousehttp.ParseOriginURL(config.BaseURL)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("ClickHouse cold archive base URL must be an HTTP(S) origin without user info")
 	}
 	dir, err := validateColdArchiveDir(config.ArchiveDir)
 	if err != nil {
@@ -153,18 +156,20 @@ func NewColdArchiveExporter(config ColdArchiveConfig) (*ColdArchiveExporter, err
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = newDefaultClickHouseHistoryHTTPClient(2 * time.Minute)
+		client = clickhousehttp.NewPooledHTTPClient(clickhousehttp.DataPlaneTransportConfig(2 * time.Minute))
 	}
 	nowFn := config.Now
 	if nowFn == nil {
 		nowFn = time.Now
 	}
+	creds := clickhousehttp.Credentials{Username: config.Username, Password: config.Password}
 	return &ColdArchiveExporter{
 		baseURL:    parsed,
 		username:   config.Username,
 		password:   config.Password,
 		archiveDir: dir,
 		httpClient: client,
+		ch:         clickhousehttp.NewClient(parsed, client, creds),
 		now:        nowFn,
 	}, nil
 }
@@ -307,70 +312,45 @@ func buildColdArchiveSelect(spec coldArchiveTableSpec, database string, cutoff t
 	return sql, params
 }
 
+func (exporter *ColdArchiveExporter) transportClient() *clickhousehttp.Client {
+	if exporter.ch != nil {
+		return exporter.ch
+	}
+	return clickhousehttp.NewClient(exporter.baseURL, exporter.httpClient, clickhousehttp.Credentials{
+		Username: exporter.username,
+		Password: exporter.password,
+	})
+}
+
 func (exporter *ColdArchiveExporter) Ping(ctx context.Context) error {
 	if exporter == nil || exporter.baseURL == nil || exporter.httpClient == nil {
 		return errors.New("ClickHouse cold archive exporter is closed")
 	}
-	return pingClickHouseHTTP(ctx, exporter.baseURL, exporter.username, exporter.password, exporter.httpClient, "ClickHouse cold archive ping")
+	if err := exporter.transportClient().Ping(ctx, true); err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return fmt.Errorf("ClickHouse cold archive ping returned %d: %s", statusErr.StatusCode, statusErr.TrimmedBody(512))
+		}
+		return fmt.Errorf("ClickHouse cold archive ping: %w", err)
+	}
+	return nil
 }
 
 func (exporter *ColdArchiveExporter) openQueryStream(ctx context.Context, qualifiedTable, sql string, params url.Values) (io.ReadCloser, error) {
-	endpoint := *exporter.baseURL
-	queryParams := url.Values{}
-	for key, values := range params {
-		queryParams[key] = append([]string(nil), values...)
-	}
-	queryParams.Set("enable_http_compression", "1")
-	endpoint.RawQuery = queryParams.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(sql))
+	stream, err := exporter.transportClient().OpenStream(ctx, clickhousehttp.StreamRequest{
+		SQL:           sql,
+		Params:        params,
+		Accept:        "application/x-ndjson",
+		MaxErrorBytes: 8 << 10,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create ClickHouse cold archive request for %s: %w", qualifiedTable, err)
-	}
-	request.Header.Set("Content-Type", "text/plain; charset=utf-8")
-	request.Header.Set("Accept", "application/x-ndjson")
-	request.Header.Set("Accept-Encoding", "gzip")
-	if exporter.username != "" {
-		request.SetBasicAuth(exporter.username, exporter.password)
-	}
-	response, err := exporter.httpClient.Do(request)
-	if err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return nil, fmt.Errorf("ClickHouse cold archive query for %s returned %d: %s", qualifiedTable, statusErr.StatusCode, statusErr.TrimmedBody(512))
+		}
 		return nil, fmt.Errorf("ClickHouse cold archive query for %s: %w", qualifiedTable, err)
 	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		body, _ := readBoundedClickHouseResponse(response, 8<<10, "ClickHouse cold archive query for "+qualifiedTable)
-		_ = response.Body.Close()
-		message := strings.TrimSpace(string(body))
-		if len(message) > 512 {
-			message = message[:512]
-		}
-		return nil, fmt.Errorf("ClickHouse cold archive query for %s returned %d: %s", qualifiedTable, response.StatusCode, message)
-	}
-	if strings.EqualFold(strings.TrimSpace(response.Header.Get("Content-Encoding")), "gzip") {
-		gz, gzErr := gzip.NewReader(response.Body)
-		if gzErr != nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
-			_ = response.Body.Close()
-			return nil, fmt.Errorf("decode ClickHouse cold archive gzip stream for %s: %w", qualifiedTable, gzErr)
-		}
-		return &gzipStreamReadCloser{gz: gz, body: response.Body}, nil
-	}
-	return response.Body, nil
-}
-
-type gzipStreamReadCloser struct {
-	gz   *gzip.Reader
-	body io.ReadCloser
-}
-
-func (g *gzipStreamReadCloser) Read(p []byte) (int, error) {
-	return g.gz.Read(p)
-}
-
-func (g *gzipStreamReadCloser) Close() error {
-	gzErr := g.gz.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(g.body, 4096))
-	bodyErr := g.body.Close()
-	return errors.Join(gzErr, bodyErr)
+	return stream, nil
 }
 
 type byteCountWriter struct {

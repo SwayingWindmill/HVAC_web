@@ -1,0 +1,184 @@
+import { readFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+
+interface ArchitectureBaseline {
+  schemaVersion?: number;
+  sourceOfTruth?: string;
+  deploymentModel?: {
+    host?: string;
+    orchestration?: string;
+    kubernetesRequired?: boolean;
+    singleServerRequired?: boolean;
+    fewServersAllowed?: boolean;
+  };
+  deploymentTiers?: { contract?: string; profileSelectionRequired?: boolean };
+  availabilityTier?: { contract?: string; currentTier?: string; highAvailability?: boolean };
+  observability?: { profiles?: Record<string, string[]> };
+  recovery?: { attainmentContract?: string };
+  environments?: string[];
+  environmentIsolation?: string[];
+  logicalLayers?: string[];
+  publicZone?: {
+    allowedPorts?: number[];
+    databasePublicExposureAllowed?: boolean;
+    internalServicePublicExposureAllowed?: boolean;
+  };
+  dataZone?: { redis?: string };
+  edgeZone?: {
+    cloudDirectOTAccessAllowed?: boolean;
+    controlPlaneContract?: string;
+    hardRealtime?: boolean;
+    hardRealtimeOwner?: string;
+    cloudCommandSemantics?: string;
+    requiredProperties?: string[];
+  };
+  phase1DeferredCapabilities?: string[];
+}
+
+interface AlignmentMatrix {
+  schemaVersion?: number;
+  sourceOfTruth?: string;
+  statuses?: string[];
+  items?: Array<{ id: string; status: string; requirement?: string; action?: string }>;
+}
+
+interface EdgeControlPlane {
+  schemaVersion?: number;
+  status?: string;
+  decisions?: Array<{ id: string; verdict: string }>;
+}
+
+interface DeploymentTiers {
+  tiers?: Array<{ id: string }>;
+}
+
+interface AvailabilityTier {
+  currentTier?: string;
+  monolithToMultiInstancePath?: { reference?: { tag?: string; commit?: string } };
+}
+
+interface RecoveryAttainment {
+  state?: string;
+  productionClaimAllowed?: boolean;
+}
+
+const root = resolve(process.cwd());
+const readText = (relPath: string): Promise<string> => readFile(resolve(root, relPath), 'utf8');
+const readJSON = async <T>(relPath: string): Promise<T> => JSON.parse(await readText(relPath)) as T;
+
+const baselinePath = 'deploy/platform/phase1/architecture-baseline.v1.json';
+const matrixPath = 'deploy/platform/phase1/alignment-matrix.v1.json';
+const edgeControlPlanePath = 'contracts/architecture/edge-control-plane.v1.json';
+const deploymentTiersPath = 'deploy/platform/phase1/deployment-tiers.v1.json';
+const availabilityTierPath = 'deploy/platform/phase1/availability-tier.v1.json';
+const recoveryAttainmentPath = 'deploy/platform/phase1/recovery/attainment.v1.json';
+const authorityId = 'SE-ARCH-DEPLOY-001 V1.0 CURRENT';
+
+const [baseline, matrix, edgeControlPlane, deploymentTiers, availabilityTier, recoveryAttainment] = await Promise.all([
+  readJSON<ArchitectureBaseline>(baselinePath),
+  readJSON<AlignmentMatrix>(matrixPath),
+  readJSON<EdgeControlPlane>(edgeControlPlanePath),
+  readJSON<DeploymentTiers>(deploymentTiersPath),
+  readJSON<AvailabilityTier>(availabilityTierPath),
+  readJSON<RecoveryAttainment>(recoveryAttainmentPath),
+]);
+
+const failures: string[] = [];
+const assert = (condition: unknown, message: string): void => {
+  if (!condition) failures.push(message);
+};
+
+assert(baseline.schemaVersion === 1, 'Phase 1 architecture baseline schemaVersion must be 1');
+assert(baseline.sourceOfTruth === authorityId, 'Phase 1 architecture baseline must cite SE-ARCH-DEPLOY-001 V1.0 CURRENT');
+assert(baseline.deploymentModel?.host === 'single-linux-server', 'Phase 1 deployment host must be one Linux Server');
+assert(baseline.deploymentModel?.orchestration === 'docker-compose', 'Phase 1 canonical orchestrator must be Docker Compose');
+assert(baseline.deploymentModel?.kubernetesRequired === false, 'Kubernetes must not be a Phase 1 requirement');
+assert(baseline.deploymentModel?.singleServerRequired === true && baseline.deploymentModel?.fewServersAllowed === false, 'Phase 1 must remain a single-server baseline');
+assert(baseline.deploymentTiers?.contract === deploymentTiersPath && baseline.deploymentTiers?.profileSelectionRequired === true, 'baseline must pin the deployment tier contract');
+assert(baseline.availabilityTier?.contract === availabilityTierPath && baseline.availabilityTier?.currentTier === 'SINGLE_NODE_RECOVERABLE' && baseline.availabilityTier?.highAvailability === false, 'baseline must pin SINGLE_NODE_RECOVERABLE as the availability tier');
+assert(baseline.observability?.profiles?.['observability-core']?.length === 8 && baseline.observability?.profiles?.['observability-logs']?.length === 10 && baseline.observability?.profiles?.['observability-full']?.length === 11, 'baseline must freeze the three observability profiles');
+assert(!baseline.observability?.profiles?.['observability-core']?.includes('tempo') && !baseline.observability?.profiles?.['observability-logs']?.includes('tempo') && baseline.observability?.profiles?.['observability-full']?.includes('tempo'), 'Tempo stays on the full profile only');
+assert(baseline.recovery?.attainmentContract === recoveryAttainmentPath, 'baseline must pin the recovery attainment contract');
+assert(deploymentTiers.tiers?.map((tier) => tier.id).join(',') === 'demo,single-lite,single-full', 'deployment tiers must remain demo/single-lite/single-full');
+assert(availabilityTier.currentTier === 'SINGLE_NODE_RECOVERABLE' && availabilityTier.monolithToMultiInstancePath?.reference?.tag === 'v4.3.1.1' && availabilityTier.monolithToMultiInstancePath?.reference?.commit === 'c2a52e46c44e308ddee430e7266b8e10eddde9c4', 'availability tier must pin the reviewed ThingsBoard upgrade reference');
+assert(recoveryAttainment.state === 'TARGET_DEFINED' && recoveryAttainment.productionClaimAllowed === false, 'recovery attainment must remain unclaimed until a real drill passes');
+
+const expectedEnvironments = ['development', 'testing', 'staging', 'production'];
+assert(JSON.stringify(baseline.environments) === JSON.stringify(expectedEnvironments), 'Phase 1 environments must be Development/Testing/Staging/Production in order');
+
+for (const isolation of ['database', 'redis', 'mqtt', 'storage', 'secrets', 'domain', 'configuration']) {
+  assert(baseline.environmentIsolation?.includes(isolation), `environment isolation is missing ${isolation}`);
+}
+
+for (const layer of ['edge', 'central-platform', 'data-platform', 'monitoring-platform']) {
+  assert(baseline.logicalLayers?.includes(layer), `logical layer is missing ${layer}`);
+}
+
+assert(JSON.stringify(baseline.publicZone?.allowedPorts) === JSON.stringify([443, 8883]), 'Phase 1 public ports must be only 443 and 8883');
+assert(baseline.publicZone?.databasePublicExposureAllowed === false, 'Phase 1 must forbid public database exposure');
+assert(baseline.publicZone?.internalServicePublicExposureAllowed === false, 'Phase 1 must forbid public internal-service exposure');
+assert(baseline.dataZone?.redis === 'rebuildable-cache-and-realtime-transport', 'Redis must remain a rebuildable cache/transport, not an authority');
+assert(baseline.edgeZone?.cloudDirectOTAccessAllowed === false, 'Cloud direct OT access must remain forbidden');
+assert(baseline.edgeZone?.controlPlaneContract === edgeControlPlanePath, 'Phase 1 Edge zone must link the HVAC Edge Control Plane contract');
+assert(baseline.edgeZone?.hardRealtime === false && baseline.edgeZone?.hardRealtimeOwner === 'plc-device-protection-safety-hardware', 'Edge soft-real-time / PLC hard-real-time safety boundary drifted');
+assert(baseline.edgeZone?.cloudCommandSemantics === 'governed-leased-intent', 'Cloud commands must remain governed leased Edge intents');
+for (const required of ['channel-runtime', 'process-image', 'input-process-output-cycle', 'controller-runtime', 'scheduler-control-arbiter', 'capability-profile-registry', 'device-driver-abstraction', 'protocol-bridge-abstraction', 'edge-manifest', 'edge-timedata', 'leased-cloud-command-intents']) {
+  assert(baseline.edgeZone?.requiredProperties?.includes(required), `Phase 1 Edge foundation is missing ${required}`);
+}
+
+assert(edgeControlPlane.schemaVersion === 1 && edgeControlPlane.status === 'CURRENT TARGET', 'Edge Control Plane contract identity/status drifted');
+assert(edgeControlPlane.decisions?.length === 50, 'OpenEMS/HVAC adjudication must contain exactly 50 decisions');
+assert(new Set((edgeControlPlane.decisions ?? []).map(({ id }) => id)).size === 50, 'Edge Control Plane decision IDs must be unique');
+const edgeVerdicts = new Set(['OPENEMS', 'HVAC', 'MERGE', 'REJECT']);
+assert((edgeControlPlane.decisions ?? []).every(({ verdict }) => edgeVerdicts.has(verdict)), 'Edge Control Plane contains an unsupported verdict');
+assert((edgeControlPlane.decisions ?? []).filter(({ verdict }) => verdict === 'OPENEMS').length === 29, 'OpenEMS adjudication count drifted');
+assert((edgeControlPlane.decisions ?? []).filter(({ verdict }) => verdict === 'HVAC').length === 8, 'HVAC adjudication count drifted');
+assert((edgeControlPlane.decisions ?? []).filter(({ verdict }) => verdict === 'MERGE').length === 12, 'MERGE adjudication count drifted');
+assert((edgeControlPlane.decisions ?? []).filter(({ verdict }) => verdict === 'REJECT').length === 1, 'REJECT adjudication count drifted');
+
+for (const deferred of [
+  'kubernetes-as-primary-orchestrator',
+  'postgresql-replica-ha',
+  'clickhouse-replica-ha',
+  'mqtt-cluster',
+  'kafka-or-redpanda-as-required-platform-backbone',
+  'multi-region',
+]) {
+  assert(baseline.phase1DeferredCapabilities?.includes(deferred), `Phase 1 deferred capability is missing ${deferred}`);
+}
+
+const allowedStatuses = new Set(matrix.statuses ?? []);
+const matrixItems = matrix.items ?? [];
+assert(matrix.schemaVersion === 1, 'alignment matrix schemaVersion must be 1');
+assert(matrix.sourceOfTruth === authorityId, 'alignment matrix must cite SE-ARCH-DEPLOY-001 V1.0 CURRENT');
+assert(Array.isArray(matrix.items) && matrixItems.length >= 25, 'alignment matrix must cover at least 25 deployment concerns');
+assert(new Set(matrixItems.map((item) => item.id)).size === matrixItems.length, 'alignment matrix IDs must be unique');
+for (const item of matrixItems) {
+  assert(allowedStatuses.has(item.status), `alignment matrix item ${item.id} has unsupported status ${item.status}`);
+  assert(String(item.requirement ?? '').trim(), `alignment matrix item ${item.id} is missing requirement`);
+  assert(String(item.action ?? '').trim(), `alignment matrix item ${item.id} is missing action`);
+}
+
+const byId = new Map(matrixItems.map((item) => [item.id, item]));
+assert(byId.get('DEPLOY-PHASE1-001')?.status === 'KEEP', 'single-server Docker Compose must remain the canonical Phase 1 deployment');
+assert(byId.get('DEPLOY-K8S-001')?.status === 'DEFER', 'Kubernetes must be explicitly deferred');
+assert(byId.get('MQTT-HA-001')?.status === 'DEFER', 'MQTT cluster must be explicitly deferred');
+assert(byId.get('POSTGRES-HA-001')?.status === 'DEFER', 'PostgreSQL HA must be explicitly deferred');
+assert(byId.get('KAFKA-001')?.status === 'REMOVE', 'Kafka/Redpanda must stay out of the canonical Phase 1 deployment');
+assert(byId.get('OPTIMIZATION-001')?.status === 'DEFER', 'Optimization must remain optional until the deployment needs it');
+for (const id of ['DEPLOY-TIER-001', 'OBS-PROFILE-001', 'AVAILABILITY-001', 'RECOVERY-ATTESTATION-001']) {
+  assert(byId.get(id)?.status === 'KEEP', `${id} must remain a canonical deployment contract`);
+}
+assert(byId.get('SCHEDULER-001')?.status === 'KEEP', 'unified Scheduler Coordination must remain implemented through the durable Job contract');
+assert(byId.get('RPO-RTO-001')?.status === 'KEEP', 'RPO/RTO objectives and the recovery evidence mechanism must remain implemented');
+assert(byId.get('EDGE-CONTROL-PLANE-001')?.status === 'KEEP', 'HVAC Edge Control Plane must remain implemented through libs/edgecontrol and cmd/edge-gateway');
+assert(byId.get('EDGE-CAPABILITY-001')?.status === 'KEEP', 'Capability Profile / Driver / Bridge foundation must remain implemented');
+assert(byId.get('EDGE-TIMEDATA-001')?.status === 'KEEP', 'Edge Timedata must remain implemented with local latest/history and priority resend');
+
+if (failures.length > 0) {
+  console.error('Phase 1 architecture alignment check failed:\n' + failures.map((failure) => `- ${failure}`).join('\n'));
+  process.exit(1);
+}
+
+const statusCounts = Object.fromEntries([...allowedStatuses].map((status) => [status, matrixItems.filter((item) => item.status === status).length]));
+console.log(`Phase 1 architecture alignment passed: items=${matrixItems.length}; ${Object.entries(statusCounts).map(([status, count]) => `${status}=${count}`).join(', ')}`);

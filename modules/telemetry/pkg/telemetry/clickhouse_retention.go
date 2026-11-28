@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -12,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 )
 
 const (
@@ -89,6 +90,7 @@ type ClickHouseRetentionPruner struct {
 	username        string
 	password        string
 	httpClient      *http.Client
+	ch              *clickhousehttp.Client
 	targets         []clickHouseRetentionTarget
 	deleteCooldown  time.Duration
 	legalHolds      []ClickHouseLegalHoldScope
@@ -105,15 +107,6 @@ type ClickHouseRetentionResult struct {
 	SubmittedTables   []string
 	DroppedPartitions []string
 	ArchivedTables    []string
-}
-
-func validateClickHouseBaseURL(raw, label string) (*url.URL, error) {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed == nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil ||
-		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return nil, fmt.Errorf("%s base URL must be an HTTP(S) origin without user info", label)
-	}
-	return parsed, nil
 }
 
 func normalizeClickHouseLegalHolds(raw []ClickHouseLegalHoldScope) ([]ClickHouseLegalHoldScope, error) {
@@ -133,9 +126,9 @@ func normalizeClickHouseLegalHolds(raw []ClickHouseLegalHoldScope) ([]ClickHouse
 }
 
 func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouseRetentionPruner, error) {
-	parsed, err := validateClickHouseBaseURL(config.BaseURL, "ClickHouse retention")
+	parsed, err := clickhousehttp.ParseOriginURL(config.BaseURL)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("ClickHouse retention base URL must be an HTTP(S) origin without user info")
 	}
 	historyDB := strings.TrimSpace(config.HistoryDatabase)
 	if historyDB == "" {
@@ -201,14 +194,16 @@ func NewClickHouseRetentionPruner(config ClickHouseRetentionConfig) (*ClickHouse
 
 	client := config.HTTPClient
 	if client == nil {
-		client = newDefaultClickHouseHistoryHTTPClient(30 * time.Second)
+		client = clickhousehttp.NewPooledHTTPClient(clickhousehttp.DataPlaneTransportConfig(30 * time.Second))
 	}
+	creds := clickhousehttp.Credentials{Username: config.Username, Password: config.Password}
 
 	return &ClickHouseRetentionPruner{
 		baseURL:         parsed,
 		username:        config.Username,
 		password:        config.Password,
 		httpClient:      client,
+		ch:              clickhousehttp.NewClient(parsed, client, creds),
 		deleteCooldown:  deleteCooldown,
 		legalHolds:      holds,
 		archiveExporter: config.ArchiveExporter,
@@ -508,43 +503,44 @@ func buildClickHouseRetentionDelete(target clickHouseRetentionTarget, cutoff tim
 	return fmt.Sprintf("ALTER TABLE %s.%s DELETE WHERE %s", target.database, target.table, where), params
 }
 
+func (pruner *ClickHouseRetentionPruner) transportClient() *clickhousehttp.Client {
+	if pruner.ch != nil {
+		return pruner.ch
+	}
+	return clickhousehttp.NewClient(pruner.baseURL, pruner.httpClient, clickhousehttp.Credentials{
+		Username: pruner.username,
+		Password: pruner.password,
+	})
+}
+
 func (pruner *ClickHouseRetentionPruner) Ping(ctx context.Context) error {
 	if pruner == nil || pruner.baseURL == nil || pruner.httpClient == nil {
 		return errors.New("ClickHouse retention pruner is closed")
 	}
-	return pingClickHouseHTTP(ctx, pruner.baseURL, pruner.username, pruner.password, pruner.httpClient, "ClickHouse retention ping")
+	if err := pruner.transportClient().Ping(ctx, true); err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return fmt.Errorf("ClickHouse retention ping returned %d: %s", statusErr.StatusCode, statusErr.TrimmedBody(512))
+		}
+		return fmt.Errorf("ClickHouse retention ping: %w", err)
+	}
+	return nil
 }
 
 func (pruner *ClickHouseRetentionPruner) execQuery(ctx context.Context, qualifiedTable, opLabel, sql string, params url.Values) ([]byte, error) {
-	endpoint := *pruner.baseURL
-	endpoint.RawQuery = params.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(sql))
+	body, err := pruner.transportClient().Query(ctx, clickhousehttp.QueryRequest{
+		Method:           http.MethodPost,
+		SQL:              sql,
+		Params:           params,
+		MaxResponseBytes: 1 << 20,
+		TruncateAtLimit:  true,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create ClickHouse retention %s request for %s: %w", opLabel, qualifiedTable, err)
-	}
-	request.Header.Set("Content-Type", "text/plain; charset=utf-8")
-	if pruner.username != "" {
-		request.SetBasicAuth(pruner.username, pruner.password)
-	}
-	response, err := pruner.httpClient.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("ClickHouse retention %s for %s: %w", opLabel, qualifiedTable, err)
-	}
-	body, readErr := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
-	closeErr := response.Body.Close()
-	if readErr != nil {
-		return nil, fmt.Errorf("read ClickHouse retention %s response for %s: %w", opLabel, qualifiedTable, readErr)
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("close ClickHouse retention %s response for %s: %w", opLabel, qualifiedTable, closeErr)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		message := strings.TrimSpace(string(body))
-		if len(message) > 512 {
-			message = message[:512]
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return nil, fmt.Errorf("ClickHouse retention %s for %s returned %d: %s", opLabel, qualifiedTable, statusErr.StatusCode, statusErr.TrimmedBody(512))
 		}
-		return nil, fmt.Errorf("ClickHouse retention %s for %s returned %d: %s", opLabel, qualifiedTable, response.StatusCode, message)
+		return nil, fmt.Errorf("ClickHouse retention %s for %s: %w", opLabel, qualifiedTable, err)
 	}
 	return body, nil
 }

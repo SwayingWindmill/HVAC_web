@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 )
 
 const maximumOptimizationInputResponseBytes = int64(1 << 20)
@@ -41,19 +42,20 @@ type ClickHouseInputReader struct {
 	username         string
 	password         string
 	client           *http.Client
+	ch               *clickhousehttp.Client
 	energy           EnergySeries
 	liveObservations TelemetryLiveObservationReader
 	now              func() time.Time
 }
 
 func NewClickHouseInputReader(config InputReaderConfig) (*ClickHouseInputReader, error) {
-	parsed, err := url.Parse(strings.TrimSpace(config.BaseURL))
-	if err != nil || parsed == nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+	parsed, err := clickhousehttp.ParseOriginURL(config.BaseURL)
+	if err != nil {
 		return nil, errors.New("optimization input ClickHouse URL must be an HTTP(S) origin")
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = newPooledHTTPClient(10*time.Second, true)
+		client = clickhousehttp.NewPooledHTTPClient(clickhousehttp.ServiceTransportConfig(10 * time.Second))
 	}
 	if config.Energy == nil {
 		return nil, errors.New("optimization input reader requires the Energy Series reader")
@@ -62,11 +64,14 @@ func NewClickHouseInputReader(config InputReaderConfig) (*ClickHouseInputReader,
 	if now == nil {
 		now = time.Now
 	}
+	trimmedUser := strings.TrimSpace(config.Username)
+	creds := clickhousehttp.Credentials{Username: trimmedUser, Password: config.Password}
 	return &ClickHouseInputReader{
 		baseURL:          parsed,
-		username:         strings.TrimSpace(config.Username),
+		username:         trimmedUser,
 		password:         config.Password,
 		client:           client,
+		ch:               clickhousehttp.NewClient(parsed, client, creds),
 		energy:           config.Energy,
 		liveObservations: config.LiveObservations,
 		now:              now,
@@ -432,43 +437,43 @@ func (reader *ClickHouseInputReader) query(ctx context.Context, sql string) ([]b
 
 // Ping checks ClickHouse connectivity with the reader credentials.
 func (reader *ClickHouseInputReader) Ping(ctx context.Context) error {
-	if reader == nil {
+	if reader == nil || reader.ch == nil {
 		return errors.New("optimization ClickHouse input reader is not initialized")
 	}
-	return pingClickHouseHTTP(ctx, reader.client, reader.baseURL, reader.username, reader.password, "optimization ClickHouse reader")
+	if err := reader.ch.Ping(ctx, false); err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return fmt.Errorf("ping optimization ClickHouse reader returned %d: %s", statusErr.StatusCode, statusErr.TrimmedBody(512))
+		}
+		return fmt.Errorf("ping optimization ClickHouse reader: %w", err)
+	}
+	return nil
 }
 
 // CloseIdleConnections releases idle HTTP keep-alive connections held by this reader.
 func (reader *ClickHouseInputReader) CloseIdleConnections() {
-	if reader != nil && reader.client != nil {
-		reader.client.CloseIdleConnections()
+	if reader != nil && reader.ch != nil {
+		reader.ch.CloseIdleConnections()
 	}
 }
 
 func (reader *ClickHouseInputReader) queryLimited(ctx context.Context, sql string, limit int64) ([]byte, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, reader.baseURL.String(), strings.NewReader(sql))
+	payload, err := reader.ch.Query(ctx, clickhousehttp.QueryRequest{
+		Method:           http.MethodPost,
+		SQL:              sql,
+		Accept:           "application/x-ndjson",
+		MaxResponseBytes: limit,
+	})
 	if err != nil {
+		var tooLargeErr *clickhousehttp.ResponseTooLargeError
+		if errors.As(err, &tooLargeErr) {
+			return nil, fmt.Errorf("authoritative Optimization input response exceeds %d MiB", limit>>20)
+		}
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return nil, fmt.Errorf("ClickHouse returned %d: %s", statusErr.StatusCode, statusErr.TrimmedBody(512))
+		}
 		return nil, err
-	}
-	request.Header.Set("Content-Type", "text/plain; charset=utf-8")
-	request.Header.Set("Accept", "application/x-ndjson")
-	if reader.username != "" {
-		request.SetBasicAuth(reader.username, reader.password)
-	}
-	response, err := reader.client.Do(request)
-	if err != nil {
-		return nil, err
-	}
-	defer drainAndClose(response.Body)
-	payload, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if int64(len(payload)) > limit {
-		return nil, fmt.Errorf("authoritative Optimization input response exceeds %d MiB", limit>>20)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("ClickHouse returned %d: %s", response.StatusCode, strings.TrimSpace(string(payload)))
 	}
 	return payload, nil
 }

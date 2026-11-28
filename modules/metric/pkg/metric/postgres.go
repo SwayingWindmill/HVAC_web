@@ -13,10 +13,19 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/schemagate"
 	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type PostgresStore struct{ pool *pgxpool.Pool }
+
+// VerifyProductSchema validates the database schema version against PHASE1_PRODUCT_VERSION when set.
+func (s *PostgresStore) VerifyProductSchema(ctx context.Context) error {
+	if s == nil {
+		return schemagate.VerifyEnvProductSchema(ctx, nil)
+	}
+	return schemagate.VerifyEnvProductSchema(ctx, s.pool)
+}
 
 func (s *PostgresStore) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/schemagate"
 )
 
 type AuditRecord struct {
@@ -104,6 +105,14 @@ func OpenPostgresAudit(ctx context.Context, dsn string) (*PostgresAuditSink, err
 
 func (sink *PostgresAuditSink) Close() {
 	sink.pool.Close()
+}
+
+// VerifyProductSchema validates the database schema version against PHASE1_PRODUCT_VERSION when set.
+func (sink *PostgresAuditSink) VerifyProductSchema(ctx context.Context) error {
+	if sink == nil {
+		return schemagate.VerifyEnvProductSchema(ctx, nil)
+	}
+	return schemagate.VerifyEnvProductSchema(ctx, sink.pool)
 }
 
 func (sink *PostgresAuditSink) Record(ctx context.Context, record AuditRecord) error {

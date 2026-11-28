@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 )
 
 const maximumForecastHistoryResponseBytes = int64(8 << 20)
@@ -28,31 +30,68 @@ type ClickHouseHistoryReader struct {
 	username string
 	password string
 	client   *http.Client
+	ch       *clickhousehttp.Client
 }
 
 func NewClickHouseHistoryReader(config HistoryConfig) (*ClickHouseHistoryReader, error) {
-	parsed, err := url.Parse(strings.TrimSpace(config.BaseURL))
-	if err != nil || parsed == nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+	parsed, err := clickhousehttp.ParseOriginURL(config.BaseURL)
+	if err != nil {
 		return nil, errors.New("forecast history ClickHouse URL must be an HTTP(S) origin")
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = newDefaultClickHouseHTTPClient(10 * time.Second)
+		client = clickhousehttp.NewPooledHTTPClient(clickhousehttp.ServiceTransportConfig(10 * time.Second))
 	}
-	return &ClickHouseHistoryReader{baseURL: parsed, username: strings.TrimSpace(config.Username), password: config.Password, client: client}, nil
+	trimmedUser := strings.TrimSpace(config.Username)
+	creds := clickhousehttp.Credentials{Username: trimmedUser, Password: config.Password}
+	return &ClickHouseHistoryReader{
+		baseURL:  parsed,
+		username: trimmedUser,
+		password: config.Password,
+		client:   client,
+		ch:       clickhousehttp.NewClient(parsed, client, creds),
+	}, nil
 }
 
 func (reader *ClickHouseHistoryReader) CloseIdleConnections() {
-	if reader != nil && reader.client != nil {
-		reader.client.CloseIdleConnections()
+	if reader != nil && reader.ch != nil {
+		reader.ch.CloseIdleConnections()
 	}
 }
 
 func (reader *ClickHouseHistoryReader) Ping(ctx context.Context) error {
-	if reader == nil || reader.baseURL == nil || reader.client == nil {
+	if reader == nil || reader.ch == nil {
 		return errors.New("forecast history reader is unavailable")
 	}
-	return pingClickHouseHTTP(ctx, reader.baseURL, reader.username, reader.password, reader.client, "forecast ClickHouse history")
+	if err := reader.ch.Ping(ctx, false); err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return fmt.Errorf("ping forecast ClickHouse history returned %d: %s", statusErr.StatusCode, statusErr.TrimmedBody(512))
+		}
+		return fmt.Errorf("ping forecast ClickHouse history: %w", err)
+	}
+	return nil
+}
+
+func (reader *ClickHouseHistoryReader) queryHistory(ctx context.Context, sql, opLabel string) ([]byte, error) {
+	payload, err := reader.ch.Query(ctx, clickhousehttp.QueryRequest{
+		Method:           http.MethodPost,
+		SQL:              sql,
+		Accept:           "application/x-ndjson",
+		MaxResponseBytes: maximumForecastHistoryResponseBytes,
+	})
+	if err != nil {
+		var tooLargeErr *clickhousehttp.ResponseTooLargeError
+		if errors.As(err, &tooLargeErr) {
+			return nil, fmt.Errorf("%s response exceeds 8 MiB", opLabel)
+		}
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return nil, fmt.Errorf("%s returned %d: %s", opLabel, statusErr.StatusCode, statusErr.TrimmedBody(512))
+		}
+		return nil, fmt.Errorf("query %s: %w", opLabel, err)
+	}
+	return payload, nil
 }
 
 func (reader *ClickHouseHistoryReader) ReadMetricSeries(ctx context.Context, query MetricHistoryQuery) ([]MetricFact, error) {
@@ -93,29 +132,9 @@ WHERE fact.tenant_id=toUUID('%s')
 ORDER BY fact.period_end ASC,fact.revision DESC,fact.calculated_at DESC,toString(fact.result_id) ASC
 FORMAT JSONEachRow`, query.TenantID, query.SiteID, query.SubjectType, query.SubjectID, query.MetricVersionID, formatForecastHistoryTime(query.From), formatForecastHistoryTime(query.To))
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, reader.baseURL.String(), strings.NewReader(sql))
+	payload, err := reader.queryHistory(ctx, sql, "authoritative Forecast metric history")
 	if err != nil {
-		return nil, fmt.Errorf("build forecast history request: %w", err)
-	}
-	request.Header.Set("Content-Type", "text/plain; charset=utf-8")
-	request.Header.Set("Accept", "application/x-ndjson")
-	if reader.username != "" {
-		request.SetBasicAuth(reader.username, reader.password)
-	}
-	response, err := reader.client.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("query authoritative Forecast metric history: %w", err)
-	}
-	defer drainAndClose(response.Body)
-	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumForecastHistoryResponseBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("read authoritative Forecast metric history: %w", err)
-	}
-	if int64(len(payload)) > maximumForecastHistoryResponseBytes {
-		return nil, errors.New("authoritative Forecast metric history response exceeds 8 MiB")
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("authoritative Forecast metric history returned %d: %s", response.StatusCode, strings.TrimSpace(string(payload)))
+		return nil, err
 	}
 
 	type row struct {
@@ -221,29 +240,9 @@ FORMAT JSONEachRow`,
 		formatForecastHistoryTime(query.From), formatForecastHistoryTime(query.To), formatForecastHistoryTime(query.To),
 	)
 
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, reader.baseURL.String(), strings.NewReader(sql))
+	payload, err := reader.queryHistory(ctx, sql, "forecast weather history")
 	if err != nil {
-		return nil, fmt.Errorf("build forecast weather history request: %w", err)
-	}
-	request.Header.Set("Content-Type", "text/plain; charset=utf-8")
-	request.Header.Set("Accept", "application/x-ndjson")
-	if reader.username != "" {
-		request.SetBasicAuth(reader.username, reader.password)
-	}
-	response, err := reader.client.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("query forecast weather history: %w", err)
-	}
-	defer drainAndClose(response.Body)
-	payload, err := io.ReadAll(io.LimitReader(response.Body, maximumForecastHistoryResponseBytes+1))
-	if err != nil {
-		return nil, fmt.Errorf("read forecast weather history: %w", err)
-	}
-	if int64(len(payload)) > maximumForecastHistoryResponseBytes {
-		return nil, errors.New("forecast weather history response exceeds 8 MiB")
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, fmt.Errorf("forecast weather history returned %d: %s", response.StatusCode, strings.TrimSpace(string(payload)))
+		return nil, err
 	}
 
 	type row struct {
