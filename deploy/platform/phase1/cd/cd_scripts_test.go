@@ -2564,10 +2564,15 @@ esac
 func TestDeployProductionWorkflowSupportsOCIMode(t *testing.T) {
 	workflow := string(mustRead(t, "../../../../.github/workflows/deploy-production.yml"))
 	for _, want := range []string{
+		"fetch-depth: 0",
+		"rebuild_all:",
 		"deploy_mode:",
 		"target_environment:",
 		"TCR_PASSWORD",
 		"ccr.ccs.tencentyun.com",
+		"--probe-deployed",
+		"select-oci-services.sh",
+		"OCI_PUSH_CONCURRENCY",
 		"bash deploy/platform/phase1/cd/build-oci-images.sh",
 	} {
 		if !strings.Contains(workflow, want) {
@@ -2803,4 +2808,647 @@ esac
 	if !strings.Contains(callsOpt, "pull ccr.ccs.tencentyun.com/hvac/ai-solver-service") {
 		t.Fatalf("expected optional service pulled when OCI_PULL_OPTIONAL=1:\n%s", callsOpt)
 	}
+}
+
+func TestSelectOCIServicesIncrementalAndFailClosed(t *testing.T) {
+	const digestHex = "1111111111111111111111111111111111111111111111111111111111111111"
+	repo, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+
+	writeFileRel := func(rel, body string) {
+		t.Helper()
+		full := filepath.Join(repo, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		mode := os.FileMode(0o644)
+		if strings.HasSuffix(rel, ".sh") {
+			mode = 0o755
+		}
+		if err := os.WriteFile(full, []byte(body), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		cmd.Env = commandEnv(bin)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	writeFileRel("deploy/platform/phase1/cd/select-oci-services.sh", string(mustRead(t, "select-oci-services.sh")))
+	writeFileRel("deploy/platform/phase1/cd/services.tsv", strings.Join([]string{
+		"# service\timage\tkind\trequired\tpackage",
+		"energy-api\thvac/energy-api:0.1.0-dev\tgo\trequired\t./cmd/energy-api",
+		"scheduler\thvac/scheduler:0.1.0-dev\tgo\trequired\t./cmd/scheduler",
+		"wecom-alert-adapter\thvac/wecom-alert-adapter:0.1.0-dev\tstatic\trequired\t./cmd/wecom-alert-adapter",
+		"nginx\thvac/hvac-web-real:0.1.0-dev\tweb\trequired\t-",
+		"operations-agent-service\thvac/operations-agent-service:0.1.0-dev\tnode\trequired\t-",
+		"phase1-migrator\thvac/phase1-migrator:0.1.0-dev\tmigrator\trequired\t-",
+		"mqtt-broker\thvac/mqtt-broker:0.1.0-dev\tmqtt\trequired\tinfra/telemetry/mqtt/crl-plugin",
+		"ai-solver-service\thvac/ai-solver-service:0.1.0-dev\tpython\toptional\tservices/ai-solver-service",
+	}, "\n")+"\n")
+	writeFileRel("deploy/platform/phase1/migrations/Dockerfile", "FROM postgres:16.4-bookworm\nCOPY infra/registry/postgres/init/001.sql /opt/hvac/001.sql\n")
+	writeFileRel("apps/hvac-web/src/main.ts", "console.log(1)\n")
+	writeFileRel("cmd/energy-api/main.go", "package main\n")
+	writeFileRel("cmd/scheduler/main.go", "package main\n")
+	writeFileRel("cmd/wecom-alert-adapter/main.go", "package main\n")
+	writeFileRel("libs/shared/util.go", "package shared\n")
+	writeFileRel("tools/container-healthcheck/main.go", "package main\n")
+	writeFileRel("infra/registry/postgres/init/001.sql", "SELECT 1;\n")
+	writeFileRel("README.md", "docs v1\n")
+
+	writeExe(t, bin, "go", `#!/usr/bin/env bash
+set -euo pipefail
+root="$(pwd -P)"
+pkg="${@: -1}"
+case "$pkg" in
+  ./cmd/energy-api)
+    printf '%s\n%s\n' "$root/cmd/energy-api" "$root/libs/shared"
+    ;;
+  ./cmd/scheduler)
+    printf '%s\n' "$root/cmd/scheduler"
+    ;;
+  ./cmd/wecom-alert-adapter)
+    printf '%s\n' "$root/cmd/wecom-alert-adapter"
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+`)
+
+	runGit("init")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "Test")
+	runGit("add", ".")
+	runGit("commit", "-m", "base")
+	baseSHA := runGit("rev-parse", "HEAD")
+
+	reuseManifest := filepath.Join(t.TempDir(), "reuse.tsv")
+	writeManifest := func(includeScheduler bool) {
+		t.Helper()
+		lines := []string{
+			"# service\tlocal_image\toci_ref",
+			"energy-api\thvac/energy-api:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/energy-api@sha256:" + digestHex,
+			"wecom-alert-adapter\thvac/wecom-alert-adapter:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/wecom-alert-adapter@sha256:" + digestHex,
+			"nginx\thvac/hvac-web-real:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/hvac-web-real@sha256:" + digestHex,
+			"operations-agent-service\thvac/operations-agent-service:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/operations-agent-service@sha256:" + digestHex,
+			"phase1-migrator\thvac/phase1-migrator:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/phase1-migrator@sha256:" + digestHex,
+			"mqtt-broker\thvac/mqtt-broker:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/mqtt-broker@sha256:" + digestHex,
+		}
+		if includeScheduler {
+			lines = append(lines, "scheduler\thvac/scheduler:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/scheduler@sha256:"+digestHex)
+		}
+		if err := os.WriteFile(reuseManifest, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeManifest(true)
+
+	runSelect := func(base, head string) (string, string) {
+		t.Helper()
+		cmd := exec.Command("bash", filepath.Join(repo, "deploy/platform/phase1/cd/select-oci-services.sh"),
+			"--base-revision", base,
+			"--head-revision", head,
+			"--reuse-manifest", reuseManifest,
+			"--registry", "ccr.ccs.tencentyun.com",
+			"--namespace", "hvac",
+		)
+		cmd.Env = commandEnv(bin)
+		var stdout, stderr strings.Builder
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("select-oci-services failed: %v\nstderr:\n%s", err, stderr.String())
+		}
+		return strings.TrimRight(stdout.String(), "\r\n"), stderr.String()
+	}
+
+	// 1. Web-only commit selects only nginx.
+	writeFileRel("apps/hvac-web/src/main.ts", "console.log(2)\n")
+	runGit("add", "apps/hvac-web/src/main.ts")
+	runGit("commit", "-m", "web update")
+	webSHA := runGit("rev-parse", "HEAD")
+	if got, stderr := runSelect(baseSHA, webSHA); got != "incremental\tnginx" {
+		t.Fatalf("web-only selection = %q, want incremental\\tnginx\nstderr:\n%s", got, stderr)
+	}
+
+	// 2. Shared Go lib change selects only dependent energy-api.
+	writeFileRel("libs/shared/util.go", "package shared\nfunc X() {}\n")
+	runGit("add", "libs/shared/util.go")
+	runGit("commit", "-m", "shared lib")
+	libSHA := runGit("rev-parse", "HEAD")
+	if got, stderr := runSelect(webSHA, libSHA); got != "incremental\tenergy-api" {
+		t.Fatalf("shared-lib selection = %q, want incremental\\tenergy-api\nstderr:\n%s", got, stderr)
+	}
+
+	// 3. Healthcheck change selects kind=go services only (not static wecom-alert-adapter).
+	writeFileRel("tools/container-healthcheck/main.go", "package main\nfunc main() {}\n")
+	runGit("add", "tools/container-healthcheck/main.go")
+	runGit("commit", "-m", "healthcheck")
+	hcSHA := runGit("rev-parse", "HEAD")
+	if got, stderr := runSelect(libSHA, hcSHA); got != "incremental\tenergy-api,scheduler" {
+		t.Fatalf("healthcheck selection = %q, want incremental\\tenergy-api,scheduler\nstderr:\n%s", got, stderr)
+	}
+
+	// 4. Docs-only commit produces empty incremental build list.
+	writeFileRel("README.md", "docs v2\n")
+	runGit("add", "README.md")
+	runGit("commit", "-m", "docs")
+	docsSHA := runGit("rev-parse", "HEAD")
+	if got, stderr := runSelect(hcSHA, docsSHA); got != "incremental\t" {
+		t.Fatalf("docs-only selection = %q, want empty incremental\\t\nstderr:\n%s", got, stderr)
+	}
+
+	// 5. Missing required digest in reuse manifest fails closed by adding scheduler to build list.
+	writeManifest(false)
+	if got, stderr := runSelect(hcSHA, docsSHA); got != "incremental\tscheduler" {
+		t.Fatalf("missing required digest selection = %q, want incremental\\tscheduler\nstderr:\n%s", got, stderr)
+	}
+
+	// 6. Invalid / non-ancestor base revision falls back cleanly to full.
+	if got, _ := runSelect("not-a-sha", docsSHA); got != "full\t" {
+		t.Fatalf("invalid base selection = %q, want full\\t", got)
+	}
+	if got, _ := runSelect(docsSHA, baseSHA); got != "full\t" {
+		t.Fatalf("non-ancestor base selection = %q, want full\\t", got)
+	}
+}
+
+func TestBuildOCIImagesIncrementalReuseParallelPushAndGoLayers(t *testing.T) {
+	const oldDigest = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const newDigest = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	makeMockToolchain := func(t *testing.T, pushMode string) (bin, dockerLog, dockerfileOut, stateDir string) {
+		t.Helper()
+		bin = t.TempDir()
+		dockerLog = filepath.Join(t.TempDir(), "docker.log")
+		dockerfileOut = filepath.Join(t.TempDir(), "go-energy-api.Dockerfile")
+		stateDir = t.TempDir()
+
+		writeExe(t, bin, "go", `#!/usr/bin/env bash
+set -euo pipefail
+out=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "-o" ]; then out="$2"; shift 2; continue; fi
+  shift
+done
+mkdir -p "$(dirname "$out")"
+printf '#!/bin/sh\nexit 0\n' > "$out"
+chmod 755 "$out"
+`)
+		writeExe(t, bin, "git", `#!/usr/bin/env bash
+set -euo pipefail
+case "${1:-}" in
+  rev-parse) printf '%s\n' "0123456789abcdef0123456789abcdef01234567" ;;
+  archive)
+    out=""
+    while [ $# -gt 0 ]; do
+      if [ "$1" = "-o" ]; then out="$2"; shift 2; continue; fi
+      shift
+    done
+    tmp="$(mktemp -d)"
+    printf 'stub\n' > "$tmp/README"
+    tar -C "$tmp" -cf "$out" README
+    rm -rf "$tmp"
+    ;;
+  *) exec /usr/bin/git "$@" ;;
+esac
+`)
+		writeExe(t, bin, "docker", `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$DOCKER_LOG"
+cmd="$1"; shift
+case "$cmd" in
+  build)
+    ctx="${@: -1}"
+    if [[ -n "${CAPTURE_GO_DOCKERFILE:-}" && "$*" == *"energy-api"* && -f "$ctx/Dockerfile" ]]; then
+      cp "$ctx/Dockerfile" "$CAPTURE_GO_DOCKERFILE"
+    fi
+    exit 0
+    ;;
+  push)
+    ref="$1"
+    if [ "${PUSH_MODE:-normal}" = "fail-nginx" ] && [[ "$ref" == *hvac-web-real* ]]; then
+      echo "simulated push failure for $ref" >&2
+      exit 1
+    fi
+    if [ "${PUSH_MODE:-normal}" = "parallel-check" ]; then
+      svc="${ref##*/}"; svc="${svc%%:*}"
+      mkdir -p "$STATE_DIR/active"
+      : > "$STATE_DIR/active/$svc"
+      i=0
+      while [ "$i" -lt 40 ]; do
+        active_cnt=$(ls -1 "$STATE_DIR/active" 2>/dev/null | wc -l)
+        if [ "$active_cnt" -ge 2 ]; then
+          : > "$STATE_DIR/parallel-verified"
+          break
+        fi
+        sleep 0.05
+        i=$((i + 1))
+      done
+      rm -f "$STATE_DIR/active/$svc"
+    fi
+    exit 0
+    ;;
+  image) exit 0 ;;
+  inspect)
+    last="${@: -1}"
+    repo="${last%:*}"
+    printf '%s@sha256:%s\n' "$repo" "$NEW_DIGEST"
+    ;;
+esac
+`)
+		_ = pushMode
+		return bin, dockerLog, dockerfileOut, stateDir
+	}
+
+	reuseManifest := filepath.Join(t.TempDir(), "reuse.tsv")
+	if err := os.WriteFile(reuseManifest, []byte(strings.Join([]string{
+		"# service\tlocal_image\toci_ref",
+		"energy-api\thvac/energy-api:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/energy-api@sha256:" + oldDigest,
+		"operations-agent-service\thvac/operations-agent-service:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/operations-agent-service@sha256:" + oldDigest,
+		"phase1-migrator\thvac/phase1-migrator:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/phase1-migrator@sha256:" + oldDigest,
+	}, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("incremental builds only changed service and reuses others", func(t *testing.T) {
+		bin, dlog, _, _ := makeMockToolchain(t, "normal")
+		staging := filepath.Join(t.TempDir(), "release")
+		cmd := exec.Command("bash", "build-oci-images.sh")
+		cmd.Env = commandEnv(bin,
+			"DOCKER_LOG="+dlog,
+			"PRODUCTION_RELEASE_DIR="+staging,
+			"OCI_REGISTRY=ccr.ccs.tencentyun.com",
+			"OCI_NAMESPACE=hvac",
+			"OCI_PUSH=1",
+			"OCI_INCREMENTAL=1",
+			"OCI_SKIP_ABSENT_OPTIONAL=1",
+			"OCI_REUSE_MANIFEST="+reuseManifest,
+			"OCI_BUILD_SERVICES=nginx",
+			"OCI_SERVICES_FILTER=energy-api,nginx,operations-agent-service,phase1-migrator,ai-solver-service",
+			"NEW_DIGEST="+newDigest,
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("incremental build failed: %v\n%s", err, out)
+		}
+		calls := string(mustRead(t, dlog))
+		if !strings.Contains(calls, "push ccr.ccs.tencentyun.com/hvac/hvac-web-real:") ||
+			strings.Contains(calls, "push ccr.ccs.tencentyun.com/hvac/energy-api:") {
+			t.Fatalf("expected only nginx built/pushed:\n%s", calls)
+		}
+		manifest := string(mustRead(t, filepath.Join(staging, "image-manifest.tsv")))
+		for _, want := range []string{
+			"energy-api\thvac/energy-api:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/energy-api@sha256:" + oldDigest,
+			"nginx\thvac/hvac-web-real:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/hvac-web-real@sha256:" + newDigest,
+			"operations-agent-service\thvac/operations-agent-service:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/operations-agent-service@sha256:" + oldDigest,
+			"phase1-migrator\thvac/phase1-migrator:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/phase1-migrator@sha256:" + oldDigest,
+		} {
+			if !strings.Contains(manifest, want) {
+				t.Fatalf("manifest missing %q:\n%s", want, manifest)
+			}
+		}
+		if strings.Contains(manifest, "ai-solver-service") {
+			t.Fatalf("absent optional ai-solver-service should be omitted:\n%s", manifest)
+		}
+	})
+
+	t.Run("incremental with empty build services skips all builds and pushes", func(t *testing.T) {
+		bin, dlog, _, _ := makeMockToolchain(t, "normal")
+		staging := filepath.Join(t.TempDir(), "release")
+		cmd := exec.Command("bash", "build-oci-images.sh")
+		cmd.Env = commandEnv(bin,
+			"DOCKER_LOG="+dlog,
+			"PRODUCTION_RELEASE_DIR="+staging,
+			"OCI_REGISTRY=ccr.ccs.tencentyun.com",
+			"OCI_NAMESPACE=hvac",
+			"OCI_PUSH=1",
+			"OCI_INCREMENTAL=1",
+			"OCI_SKIP_ABSENT_OPTIONAL=1",
+			"OCI_REUSE_MANIFEST="+reuseManifest,
+			"OCI_BUILD_SERVICES=",
+			"OCI_SERVICES_FILTER=energy-api,phase1-migrator",
+			"NEW_DIGEST="+newDigest,
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("0-service incremental failed: %v\n%s", err, out)
+		}
+		if _, err := os.Stat(dlog); !os.IsNotExist(err) {
+			t.Fatalf("expected zero docker calls on 0-service incremental, got:\n%s", string(mustRead(t, dlog)))
+		}
+		manifest := string(mustRead(t, filepath.Join(staging, "image-manifest.tsv")))
+		if !strings.Contains(manifest, "energy-api@sha256:"+oldDigest) {
+			t.Fatalf("expected reused digest in manifest:\n%s", manifest)
+		}
+	})
+
+	t.Run("parallel push runs concurrently, orders Go layers stably, and fails on error", func(t *testing.T) {
+		bin, dlog, dfOut, stateDir := makeMockToolchain(t, "parallel-check")
+		staging := filepath.Join(t.TempDir(), "release")
+		cmd := exec.Command("bash", "build-oci-images.sh")
+		cmd.Env = commandEnv(bin,
+			"DOCKER_LOG="+dlog,
+			"CAPTURE_GO_DOCKERFILE="+dfOut,
+			"STATE_DIR="+stateDir,
+			"PUSH_MODE=parallel-check",
+			"PRODUCTION_RELEASE_DIR="+staging,
+			"OCI_REGISTRY=ccr.ccs.tencentyun.com",
+			"OCI_NAMESPACE=hvac",
+			"OCI_PUSH=1",
+			"OCI_PUSH_CONCURRENCY=2",
+			"OCI_PUSH_ATTEMPTS=1",
+			"OCI_SERVICES_FILTER=energy-api,nginx,phase1-migrator",
+			"NEW_DIGEST="+newDigest,
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("parallel push failed: %v\n%s", err, out)
+		}
+		if _, err := os.Stat(filepath.Join(stateDir, "parallel-verified")); err != nil {
+			t.Fatalf("expected at least 2 pushes to run concurrently:\n%s", out)
+		}
+		df := string(mustRead(t, dfOut))
+		idxVarLib := strings.Index(df, "COPY --chown=65532:65532 var-lib-hvac /var/lib/hvac")
+		idxHC := strings.Index(df, "COPY --chown=65532:65532 healthcheck /healthcheck")
+		idxSvc := strings.Index(df, "COPY --chown=65532:65532 service /service")
+		idxLbl := strings.Index(df, "LABEL org.opencontainers.image.title=energy-api")
+		if idxVarLib < 0 || idxHC <= idxVarLib || idxSvc <= idxHC || idxLbl <= idxSvc {
+			t.Fatalf("Go Dockerfile layer order should place shared layers before service and labels after:\n%s", df)
+		}
+
+		// Partial push failure must fail cleanly.
+		cmdFail := exec.Command("bash", "build-oci-images.sh")
+		cmdFail.Env = commandEnv(bin,
+			"DOCKER_LOG="+dlog,
+			"STATE_DIR="+stateDir,
+			"PUSH_MODE=fail-nginx",
+			"PRODUCTION_RELEASE_DIR="+filepath.Join(t.TempDir(), "release"),
+			"OCI_REGISTRY=ccr.ccs.tencentyun.com",
+			"OCI_NAMESPACE=hvac",
+			"OCI_PUSH=1",
+			"OCI_PUSH_CONCURRENCY=2",
+			"OCI_PUSH_ATTEMPTS=1",
+			"OCI_SERVICES_FILTER=energy-api,nginx,phase1-migrator",
+			"NEW_DIGEST="+newDigest,
+		)
+		if outFail, errFail := cmdFail.CombinedOutput(); errFail == nil || !strings.Contains(string(outFail), "parallel OCI push failed for nginx") {
+			t.Fatalf("expected clean parallel push failure for nginx, err=%v\n%s", errFail, outFail)
+		}
+	})
+}
+
+func TestPushReleaseProbeDeployedState(t *testing.T) {
+	const digestHex = "2222222222222222222222222222222222222222222222222222222222222222"
+	const revHex = "0123456789abcdef0123456789abcdef01234567"
+
+	servicesFile := filepath.Join(t.TempDir(), "services.tsv")
+	if err := os.WriteFile(servicesFile, []byte(strings.Join([]string{
+		"# service\timage\tkind\trequired\tpackage",
+		"energy-api\thvac/energy-api:0.1.0-dev\tgo\trequired\t./cmd/energy-api",
+		"nginx\thvac/hvac-web-real:0.1.0-dev\tweb\trequired\t-",
+	}, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	makeEnv := func(t *testing.T, sshMode string) (bin, platform, outDir string) {
+		t.Helper()
+		bin = t.TempDir()
+		platform = t.TempDir()
+		outDir = filepath.Join(t.TempDir(), "probe")
+		rejectSshpass(t, bin)
+		writeExe(t, bin, "docker", `#!/usr/bin/env bash
+set -euo pipefail
+case "$1" in
+  ps) exit 0 ;;
+  image)
+    if [ "$2" = "inspect" ]; then
+      img="${@: -1}"
+      case "$img" in
+        *energy-api*) printf 'ccr.ccs.tencentyun.com/hvac/energy-api@sha256:%s\n' "$MOCK_DIGEST" ;;
+        *hvac-web-real*) printf 'ccr.ccs.tencentyun.com/hvac/hvac-web-real@sha256:%s\n' "$MOCK_DIGEST" ;;
+      esac
+      exit 0
+    fi
+    ;;
+esac
+`)
+		if sshMode == "fail" {
+			writeExe(t, bin, "ssh", "#!/bin/sh\nexit 255\n")
+		} else {
+			writeExe(t, bin, "ssh", `#!/usr/bin/env bash
+set -euo pipefail
+last=""
+for arg in "$@"; do last="$arg"; done
+exec sh -c "$last"
+`)
+		}
+		return bin, platform, outDir
+	}
+
+	t.Run("reads matching deployed-image-manifest.tsv", func(t *testing.T) {
+		bin, platform, outDir := makeEnv(t, "ok")
+		if err := os.WriteFile(filepath.Join(platform, "REVISION"), []byte(revHex+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(platform, "deployed-image-manifest.tsv"), []byte(strings.Join([]string{
+			"# revision=" + revHex,
+			"energy-api\thvac/energy-api:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/energy-api@sha256:" + digestHex,
+			"nginx\thvac/hvac-web-real:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/hvac-web-real@sha256:" + digestHex,
+		}, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("bash", "push-release.sh", "--probe-deployed", outDir)
+		cmd.Env = commandEnv(bin, "DEPLOY_SSH_KEY=test-key\n", "HVAC_PLATFORM_DIR="+platform, "OCI_SERVICES_FILE="+servicesFile, "OCI_NAMESPACE=hvac", "MOCK_DIGEST="+digestHex)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("probe failed: %v\n%s", err, out)
+		}
+		if got := strings.TrimSpace(string(mustRead(t, filepath.Join(outDir, "deployed-revision")))); got != revHex {
+			t.Fatalf("deployed-revision = %q, want %q", got, revHex)
+		}
+		if !strings.Contains(string(mustRead(t, filepath.Join(outDir, "deployed-manifest.tsv"))), "nginx\thvac/hvac-web-real:0.1.0-dev") {
+			t.Fatal("missing nginx entry from probed manifest")
+		}
+	})
+
+	t.Run("falls back to docker RepoDigests when deployed-image-manifest.tsv is absent", func(t *testing.T) {
+		bin, platform, outDir := makeEnv(t, "ok")
+		if err := os.WriteFile(filepath.Join(platform, "REVISION"), []byte(revHex+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("bash", "push-release.sh", "--probe-deployed", outDir)
+		cmd.Env = commandEnv(bin, "DEPLOY_SSH_KEY=test-key\n", "HVAC_PLATFORM_DIR="+platform, "OCI_SERVICES_FILE="+servicesFile, "OCI_NAMESPACE=hvac", "MOCK_DIGEST="+digestHex)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("probe fallback failed: %v\n%s", err, out)
+		}
+		manifest := string(mustRead(t, filepath.Join(outDir, "deployed-manifest.tsv")))
+		if !strings.Contains(manifest, "energy-api\thvac/energy-api:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/energy-api@sha256:"+digestHex) {
+			t.Fatalf("expected docker inspect fallback entry:\n%s", manifest)
+		}
+	})
+
+	t.Run("is fail-safe on SSH failure", func(t *testing.T) {
+		bin, platform, outDir := makeEnv(t, "fail")
+		cmd := exec.Command("bash", "push-release.sh", "--probe-deployed", outDir)
+		cmd.Env = commandEnv(bin, "DEPLOY_SSH_KEY=test-key\n", "HVAC_PLATFORM_DIR="+platform, "OCI_SERVICES_FILE="+servicesFile)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("probe should succeed fail-safe when SSH fails: %v\n%s", err, out)
+		}
+		if _, err := os.Stat(filepath.Join(outDir, "deployed-revision")); !os.IsNotExist(err) {
+			t.Fatal("failed probe must not leave deployed-revision behind")
+		}
+	})
+}
+
+func TestApplyOnServerOCISkipsUnchangedAndPersistsManifest(t *testing.T) {
+	const digestSame = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const digestOld = "1111111111111111111111111111111111111111111111111111111111111111"
+	const digestNew = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	rev := strings.Repeat("c", 40)
+
+	setupEnv := func(t *testing.T, agentTargetDigest, smokeScript string) (bin, store, platform, release string) {
+		t.Helper()
+		bin = t.TempDir()
+		store = t.TempDir()
+		platform = t.TempDir()
+		release = t.TempDir()
+
+		writeExe(t, bin, "sudo", "#!/bin/sh\n[ \"$1\" = -n ] && shift\nexec \"$@\"\n")
+		writeExe(t, bin, "date", "#!/bin/sh\nprintf '20261128T030000Z\\n'\n")
+		writeExe(t, bin, "docker", `#!/usr/bin/env bash
+set -euo pipefail
+s="$DOCKER_STORE"
+mkdir -p "$s/tags" "$s/digests"
+printf '%s\n' "$*" >> "$s/calls.log"
+key() { printf '%s' "$1" | tr '/:@' '___'; }
+resolve() {
+  if [[ -f "$s/tags/$(key "$1")" ]]; then cat "$s/tags/$(key "$1")"; return 0; fi
+  return 1
+}
+case "$1" in
+  ps) exit 0 ;;
+  pull)
+    ref="$2"
+    id="pulled-$(key "$ref")"
+    printf '%s\n' "$id" > "$s/tags/$(key "$ref")"
+    printf '%s\n' "$ref" > "$s/digests/$id"
+    ;;
+  tag)
+    id="$(resolve "$2")"
+    printf '%s\n' "$id" > "$s/tags/$(key "$3")"
+    ;;
+  image)
+    case "$2" in
+      inspect)
+        if [ "${3:-}" = "--format" ]; then
+          id="$(resolve "$5")" || exit 1
+          if [[ "$4" == *RepoDigests* ]] && [ -f "$s/digests/$id" ]; then
+            cat "$s/digests/$id"
+          fi
+        else
+          resolve "$3" >/dev/null || exit 1
+        fi
+        ;;
+      prune|rm) exit 0 ;;
+    esac
+    ;;
+esac
+`)
+		if err := os.MkdirAll(filepath.Join(store, "tags"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(store, "digests"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.WriteFile(filepath.Join(store, "tags", "hvac_energy-api_0.1.0-dev"), []byte("img-energy"), 0o644)
+		_ = os.WriteFile(filepath.Join(store, "digests", "img-energy"), []byte("ccr.ccs.tencentyun.com/hvac/energy-api@sha256:"+digestSame+"\n"), 0o644)
+		_ = os.WriteFile(filepath.Join(store, "tags", "hvac_operations-agent-service_0.1.0-dev"), []byte("img-agent"), 0o644)
+		_ = os.WriteFile(filepath.Join(store, "digests", "img-agent"), []byte("ccr.ccs.tencentyun.com/hvac/operations-agent-service@sha256:"+digestOld+"\n"), 0o644)
+
+		if err := os.MkdirAll(filepath.Join(release, "src/deploy/platform/phase1/cd"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		manifest := strings.Join([]string{
+			"# service\tlocal_image\toci_ref",
+			"energy-api\thvac/energy-api:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/energy-api@sha256:" + digestSame,
+			"operations-agent-service\thvac/operations-agent-service:0.1.0-dev\tccr.ccs.tencentyun.com/hvac/operations-agent-service@sha256:" + agentTargetDigest,
+		}, "\n") + "\n"
+		for name, body := range map[string]string{
+			"REVISION":           rev + "\n",
+			"services.tsv":       "energy-api\thvac/energy-api:0.1.0-dev\tgo\trequired\t./cmd/energy-api\noperations-agent-service\thvac/operations-agent-service:0.1.0-dev\tnode\trequired\t-\n",
+			"image-manifest.tsv": manifest,
+			"src/README":         "tree\n",
+			"src/deploy/platform/phase1/cd/observability-config.sh": "#!/bin/sh\nexit 0\n",
+			"rollback.sh":              string(mustRead(t, "rollback.sh")),
+			"smoke-release.sh":         smokeScript,
+			"prune-rollback-images.sh": "#!/bin/sh\nexit 0\n",
+		} {
+			if err := os.WriteFile(filepath.Join(release, name), []byte(body), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if out, err := exec.Command("tar", "-C", filepath.Join(release, "src"), "-cf", filepath.Join(release, "source.tar"), "README", "deploy").CombinedOutput(); err != nil {
+			t.Fatalf("tar: %v\n%s", err, out)
+		}
+		return bin, store, platform, release
+	}
+
+	t.Run("skips unchanged service pull and persists deployed-image-manifest.tsv", func(t *testing.T) {
+		bin, store, platform, release := setupEnv(t, digestNew, "#!/bin/sh\nexit 0\n")
+		cmd := exec.Command("bash", "apply-on-server.sh", release)
+		cmd.Env = commandEnv(bin, "DOCKER_STORE="+store, "HVAC_PLATFORM_DIR="+platform, "HVAC_DEPLOY_SCRIPT="+writeExe(t, bin, "restart", "#!/bin/sh\nexit 0\n"))
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("apply-on-server failed: %v\n%s", err, out)
+		}
+		calls := string(mustRead(t, filepath.Join(store, "calls.log")))
+		if strings.Contains(calls, "pull ccr.ccs.tencentyun.com/hvac/energy-api") {
+			t.Fatalf("unchanged energy-api must not be pulled:\n%s", calls)
+		}
+		if !strings.Contains(calls, "pull ccr.ccs.tencentyun.com/hvac/operations-agent-service@sha256:"+digestNew) {
+			t.Fatalf("changed operations-agent-service must be pulled:\n%s", calls)
+		}
+		if _, err := os.Stat(filepath.Join(store, "tags", "hvac_energy-api_before-20261128T030000Z")); !os.IsNotExist(err) {
+			t.Fatal("unchanged energy-api must not get a redundant before-* backup tag")
+		}
+		persisted := string(mustRead(t, filepath.Join(platform, "deployed-image-manifest.tsv")))
+		if !strings.HasPrefix(persisted, "# revision="+rev+"\n") {
+			t.Fatalf("persisted manifest missing revision header:\n%s", persisted)
+		}
+	})
+
+	t.Run("runs deploy cleanly with 0 image pulls and does not overwrite manifest on smoke fail", func(t *testing.T) {
+		bin, store, platform, release := setupEnv(t, digestOld, "#!/bin/sh\nexit 0\n")
+		cmd := exec.Command("bash", "apply-on-server.sh", release)
+		cmd.Env = commandEnv(bin, "DOCKER_STORE="+store, "HVAC_PLATFORM_DIR="+platform, "HVAC_DEPLOY_SCRIPT="+writeExe(t, bin, "restart", "#!/bin/sh\nexit 0\n"))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("0-image deploy failed: %v\n%s", err, out)
+		}
+		calls := string(mustRead(t, filepath.Join(store, "calls.log")))
+		if strings.Contains(calls, "pull ") {
+			t.Fatalf("expected 0 docker pulls when all images match:\n%s", calls)
+		}
+
+		// Smoke failure must not write deployed-image-manifest.tsv.
+		binFail, storeFail, platformFail, releaseFail := setupEnv(t, digestNew, "#!/bin/sh\nexit 1\n")
+		cmdFail := exec.Command("bash", "apply-on-server.sh", releaseFail)
+		cmdFail.Env = commandEnv(binFail, "DOCKER_STORE="+storeFail, "HVAC_PLATFORM_DIR="+platformFail, "HVAC_DEPLOY_SCRIPT="+writeExe(t, binFail, "restart", "#!/bin/sh\nexit 0\n"))
+		if _, err := cmdFail.CombinedOutput(); err == nil {
+			t.Fatal("expected smoke failure")
+		}
+		if _, err := os.Stat(filepath.Join(platformFail, "deployed-image-manifest.tsv")); !os.IsNotExist(err) {
+			t.Fatal("smoke failure must not write deployed-image-manifest.tsv")
+		}
+	})
 }

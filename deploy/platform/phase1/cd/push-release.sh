@@ -77,9 +77,190 @@ pack_staging() {
     -cf - .
 }
 
+init_remote_ssh() {
+  host="${DEPLOY_SSH_HOST:-139.199.58.47}"
+  user="${DEPLOY_SSH_USER:-ubuntu}"
+  port="${DEPLOY_SSH_PORT:-22}"
+  target="${user}@${host}"
+
+  ssh_cmd=(
+    ssh
+    -p "$port"
+    -o StrictHostKeyChecking=accept-new
+    -o ConnectTimeout=20
+    -o ServerAliveInterval=15
+    -o ServerAliveCountMax=8
+  )
+  key_file=""
+  cleanup_key() {
+    if [[ -n "$key_file" ]]; then
+      rm -f "$key_file"
+    fi
+  }
+  trap cleanup_key EXIT
+
+  upload_ssh=()
+  if [[ -n "${DEPLOY_SSH_KEY:-}" ]]; then
+    key_file="$(mktemp)"
+    chmod 600 "$key_file"
+    DEPLOY_KEY_FILE="$key_file" python3 - <<'PY'
+import os
+from pathlib import Path
+key = os.environ["DEPLOY_SSH_KEY"]
+path = Path(os.environ["DEPLOY_KEY_FILE"])
+if "\\n" in key and "\n" not in key.strip():
+    key = key.replace("\\n", "\n")
+if not key.endswith("\n"):
+    key += "\n"
+path.write_text(key)
+PY
+    ssh_cmd+=(-i "$key_file" -o IdentitiesOnly=yes)
+    remote_ssh() { "${ssh_cmd[@]}" "$@"; }
+    upload_ssh=("${ssh_cmd[@]}")
+  else
+    if ! command -v sshpass >/dev/null 2>&1; then
+      sudo apt-get update -y
+      sudo apt-get install -y sshpass
+    fi
+    # sshpass -e reads SSHPASS. The password is not placed on the command line.
+    export SSHPASS="$DEPLOY_SSH_PASSWORD"
+    unset DEPLOY_SSH_PASSWORD
+    remote_ssh() { sshpass -e "${ssh_cmd[@]}" "$@"; }
+    upload_ssh=(sshpass -e "${ssh_cmd[@]}")
+  fi
+}
+
+probe_deployed_state() {
+  local out_dir="$1"
+  local services_file="${OCI_SERVICES_FILE:-$root/deploy/platform/phase1/cd/services.tsv}"
+  local platform_dir="${HVAC_PLATFORM_DIR:-/opt/hvac-platform}"
+  local compose_project="${HVAC_COMPOSE_PROJECT:-hvac-platform}"
+  local oci_registry="${OCI_REGISTRY:-ccr.ccs.tencentyun.com}"
+  local oci_namespace="${OCI_NAMESPACE:-hvac}"
+
+  if [[ ! -f "$services_file" ]]; then
+    echo "warning: probe skipped because services catalog is missing: $services_file" >&2
+    return 0
+  fi
+
+  mkdir -p "$out_dir"
+  rm -f "$out_dir/deployed-revision" "$out_dir/deployed-manifest.tsv"
+
+  local probe_cmd=""
+  printf -v probe_cmd 'platform_dir=%q compose_project=%q oci_registry=%q oci_namespace=%q\n' \
+    "$platform_dir" "$compose_project" "$oci_registry" "$oci_namespace"
+  probe_cmd+='
+rev_file="$platform_dir/REVISION"
+[ -s "$rev_file" ] || exit 2
+rev=$(tr -d "[:space:]" < "$rev_file")
+printf "%s\n" "$rev" | grep -Eq "^[0-9a-f]{40}$" || exit 2
+printf "REVISION\t%s\n" "$rev"
+manifest_file="$platform_dir/deployed-image-manifest.tsv"
+if [ -s "$manifest_file" ]; then
+  first_line=$(head -n 1 "$manifest_file" | tr -d "\r")
+  if [ "$first_line" = "# revision=$rev" ]; then
+    TAB=$(printf "\t")
+    used_manifest=0
+    while IFS="$TAB" read -r svc local_img oci_ref; do
+      case "$svc" in
+        ""|\#*) continue ;;
+      esac
+      if [ -n "$local_img" ] && printf "%s\n" "$oci_ref" | grep -Eq "^[^[:space:]]+@sha256:[0-9a-f]{64}$"; then
+        printf "ENTRY\t%s\t%s\t%s\n" "$svc" "$local_img" "$oci_ref"
+        used_manifest=1
+      fi
+    done < "$manifest_file"
+    [ "$used_manifest" -eq 1 ] && exit 0
+  fi
+fi
+TAB=$(printf "\t")
+while IFS="$TAB" read -r svc local_img kind required package; do
+  case "$svc" in
+    ""|\#*) continue ;;
+  esac
+  cid=$(docker ps -aq --filter "label=com.docker.compose.project=${compose_project}" --filter "label=com.docker.compose.service=${svc}" </dev/null 2>/dev/null | head -n 1 || true)
+  resolved=""
+  if [ -n "$cid" ]; then
+    resolved=$(docker inspect --format "{{.Config.Image}}" "$cid" </dev/null 2>/dev/null || true)
+  fi
+  if [ -z "$resolved" ]; then
+    resolved="$local_img"
+  fi
+  repo_name="${local_img#*/}"
+  repo_name="${repo_name%%:*}"
+  expected_prefix="${oci_registry}/${oci_namespace}/${repo_name}@sha256:"
+  digests=$(docker image inspect --format "{{range .RepoDigests}}{{println .}}{{end}}" "$resolved" </dev/null 2>/dev/null || true)
+  digest_ref=""
+  for cand in $digests; do
+    case "$cand" in
+      "${expected_prefix}"*)
+        if printf "%s\n" "$cand" | grep -Eq "@sha256:[0-9a-f]{64}$"; then
+          digest_ref="$cand"
+          break
+        fi
+        ;;
+    esac
+  done
+  if [ -n "$digest_ref" ]; then
+    printf "ENTRY\t%s\t%s\t%s\n" "$svc" "$local_img" "$digest_ref"
+  fi
+done
+'
+
+  local probe_output=""
+  if ! probe_output="$(remote_ssh "$target" "$probe_cmd" < "$services_file")"; then
+    echo "warning: failed to probe deployed OCI state on ${host}; falling back to full build" >&2
+    return 0
+  fi
+
+  local probed_rev=""
+  local manifest_tmp=""
+  manifest_tmp="$(mktemp "$out_dir/.manifest.XXXXXX")"
+  printf '# service\tlocal_image\toci_ref\n' > "$manifest_tmp"
+  local entry_count=0
+  local kind="" col1="" col2="" col3=""
+  while IFS=$'\t' read -r kind col1 col2 col3; do
+    case "$kind" in
+      REVISION)
+        if [[ "$col1" =~ ^[0-9a-f]{40}$ ]]; then
+          probed_rev="$col1"
+        fi
+        ;;
+      ENTRY)
+        if [[ -n "$col1" && -n "$col2" && "$col3" =~ ^[^[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
+          printf '%s\t%s\t%s\n' "$col1" "$col2" "$col3" >> "$manifest_tmp"
+          entry_count=$((entry_count + 1))
+        fi
+        ;;
+    esac
+  done <<< "$probe_output"
+
+  if [[ -z "$probed_rev" || "$entry_count" -eq 0 ]]; then
+    rm -f "$manifest_tmp"
+    echo "warning: deployed OCI state on ${host} is unavailable (rev='${probed_rev}', entries=${entry_count}); falling back to full build" >&2
+    return 0
+  fi
+
+  printf '%s\n' "$probed_rev" > "$out_dir/deployed-revision"
+  mv -f "$manifest_tmp" "$out_dir/deployed-manifest.tsv"
+  echo "probed deployed OCI state on ${host}: revision=${probed_rev:0:12}, entries=${entry_count}"
+}
+
 if [[ "${1:-}" == "--check-credentials" ]]; then
   check_credentials
   echo "Deploy SSH credentials are present (host ${DEPLOY_SSH_HOST:-139.199.58.47}, user ${DEPLOY_SSH_USER:-ubuntu}, port ${DEPLOY_SSH_PORT:-22})."
+  exit 0
+fi
+
+if [[ "${1:-}" == "--probe-deployed" ]]; then
+  probe_out_dir="${2:-}"
+  if [[ -z "$probe_out_dir" ]]; then
+    echo "usage: push-release.sh --probe-deployed <out-dir>" >&2
+    exit 1
+  fi
+  check_credentials
+  init_remote_ssh
+  probe_deployed_state "$probe_out_dir"
   exit 0
 fi
 
@@ -95,12 +276,8 @@ if [[ ! -f "$staging/source.tar" || ! -f "$staging/apply-on-server.sh" ]]; then
   exit 1
 fi
 
-host="${DEPLOY_SSH_HOST:-139.199.58.47}"
-user="${DEPLOY_SSH_USER:-ubuntu}"
-port="${DEPLOY_SSH_PORT:-22}"
 revision="$(tr -d '[:space:]' < "$staging/REVISION")"
 remote="/tmp/hvac-production-release-${revision}"
-target="${user}@${host}"
 upload_attempts="${DEPLOY_UPLOAD_ATTEMPTS:-3}"
 upload_retry_sleep="${DEPLOY_UPLOAD_RETRY_SLEEP:-3}"
 upload_timeout_override="${DEPLOY_UPLOAD_TIMEOUT_SECONDS:-}"
@@ -115,51 +292,7 @@ if [[ ! "$upload_attempts" =~ ^[0-9]+$ ]] || (( upload_attempts < 1 )); then
   exit 1
 fi
 
-ssh_cmd=(
-  ssh
-  -p "$port"
-  -o StrictHostKeyChecking=accept-new
-  -o ConnectTimeout=20
-  -o ServerAliveInterval=15
-  -o ServerAliveCountMax=8
-)
-key_file=""
-cleanup_key() {
-  if [[ -n "$key_file" ]]; then
-    rm -f "$key_file"
-  fi
-}
-trap cleanup_key EXIT
-
-upload_ssh=()
-if [[ -n "${DEPLOY_SSH_KEY:-}" ]]; then
-  key_file="$(mktemp)"
-  chmod 600 "$key_file"
-  DEPLOY_KEY_FILE="$key_file" python3 - <<'PY'
-import os
-from pathlib import Path
-key = os.environ["DEPLOY_SSH_KEY"]
-path = Path(os.environ["DEPLOY_KEY_FILE"])
-if "\\n" in key and "\n" not in key.strip():
-    key = key.replace("\\n", "\n")
-if not key.endswith("\n"):
-    key += "\n"
-path.write_text(key)
-PY
-  ssh_cmd+=(-i "$key_file" -o IdentitiesOnly=yes)
-  remote_ssh() { "${ssh_cmd[@]}" "$@"; }
-  upload_ssh=("${ssh_cmd[@]}")
-else
-  if ! command -v sshpass >/dev/null 2>&1; then
-    sudo apt-get update -y
-    sudo apt-get install -y sshpass
-  fi
-  # sshpass -e reads SSHPASS. The password is not placed on the command line.
-  export SSHPASS="$DEPLOY_SSH_PASSWORD"
-  unset DEPLOY_SSH_PASSWORD
-  remote_ssh() { sshpass -e "${ssh_cmd[@]}" "$@"; }
-  upload_ssh=(sshpass -e "${ssh_cmd[@]}")
-fi
+init_remote_ssh
 
 if ! command -v timeout >/dev/null 2>&1; then
   echo "error: timeout(1) is required so a stalled upload cannot run until the job limit." >&2
