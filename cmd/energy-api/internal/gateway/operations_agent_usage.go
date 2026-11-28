@@ -14,8 +14,6 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
-const PublicAgentUsagePathTemplate = "/api/v1/sites/{siteId}/operations/agent-usage"
-
 // agentUsage is the public shape of the assistant's usage (#597): figures and Tool names only.
 // Decoding into it strictly keeps anything else the Agent might send away from the browser.
 type agentUsage struct {

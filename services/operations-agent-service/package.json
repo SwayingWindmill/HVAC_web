@@ -14,7 +14,7 @@
     }
   },
   "scripts": {
-    "contracts": "node ../../scripts/generate-operations-agent-session-contracts.mjs --check",
+    "contracts": "node --experimental-strip-types ../../scripts/generate-operations-agent-session-contracts.ts --check",
     "start": "node dist/bootstrap/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p evals/tsconfig.json",
     "build": "tsc -p tsconfig.build.json",

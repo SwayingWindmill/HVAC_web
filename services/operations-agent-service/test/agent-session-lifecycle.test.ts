@@ -9,8 +9,8 @@ import {
 class MemoryAgentSessionStateStore {
   state = null;
 
-  async get(sessionId) {
-    return this.state?.session.id === sessionId ? this.state : null;
+  async get(tenantId, sessionId) {
+    return this.state?.session.tenantId === tenantId && this.state.session.id === sessionId ? this.state : null;
   }
 
   async list(tenantId, siteId, createdBy) {
@@ -19,11 +19,27 @@ class MemoryAgentSessionStateStore {
       : [];
   }
 
-  async transact(sessionId, update) {
-    const current = this.state?.session.id === sessionId ? this.state : null;
-    const next = update(current);
+  async transact(tenantId, sessionId, update) {
+    const existing = this.state?.session.id === sessionId ? this.state : null;
+    const visible = existing?.session.tenantId === tenantId ? existing : null;
+    const next = update(visible);
+    if (existing !== null && existing.session.tenantId !== tenantId) {
+      throw new AgentSessionLifecycleError('SESSION_IDENTITY_CONFLICT', 'Session belongs to another tenant.');
+    }
     this.state = next;
     return next;
+  }
+
+  async interruptActiveRuns(at) {
+    if (this.state === null || this.state.session.status !== 'ACTIVE') return 0;
+    let interrupted = 0;
+    const runs = this.state.runs.map((run) => {
+      if (run.id !== this.state.session.activeRunId || run.status !== 'RUNNING') return run;
+      interrupted += 1;
+      return Object.freeze({ ...run, status: 'FAILED', finishedAt: Math.max(at, run.startedAt), failureCode: 'RUN_INTERRUPTED' });
+    });
+    if (interrupted > 0) this.state = Object.freeze({ ...this.state, runs: Object.freeze(runs) });
+    return interrupted;
   }
 }
 
@@ -128,6 +144,7 @@ test('durable lifecycle makes start idempotent and replaces only an interrupted 
   );
 
   const interrupted = await lifecycle.interrupt({
+    tenantId: descriptor.tenantId,
     sessionId: descriptor.id,
     runId: firstRun.id,
     at: 1_300,
@@ -188,6 +205,7 @@ test('complete commits finalized records atomically and exact retry does not app
   });
   const artifact = findingArtifact('artifact-complete-1', terminalRun.id, 2_300);
   const command = {
+    tenantId: descriptor.tenantId,
     sessionId: started.session.id,
     runId: terminalRun.id,
     expectedSessionRevision: started.session.revision,
@@ -225,6 +243,7 @@ test('terminal Run failure metadata cannot contradict its durable status', async
   });
   await assert.rejects(
     () => completedLifecycle.complete({
+      tenantId: descriptor.tenantId,
       sessionId: descriptor.id,
       runId: completedBaseRun.id,
       expectedSessionRevision: completedStarted.session.revision,
@@ -253,6 +272,7 @@ test('terminal Run failure metadata cannot contradict its durable status', async
   });
   await assert.rejects(
     () => failedLifecycle.complete({
+      tenantId: descriptor.tenantId,
       sessionId: descriptor.id,
       runId: failedBaseRun.id,
       expectedSessionRevision: failedStarted.session.revision,
@@ -299,6 +319,7 @@ test('typed operator input atomically continues a waiting Session into one new R
     createdAt: 3_200,
   });
   const waiting = await lifecycle.complete({
+    tenantId: descriptor.tenantId,
     sessionId: descriptor.id,
     runId: firstRun.id,
     expectedSessionRevision: started.session.revision,
@@ -320,6 +341,7 @@ test('typed operator input atomically continues a waiting Session into one new R
     createdAt: 3_300,
   });
   const command = {
+    tenantId: descriptor.tenantId,
     sessionId: descriptor.id,
     expectedSessionRevision: waiting.session.revision,
     run: nextRun,
@@ -342,7 +364,7 @@ test('typed operator input atomically continues a waiting Session into one new R
     }),
     (error) => error instanceof AgentSessionLifecycleError && error.code === 'LIFECYCLE_INPUT_INVALID',
   );
-  assert.deepEqual(await lifecycle.get(descriptor.id), waiting);
+  assert.deepEqual(await lifecycle.get(descriptor.tenantId, descriptor.id), waiting);
 
   const continued = await lifecycle.continueWithInput(command);
   assert.equal(continued.session.status, 'ACTIVE');
@@ -366,6 +388,7 @@ test('cancel is idempotent and prevents a stale Run completion from advancing th
   });
 
   const cancelled = await lifecycle.cancel({
+    tenantId: descriptor.tenantId,
     sessionId: started.session.id,
     runId: run.id,
     expectedSessionRevision: started.session.revision,
@@ -377,6 +400,7 @@ test('cancel is idempotent and prevents a stale Run completion from advancing th
   assert.equal(cancelled.runs[0].failureCode, 'RUN_CANCELLED');
 
   const exactRetry = await lifecycle.cancel({
+    tenantId: descriptor.tenantId,
     sessionId: started.session.id,
     runId: run.id,
     expectedSessionRevision: started.session.revision,
@@ -386,6 +410,7 @@ test('cancel is idempotent and prevents a stale Run completion from advancing th
 
   await assert.rejects(
     () => lifecycle.complete({
+      tenantId: descriptor.tenantId,
       sessionId: started.session.id,
       runId: run.id,
       expectedSessionRevision: started.session.revision,
@@ -397,5 +422,29 @@ test('cancel is idempotent and prevents a stale Run completion from advancing th
     }),
     (error) => error instanceof AgentSessionLifecycleError && error.code === 'RUN_STALE',
   );
-  assert.deepEqual(await lifecycle.get(started.session.id), cancelled);
+  assert.deepEqual(await lifecycle.get(descriptor.tenantId, started.session.id), cancelled);
+});
+
+test('lifecycle enforces tenant isolation on get and mutations', async () => {
+  const store = new MemoryAgentSessionStateStore();
+  const lifecycle = createAgentSessionLifecycle({ store });
+  const run = runningRun('run-tenant-iso-1', 4_100);
+  const started = await lifecycle.start({
+    session: { ...descriptor, id: 'session-tenant-iso-1', createdAt: 4_000 },
+    expectedSessionRevision: null,
+    run: { ...run, sessionId: 'session-tenant-iso-1' },
+    operatorMessage: { ...operatorMessage('message-tenant-iso-1', 'Check chillers.', 4_050), sessionId: 'session-tenant-iso-1' },
+  });
+
+  assert.equal(await lifecycle.get('tenant-other', started.session.id), null);
+  await assert.rejects(
+    () => lifecycle.cancel({
+      tenantId: 'tenant-other',
+      sessionId: started.session.id,
+      runId: run.id,
+      expectedSessionRevision: started.session.revision,
+      at: 4_200,
+    }),
+    (error) => error instanceof AgentSessionLifecycleError && error.code === 'SESSION_NOT_FOUND',
+  );
 });

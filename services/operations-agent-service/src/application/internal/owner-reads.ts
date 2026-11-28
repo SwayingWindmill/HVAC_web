@@ -323,6 +323,7 @@ export interface OwnerReadContext {
   readonly scope: OwnerScope;
   readonly authorization: AuthorizationDecision;
   readonly correlationId: string;
+  readonly signal?: AbortSignal;
 }
 
 export interface OwnerReadInput<TRequest extends ToolAuthorizableReadRequest> {

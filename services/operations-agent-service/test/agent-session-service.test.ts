@@ -10,8 +10,9 @@ import { HVAC_AGENT_EVENT_VERSION } from '../dist/agent/index.js';
 class MemoryAgentSessionStateStore {
   states = new Map();
 
-  async get(sessionId) {
-    return this.states.get(sessionId) ?? null;
+  async get(tenantId, sessionId) {
+    const state = this.states.get(sessionId) ?? null;
+    return state?.session.tenantId === tenantId ? state : null;
   }
 
   async list(tenantId, siteId, createdBy, limit) {
@@ -21,10 +22,31 @@ class MemoryAgentSessionStateStore {
       .slice(0, limit);
   }
 
-  async transact(sessionId, update) {
-    const next = update(this.states.get(sessionId) ?? null);
+  async transact(tenantId, sessionId, update) {
+    const existing = this.states.get(sessionId) ?? null;
+    const visible = existing?.session.tenantId === tenantId ? existing : null;
+    const next = update(visible);
+    if (existing !== null && existing.session.tenantId !== tenantId) {
+      throw new Error('Session belongs to another tenant.');
+    }
     this.states.set(sessionId, next);
     return next;
+  }
+
+  async interruptActiveRuns(at) {
+    let interrupted = 0;
+    for (const [sessionId, state] of this.states.entries()) {
+      if (state.session.status !== 'ACTIVE') continue;
+      let changed = false;
+      const runs = state.runs.map((run) => {
+        if (run.id !== state.session.activeRunId || run.status !== 'RUNNING') return run;
+        changed = true;
+        interrupted += 1;
+        return Object.freeze({ ...run, status: 'FAILED', finishedAt: Math.max(at, run.startedAt), failureCode: 'RUN_INTERRUPTED' });
+      });
+      if (changed) this.states.set(sessionId, Object.freeze({ ...state, runs: Object.freeze(runs) }));
+    }
+    return interrupted;
   }
 }
 
@@ -509,4 +531,101 @@ test('createTools and describeSite receive the same runContext identity per Run 
   assert.equal(seenToolRunContexts[1], seenSiteRunContexts[1]);
   assert.equal(seenToolRunContexts[1], seenEngineRunContexts[1]);
   assert.notEqual(seenToolRunContexts[0].runId, seenToolRunContexts[1].runId);
+});
+
+test('unexpected engine rejection marks the Session and Run FAILED cleanly without stranding ACTIVE', async () => {
+  const store = new MemoryAgentSessionStateStore();
+  const lifecycle = createAgentSessionLifecycle({ store });
+  let clock = 6_000;
+  const service = createAgentSessionService({
+    lifecycle,
+    engine: async () => {
+      throw new Error('unexpected engine boom');
+    },
+    modelRef,
+    createTools: () => Object.freeze([]),
+    describeSite: async () => ({ name: 'Plant', timezone: 'Asia/Shanghai' }),
+    budget,
+    now: () => ++clock,
+    nextId: createIds(),
+  });
+
+  const started = await service.create(context, { message: 'Run will fail' });
+  const settled = await waitFor(async () => {
+    const state = await service.get(context, started.session.id);
+    return state.session.status === 'FAILED' ? state : null;
+  });
+  assert.equal(settled.runs.at(-1)?.status, 'FAILED');
+  assert.equal(settled.runs.at(-1)?.failureCode, 'ENGINE_EXECUTION_FAILED');
+});
+
+test('interruptActiveRuns marks active RUNNING runs RUN_INTERRUPTED and enables recovery start', async () => {
+  const store = new MemoryAgentSessionStateStore();
+  const lifecycle = createAgentSessionLifecycle({ store });
+  const first = await lifecycle.start({
+    session: {
+      id: 'session-recover-1',
+      tenantId: context.tenantId,
+      siteId: context.siteId,
+      agentDefinitionId: 'operations-investigation.v1',
+      createdBy: context.principalId,
+      createdAt: 1_000,
+    },
+    expectedSessionRevision: null,
+    run: {
+      id: 'run-stuck-1',
+      sessionId: 'session-recover-1',
+      modelRef,
+      status: 'RUNNING',
+      startedAt: 1_100,
+      finishedAt: null,
+      usage: zeroUsage,
+      failureCode: null,
+    },
+    operatorMessage: {
+      id: 'msg-1',
+      sessionId: 'session-recover-1',
+      runId: null,
+      role: 'OPERATOR',
+      content: 'Initial question',
+      createdAt: 1_050,
+    },
+  });
+  assert.equal(first.session.status, 'ACTIVE');
+
+  const count = await lifecycle.interruptActiveRuns(2_000);
+  assert.equal(count, 1);
+
+  const recovered = await lifecycle.start({
+    session: {
+      id: 'session-recover-1',
+      tenantId: context.tenantId,
+      siteId: context.siteId,
+      agentDefinitionId: 'operations-investigation.v1',
+      createdBy: context.principalId,
+      createdAt: 1_000,
+    },
+    expectedSessionRevision: first.session.revision,
+    run: {
+      id: 'run-recovery-2',
+      sessionId: 'session-recover-1',
+      modelRef,
+      status: 'RUNNING',
+      startedAt: 2_100,
+      finishedAt: null,
+      usage: zeroUsage,
+      failureCode: null,
+    },
+    operatorMessage: {
+      id: 'msg-2',
+      sessionId: 'session-recover-1',
+      runId: null,
+      role: 'OPERATOR',
+      content: 'Retry question',
+      createdAt: 2_050,
+    },
+  });
+  assert.equal(recovered.runs[0]?.status, 'FAILED');
+  assert.equal(recovered.runs[0]?.failureCode, 'RUN_INTERRUPTED');
+  assert.equal(recovered.session.activeRunId, 'run-recovery-2');
 });

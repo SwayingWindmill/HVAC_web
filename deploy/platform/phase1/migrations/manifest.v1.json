@@ -253,7 +253,8 @@
       "migrations": [
         "services/operations-agent-service/migrations/operations/001_agent_sessions.sql",
         "services/operations-agent-service/migrations/operations/002_finding_without_summary.sql",
-        "services/operations-agent-service/migrations/operations/003_schema_and_table_comments.sql"
+        "services/operations-agent-service/migrations/operations/003_schema_and_table_comments.sql",
+        "services/operations-agent-service/migrations/operations/agent-operations-rls.sql"
       ]
     }
   ],

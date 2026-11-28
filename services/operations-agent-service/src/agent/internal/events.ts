@@ -9,7 +9,9 @@ import type {
   AgentToolExecution,
 } from './session.js';
 
-export const HVAC_AGENT_EVENT_VERSION = 'hvac.agent.event/v1' as const;
+import { HVAC_AGENT_EVENT_VERSION } from './session-contract.gen.js';
+
+export { HVAC_AGENT_EVENT_VERSION };
 
 export interface AgentSessionSnapshot {
   readonly session: AgentSession;

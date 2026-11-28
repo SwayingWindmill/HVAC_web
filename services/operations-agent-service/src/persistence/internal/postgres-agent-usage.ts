@@ -1,6 +1,7 @@
 import type { Pool, QueryResultRow } from 'pg';
 
 import type { AgentToolFailureReason, AgentToolUsage, AgentUsage, AgentUsageReader } from '../../application/index.js';
+import { withTenantTransaction } from './postgres-tenant-transaction.js';
 
 interface RunDayRow extends QueryResultRow {
   readonly day: string;
@@ -36,12 +37,12 @@ const siteRunsInRange = `
 export const createPostgresAgentUsageReader = (pool: Pool): AgentUsageReader => Object.freeze({
   async daily(tenantId: string, siteId: string, timezone: string, fromDate: string, toDate: string): Promise<AgentUsage> {
     const values = [tenantId, siteId, timezone, fromDate, toDate];
-    const [days, runs, tools, reasons] = await Promise.all([
-      pool.query<{ readonly day: string }>(
+    const [days, runs, tools, reasons] = await withTenantTransaction(pool, tenantId, async (client) => {
+      const daysResult = await client.query<{ readonly day: string }>(
         `SELECT d::date::text AS day FROM generate_series($1::date, $2::date, interval '1 day') AS d ORDER BY 1`,
         [fromDate, toDate],
-      ),
-      pool.query<RunDayRow>(
+      );
+      const runsResult = await client.query<RunDayRow>(
         `SELECT ${runDay}::text AS day,
            count(*) FILTER (WHERE r.status = 'COMPLETED') AS completed,
            count(*) FILTER (WHERE r.status = 'FAILED') AS failed,
@@ -53,8 +54,8 @@ export const createPostgresAgentUsageReader = (pool: Pool): AgentUsageReader => 
          ${siteRunsInRange}
          GROUP BY 1`,
         values,
-      ),
-      pool.query<ToolDayRow>(
+      );
+      const toolsResult = await client.query<ToolDayRow>(
         `SELECT ${runDay}::text AS day, t.tool_name,
            count(*) AS calls,
            count(*) FILTER (WHERE t.status = 'FAILED') AS failed
@@ -64,9 +65,9 @@ export const createPostgresAgentUsageReader = (pool: Pool): AgentUsageReader => 
          GROUP BY 1, 2
          ORDER BY 1, 2`,
         values,
-      ),
+      );
       // Why the failed calls failed (#624), the commonest first.
-      pool.query<ReasonDayRow>(
+      const reasonsResult = await client.query<ReasonDayRow>(
         `SELECT ${runDay}::text AS day, t.tool_name, t.failure_code, count(*) AS failed
          FROM agent_operations.agent_tool_executions t
          JOIN agent_operations.agent_runs r ON r.session_id = t.session_id AND r.run_id = t.run_id
@@ -74,8 +75,9 @@ export const createPostgresAgentUsageReader = (pool: Pool): AgentUsageReader => 
          GROUP BY 1, 2, 3
          ORDER BY 1, 2, 4 DESC, 3`,
         values,
-      ),
-    ]);
+      );
+      return [daysResult, runsResult, toolsResult, reasonsResult] as const;
+    });
     const toolKey = (row: { day: string; tool_name: string }): string => `${row.day}|${row.tool_name}`;
     const reasonsByTool = new Map<string, AgentToolFailureReason[]>();
     for (const row of reasons.rows) {

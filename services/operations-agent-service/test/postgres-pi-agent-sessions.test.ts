@@ -90,6 +90,22 @@ const completedRun = (value, finishedAt, usage) => Object.freeze({
 
 const createPersistence = () => createPostgresAgentSessionPersistence({ connectionString: operationsConnectionString });
 
+const withTenantQuery = async (pool, tenantId, text, values = []) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
+    const result = await client.query(text, values);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 test('PostgreSQL Pi Session state survives restart without partial-stream authority', async (t) => {
   let persistence = createPersistence();
   const operationsPool = new Pool({ connectionString: operationsConnectionString, max: 1 });
@@ -137,6 +153,7 @@ test('PostgreSQL Pi Session state survives restart without partial-stream author
     toolCalls: 1,
   });
   const completeWaiting = {
+    tenantId: sessionDescriptor.tenantId,
     sessionId: sessionDescriptor.id,
     runId: firstRun.id,
     expectedSessionRevision: started.session.revision,
@@ -152,7 +169,7 @@ test('PostgreSQL Pi Session state survives restart without partial-stream author
   assert.equal(waiting.messages.length, 2);
   assert.equal(waiting.toolExecutions.length, 1);
   assert.equal(waiting.artifacts.length, 1);
-  assert.deepEqual(await lifecycle.get(sessionDescriptor.id), waiting);
+  assert.deepEqual(await lifecycle.get(sessionDescriptor.tenantId, sessionDescriptor.id), waiting);
 
   const exactCompleteRetry = await lifecycle.complete(completeWaiting);
   assert.deepEqual(exactCompleteRetry, waiting);
@@ -161,7 +178,7 @@ test('PostgreSQL Pi Session state survives restart without partial-stream author
   persistence = createPersistence();
   lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
 
-  const recovered = await lifecycle.get(sessionDescriptor.id);
+  const recovered = await lifecycle.get(sessionDescriptor.tenantId, sessionDescriptor.id);
   assert.deepEqual(recovered, waiting);
 
   const secondRun = run('pi-run-postgres-2', 10_300);
@@ -189,9 +206,10 @@ test('PostgreSQL Pi Session state survives restart without partial-stream author
   persistence = createPersistence();
   lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
 
-  const afterCrash = await lifecycle.get(sessionDescriptor.id);
+  const afterCrash = await lifecycle.get(sessionDescriptor.tenantId, sessionDescriptor.id);
   assert.equal(afterCrash.messages.some(({ content }) => content.includes('UNCOMMITTED_STREAM_TEXT')), false);
   const interrupted = await lifecycle.interrupt({
+    tenantId: sessionDescriptor.tenantId,
     sessionId: sessionDescriptor.id,
     runId: secondRun.id,
     at: 10_400,
@@ -211,6 +229,7 @@ test('PostgreSQL Pi Session state survives restart without partial-stream author
   assert.deepEqual(thirdStarted.toolExecutions.map(({ toolName }) => toolName), ['energy_compare_periods']);
 
   const cancelled = await lifecycle.cancel({
+    tenantId: sessionDescriptor.tenantId,
     sessionId: sessionDescriptor.id,
     runId: thirdRun.id,
     expectedSessionRevision: thirdStarted.session.revision,
@@ -220,6 +239,7 @@ test('PostgreSQL Pi Session state survives restart without partial-stream author
 
   await assert.rejects(
     () => lifecycle.complete({
+      tenantId: sessionDescriptor.tenantId,
       sessionId: sessionDescriptor.id,
       runId: thirdRun.id,
       expectedSessionRevision: thirdStarted.session.revision,
@@ -260,7 +280,9 @@ test('PostgreSQL Pi Session state survives restart without partial-stream author
   ]);
   assert.equal(columns.rows.some(({ column_name }) => forbiddenColumns.has(column_name)), false);
 
-  const persistedText = await operationsPool.query(
+  const persistedText = await withTenantQuery(
+    operationsPool,
+    sessionDescriptor.tenantId,
     `SELECT
        COALESCE(string_agg(content, ' '), '') AS messages,
        COALESCE((SELECT string_agg(artifact_payload::text, ' ') FROM agent_operations.agent_artifacts WHERE session_id = $1), '') AS artifacts
@@ -308,6 +330,7 @@ test('PostgreSQL serializes concurrent replacement starts to one durable active 
     }),
   });
   const interrupted = await first.interrupt({
+    tenantId: descriptor.tenantId,
     sessionId: descriptor.id,
     runId: initialRun.id,
     at: 20_200,
@@ -348,7 +371,7 @@ test('PostgreSQL serializes concurrent replacement starts to one durable active 
       && rejected.reason instanceof AgentSessionLifecycleError
       && rejected.reason.code === 'SESSION_REVISION_CONFLICT',
   );
-  const durable = await first.get(descriptor.id);
+  const durable = await first.get(descriptor.tenantId, descriptor.id);
   assert.equal(durable.runs.filter(({ status }) => status === 'RUNNING').length, 1);
   assert.equal(durable.session.status, 'ACTIVE');
   assert.equal(durable.session.activeRunId, durable.runs.find(({ status }) => status === 'RUNNING').id);
@@ -422,6 +445,7 @@ test('PostgreSQL rolls back a terminal Session transition when finalized append 
 
   await assert.rejects(
     () => lifecycle.complete({
+      tenantId: targetDescriptor.tenantId,
       sessionId: targetDescriptor.id,
       runId: targetRun.id,
       expectedSessionRevision: targetStarted.session.revision,
@@ -444,7 +468,7 @@ test('PostgreSQL rolls back a terminal Session transition when finalized append 
     (error) => typeof error === 'object' && error !== null && error.code === '23505',
   );
 
-  const afterFailure = await lifecycle.get(targetDescriptor.id);
+  const afterFailure = await lifecycle.get(targetDescriptor.tenantId, targetDescriptor.id);
   assert.equal(afterFailure.session.status, 'ACTIVE');
   assert.equal(afterFailure.session.revision, 0);
   assert.equal(afterFailure.session.activeRunId, targetRun.id);
@@ -509,6 +533,7 @@ test('PostgreSQL persists typed INPUT_RESPONSE attribution across restart', asyn
     createdAt: 40_200,
   });
   const waiting = await lifecycle.complete({
+    tenantId: descriptor.tenantId,
     sessionId: descriptor.id,
     runId: firstRun.id,
     expectedSessionRevision: started.session.revision,
@@ -539,6 +564,7 @@ test('PostgreSQL persists typed INPUT_RESPONSE attribution across restart', asyn
     createdAt: 40_300,
   });
   const continued = await lifecycle.continueWithInput({
+    tenantId: descriptor.tenantId,
     sessionId: descriptor.id,
     expectedSessionRevision: waiting.session.revision,
     run: secondRun,
@@ -558,11 +584,13 @@ test('PostgreSQL persists typed INPUT_RESPONSE attribution across restart', asyn
   await persistence.close();
   persistence = createPersistence();
   lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
-  const recovered = await lifecycle.get(descriptor.id);
+  const recovered = await lifecycle.get(descriptor.tenantId, descriptor.id);
   assert.deepEqual(recovered, continued);
   assert.deepEqual(recovered.artifacts.find(({ id }) => id === response.id), response);
 
-  const row = await operationsPool.query(
+  const row = await withTenantQuery(
+    operationsPool,
+    descriptor.tenantId,
     `SELECT kind, artifact_payload->>'requestArtifactId' AS request_artifact_id,
             artifact_payload->>'value' AS value,
             artifact_payload->>'submittedBy' AS submitted_by
@@ -598,6 +626,7 @@ test('PostgreSQL usage counts each Site-local day from the Session records and c
     operatorMessage: Object.freeze({ ...operatorMessage('usage-message-1', '10月17日用了多少电？', lateRun.startedAt - 10), sessionId: usageSession.id }),
   });
   const answered = await lifecycle.complete({
+    tenantId: usageSession.tenantId,
     sessionId: usageSession.id, runId: lateRun.id, expectedSessionRevision: started.session.revision,
     run: completedRun(lateRun, lateRun.startedAt + 7_000, { inputTokens: 1_200, outputTokens: 300, modelCalls: 2, toolCalls: 2 }),
     sessionStatus: 'COMPLETED',
@@ -619,6 +648,7 @@ test('PostgreSQL usage counts each Site-local day from the Session records and c
     operatorMessage: Object.freeze({ ...operatorMessage('usage-message-2', '那 C 机组呢？', nextRun.startedAt - 10), sessionId: usageSession.id }),
   });
   await lifecycle.complete({
+    tenantId: usageSession.tenantId,
     sessionId: usageSession.id, runId: nextRun.id, expectedSessionRevision: resumed.session.revision,
     run: Object.freeze({ ...nextRun, status: 'FAILED', finishedAt: nextRun.startedAt + 3_000, usage: { inputTokens: 800, outputTokens: 0, modelCalls: 1, toolCalls: 1 }, failureCode: 'MODEL_CALL_LIMIT' }),
     sessionStatus: 'FAILED',
@@ -678,4 +708,106 @@ test('PostgreSQL lists a Site\'s Sessions started by one person, newest first, a
   const mine = await lifecycle.list('tenant-history', 'site-history', 'principal-me', 2);
   assert.deepEqual(mine.map((state) => state.session.id), ['history-session-5', 'history-session-3']);
   assert.deepEqual((await lifecycle.list('tenant-history', 'site-history', 'principal-other', 50)).map((state) => state.session.id), ['history-session-2']);
+});
+
+test('PostgreSQL RLS isolates tenant records and interruptActiveRuns recovers across tenants', async (t) => {
+  const persistence = createPersistence();
+  const operationsPool = new Pool({ connectionString: operationsConnectionString, max: 1 });
+  t.after(async () => {
+    await Promise.all([persistence.close(), operationsPool.end()]);
+  });
+  const lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
+  const alphaSession = Object.freeze({
+    ...sessionDescriptor,
+    id: 'rls-session-alpha',
+    tenantId: 'tenant-rls-alpha',
+    siteId: 'site-rls',
+    createdBy: 'principal-rls',
+    createdAt: 50_000,
+  });
+  const alphaDoneSession = Object.freeze({
+    ...alphaSession,
+    id: 'rls-session-alpha-done',
+    createdAt: 50_100,
+  });
+  const betaSession = Object.freeze({
+    ...alphaSession,
+    id: 'rls-session-beta',
+    tenantId: 'tenant-rls-beta',
+    createdAt: 50_200,
+  });
+  const alphaRun = Object.freeze({ ...run('rls-run-alpha', 50_050), sessionId: alphaSession.id });
+  const alphaDoneStartAt = Date.parse('2026-10-19T02:00:00Z');
+  const alphaDoneRun = Object.freeze({ ...run('rls-run-alpha-done', alphaDoneStartAt), sessionId: alphaDoneSession.id });
+  const betaRun = Object.freeze({ ...run('rls-run-beta', 50_250), sessionId: betaSession.id });
+
+  const startedAlpha = await lifecycle.start({
+    session: alphaSession,
+    expectedSessionRevision: null,
+    run: alphaRun,
+    operatorMessage: Object.freeze({ ...operatorMessage('rls-msg-alpha', 'Alpha running question', 50_020), sessionId: alphaSession.id }),
+  });
+  const startedAlphaDone = await lifecycle.start({
+    session: alphaDoneSession,
+    expectedSessionRevision: null,
+    run: alphaDoneRun,
+    operatorMessage: Object.freeze({ ...operatorMessage('rls-msg-alpha-done', 'Alpha finished question', alphaDoneStartAt - 10), sessionId: alphaDoneSession.id }),
+  });
+  await lifecycle.complete({
+    tenantId: alphaDoneSession.tenantId,
+    sessionId: alphaDoneSession.id,
+    runId: alphaDoneRun.id,
+    expectedSessionRevision: startedAlphaDone.session.revision,
+    run: completedRun(alphaDoneRun, alphaDoneStartAt + 2_000, { inputTokens: 100, outputTokens: 20, modelCalls: 1, toolCalls: 0 }),
+    sessionStatus: 'COMPLETED',
+    finalizedMessages: [Object.freeze({ ...assistantMessage('rls-msg-alpha-done-a', alphaDoneRun.id, 'Done.', alphaDoneStartAt + 1_900), sessionId: alphaDoneSession.id })],
+    toolExecutions: [],
+    artifacts: [],
+  });
+  await lifecycle.start({
+    session: betaSession,
+    expectedSessionRevision: null,
+    run: betaRun,
+    operatorMessage: Object.freeze({ ...operatorMessage('rls-msg-beta', 'Beta running question', 50_220), sessionId: betaSession.id }),
+  });
+
+  // Without app.tenant_id, FORCE ROW LEVEL SECURITY exposes 0 rows to the runtime role.
+  const unscoped = await operationsPool.query('SELECT count(*)::int AS count FROM agent_operations.agent_sessions');
+  assert.equal(unscoped.rows[0].count, 0);
+
+  const betaRows = await withTenantQuery(
+    operationsPool,
+    'tenant-rls-beta',
+    'SELECT session_id FROM agent_operations.agent_sessions ORDER BY session_id',
+  );
+  assert.deepEqual(betaRows.rows, [{ session_id: betaSession.id }]);
+
+  assert.equal(await lifecycle.get('tenant-rls-beta', alphaSession.id), null);
+  assert.equal((await lifecycle.get('tenant-rls-alpha', alphaSession.id))?.session.id, alphaSession.id);
+  assert.deepEqual(
+    (await lifecycle.list('tenant-rls-beta', 'site-rls', 'principal-rls', 50)).map((state) => state.session.id),
+    [betaSession.id],
+  );
+
+  const betaUsage = await persistence.agentUsageReader.daily('tenant-rls-beta', 'site-rls', 'Asia/Shanghai', '2026-10-19', '2026-10-19');
+  assert.equal(betaUsage.days[0].completed, 0);
+  const alphaUsage = await persistence.agentUsageReader.daily('tenant-rls-alpha', 'site-rls', 'Asia/Shanghai', '2026-10-19', '2026-10-19');
+  assert.equal(alphaUsage.days[0].completed, 1);
+
+  const interruptedCount = await lifecycle.interruptActiveRuns(55_000);
+  assert.ok(interruptedCount >= 2);
+  const afterAlpha = await lifecycle.get('tenant-rls-alpha', alphaSession.id);
+  const afterBeta = await lifecycle.get('tenant-rls-beta', betaSession.id);
+  assert.equal(afterAlpha?.runs[0].status, 'FAILED');
+  assert.equal(afterAlpha?.runs[0].failureCode, 'RUN_INTERRUPTED');
+  assert.equal(afterBeta?.runs[0].status, 'FAILED');
+  assert.equal(afterBeta?.runs[0].failureCode, 'RUN_INTERRUPTED');
+
+  const recoveredAlpha = await lifecycle.start({
+    session: alphaSession,
+    expectedSessionRevision: startedAlpha.session.revision,
+    run: Object.freeze({ ...run('rls-run-alpha-recover', 56_000), sessionId: alphaSession.id }),
+    operatorMessage: Object.freeze({ ...operatorMessage('rls-msg-alpha-recover', 'Recover after interrupt.', 55_990), sessionId: alphaSession.id }),
+  });
+  assert.equal(recoveredAlpha.session.activeRunId, 'rls-run-alpha-recover');
 });

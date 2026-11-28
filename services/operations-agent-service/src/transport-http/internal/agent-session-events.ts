@@ -39,6 +39,7 @@ export const createAgentSessionEventStreamResponse = async (
           controller.enqueue(encodeEvent(event));
           if (isTerminalSnapshot(event)) close();
         });
+        if (closed) unsubscribe();
       } catch (error) {
         if (!closed) controller.error(error);
       }

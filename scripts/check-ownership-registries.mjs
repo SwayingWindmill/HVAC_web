@@ -80,13 +80,56 @@ for (const [key, expectedOwner] of canonicalOwners) {
   else if (route.owner !== expectedOwner) fail(`${key}: owner must be ${expectedOwner}, got ${route.owner}`);
 }
 // The Gateway answers 404 for any public route without an owner here, while its handler
-// tests skip the registry, so every contracted Gateway route must be registered.
-const gatewayContract = await readJSON('contracts/http/platform-gateway.openapi.yaml');
-for (const [contractPath, operations] of Object.entries(gatewayContract.paths ?? {})) {
-  for (const method of Object.keys(operations)) {
-    const key = `${method.toUpperCase()} ${contractPath}`;
-    if (allowedMethods.has(method.toUpperCase()) && !routeKeys.has(key)) fail(`${key}: in platform-gateway.openapi.yaml but has no route owner`);
+// tests skip the registry, so every contracted Gateway route must be registered, and every
+// public route in route-ownership must carry an OpenAPI contract outside the frozen baseline.
+const publicOpenApiSpecs = [
+  'contracts/http/platform-gateway.openapi.yaml',
+  'contracts/http/operations-agent-sessions-public.openapi.json',
+  'contracts/http/s05-registry-writer.openapi.json',
+  'contracts/http/s2-telemetry-public.openapi.json',
+  'contracts/http/s3-command-public.openapi.json',
+  'contracts/http/s4-alarm-public.openapi.json',
+];
+const uncontractedPublicRoutesBaseline = new Set([
+  'GET /api/v1/provisioning/batches',
+  'POST /api/v1/provisioning/batches',
+  'GET /api/v1/provisioning/batches/{batchId}',
+  'POST /api/v1/provisioning/batches/{batchId}/devices',
+  'POST /api/v1/provisioning/batches/{batchId}/revoke',
+  'GET /api/v1/sites/{siteId}/work-orders',
+  'GET /api/v1/sites/{siteId}/work-orders/{workOrderId}',
+  'POST /api/v1/sites/{siteId}/work-orders',
+  'POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:assign',
+  'POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:plan',
+  'POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:start',
+  'POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:block',
+  'POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:resume',
+  'POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:complete',
+  'POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:cancel',
+  'POST /api/v1/sites/{siteId}/work-orders/{workOrderId}:reopen',
+  'POST /api/v1/sites/{siteId}/optimization/auto-commands',
+]);
+const openApiRoutes = new Set();
+for (const specPath of publicOpenApiSpecs) {
+  const contract = await readJSON(specPath);
+  for (const [contractPath, operations] of Object.entries(contract.paths ?? {})) {
+    for (const method of Object.keys(operations ?? {})) {
+      const upper = method.toUpperCase();
+      if (!allowedMethods.has(upper) || !contractPath.startsWith('/api/v1/')) continue;
+      const key = `${upper} ${contractPath}`;
+      openApiRoutes.add(key);
+      if (!routeKeys.has(key)) fail(`${key}: in ${specPath} but has no route owner`);
+    }
   }
+}
+for (const key of routeKeys) {
+  if (!openApiRoutes.has(key) && !uncontractedPublicRoutesBaseline.has(key)) {
+    fail(`${key}: registered in route-ownership.v1.json without an OpenAPI contract`);
+  }
+}
+for (const baselineKey of uncontractedPublicRoutesBaseline) {
+  if (!routeKeys.has(baselineKey)) fail(`${baselineKey}: stale entry in uncontractedPublicRoutesBaseline; remove it`);
+  else if (openApiRoutes.has(baselineKey)) fail(`${baselineKey}: now has an OpenAPI contract; shrink uncontractedPublicRoutesBaseline`);
 }
 
 if (dataRegistry.registryVersion !== 1) fail('data registry version must be 1');

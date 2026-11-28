@@ -1,5 +1,6 @@
 import type {
   AgentEngine,
+  AgentEngineResult,
   AgentEvent,
   AgentEventSink,
   AgentModelRef,
@@ -214,18 +215,33 @@ export const createAgentSessionService = ({
       sessionId: started.session.id,
       runId: run.id,
       correlationId: context.correlationId,
-    });
-    const result = await engine({
-      session: started.session,
-      run,
-      messages: started.messages,
-      tools: createTools(context, runContext),
-      context: runContext,
-      site: () => describeSite(context, runContext),
-      budget,
       signal: controller.signal,
-      emit: ((event) => publish(started.session.id, event)) satisfies AgentEventSink,
     });
+    let result: AgentEngineResult;
+    try {
+      result = await engine({
+        session: started.session,
+        run,
+        messages: started.messages,
+        tools: createTools(context, runContext),
+        context: runContext,
+        site: () => describeSite(context, runContext),
+        budget,
+        signal: controller.signal,
+        emit: ((event) => publish(started.session.id, event)) satisfies AgentEventSink,
+      });
+    } catch {
+      if (controller.signal.aborted) return;
+      result = Object.freeze({
+        runStatus: 'FAILED',
+        sessionStatus: 'FAILED',
+        failureCode: 'ENGINE_EXECUTION_FAILED',
+        usage: run.usage,
+        finalizedMessages: Object.freeze([]),
+        toolExecutions: Object.freeze([]),
+        artifacts: Object.freeze([]),
+      });
+    }
 
     if (result.runStatus === 'CANCELLED') return;
     const terminalRun: AgentRun = Object.freeze({
@@ -237,6 +253,7 @@ export const createAgentSessionService = ({
     });
     try {
       const terminal = await lifecycle.complete({
+        tenantId: context.tenantId,
         sessionId: started.session.id,
         runId: run.id,
         expectedSessionRevision: started.session.revision,
@@ -273,11 +290,26 @@ export const createAgentSessionService = ({
       settled: false,
     };
     liveRuns.set(started.session.id, live);
-    void finishRun(context, started, run, controller).finally(() => {
-      live.settled = true;
-      const current = liveRuns.get(started.session.id);
-      if (current === live && current.listeners.size === 0) liveRuns.delete(started.session.id);
-    });
+    void finishRun(context, started, run, controller)
+      .catch(async () => {
+        const interrupted = await lifecycle.interrupt({
+          tenantId: context.tenantId,
+          sessionId: started.session.id,
+          runId: run.id,
+          at: now(),
+        }).catch(() => undefined);
+        const current = liveRuns.get(started.session.id);
+        if (interrupted !== undefined && current === live) {
+          const event = snapshotEvent(interrupted, now());
+          live.events.push(event);
+          for (const listener of live.listeners) listener(event);
+        }
+      })
+      .finally(() => {
+        live.settled = true;
+        const current = liveRuns.get(started.session.id);
+        if (current === live) liveRuns.delete(started.session.id);
+      });
   };
 
   // A question and the Run it starts share one time, so the panel never orders the answer first.
@@ -308,7 +340,7 @@ export const createAgentSessionService = ({
     context: AgentSessionAccessContext,
     sessionId: string,
   ): Promise<AgentSessionState> => requireScopedState(
-    await lifecycle.get(requireIdentity(sessionId, 'Session id')),
+    await lifecycle.get(context.tenantId, requireIdentity(sessionId, 'Session id')),
     context,
   );
 
@@ -375,6 +407,7 @@ export const createAgentSessionService = ({
         throw new AgentSessionServiceError('SESSION_INPUT_INVALID', 'Only an active Agent Run can be cancelled.');
       }
       const cancelled = await lifecycle.cancel({
+        tenantId: context.tenantId,
         sessionId: state.session.id,
         runId: state.session.activeRunId,
         expectedSessionRevision: input.expectedRevision,
@@ -410,6 +443,7 @@ export const createAgentSessionService = ({
         : value;
       const { at: answeredAt, run, operatorMessage } = askQuestion(state.session.id, displayValue);
       const continued = await lifecycle.continueWithInput({
+        tenantId: context.tenantId,
         sessionId: state.session.id,
         expectedSessionRevision: input.expectedRevision,
         run,
@@ -438,9 +472,10 @@ export const createAgentSessionService = ({
       const state = await scopedGet(context, sessionId);
       listener(snapshotEvent(state, now()));
       const live = liveRuns.get(state.session.id);
-      if (live === undefined || state.session.activeRunId !== live.runId) {
+      if (live === undefined || live.settled || state.session.activeRunId !== live.runId) {
         const refreshed = await scopedGet(context, state.session.id);
-        if (refreshed.session.revision !== state.session.revision) {
+        const refreshedActiveRun = refreshed.runs.find((entry) => entry.id === state.session.activeRunId);
+        if (refreshed.session.revision !== state.session.revision || (refreshedActiveRun !== undefined && refreshedActiveRun.status !== 'RUNNING')) {
           listener(snapshotEvent(refreshed, now()));
         }
         return () => undefined;
