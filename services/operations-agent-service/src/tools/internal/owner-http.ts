@@ -218,6 +218,7 @@ export const readAuthorizedOwnerJson = async (
     hasBody: input.body !== undefined,
   }),
   ...(input.body === undefined ? {} : { body: input.body }),
+  ...(input.context.signal === undefined ? {} : { signal: input.context.signal }),
 });
 
 const mapStatusToError = (status: number): OwnerReadError => {
@@ -310,12 +311,24 @@ export const fetchOwnerJson = async (
     readonly method: 'GET' | 'POST';
     readonly headers: Readonly<Record<string, string>>;
     readonly body?: string;
+    readonly signal?: AbortSignal;
   },
 ): Promise<unknown> => {
   const controller = new AbortController();
+  let timedOut = false;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const externalSignal = input.signal;
+  const onExternalAbort = (): void => {
+    controller.abort(externalSignal?.reason);
+  };
+  if (externalSignal?.aborted) {
+    controller.abort(externalSignal.reason);
+  } else {
+    externalSignal?.addEventListener('abort', onExternalAbort, { once: true });
+  }
   const timeout = new Promise<never>((_resolve, reject) => {
     timeoutHandle = setTimeout(() => {
+      timedOut = true;
       controller.abort();
       reject(new OwnerReadError('OWNER_READ_TIMEOUT', 'The Owner READ request timed out.'));
     }, config.requestTimeoutMs);
@@ -356,6 +369,16 @@ export const fetchOwnerJson = async (
     return await Promise.race([operation(), timeout]);
   } catch (cause) {
     if (cause instanceof OwnerReadError) throw cause;
+    if (timedOut) {
+      throw new OwnerReadError('OWNER_READ_TIMEOUT', 'The Owner READ request timed out.');
+    }
+    if (externalSignal?.aborted) {
+      throw new OwnerReadError(
+        'OWNER_READ_UNAVAILABLE',
+        'The Owner READ request was aborted.',
+        { cause },
+      );
+    }
     if (controller.signal.aborted) {
       throw new OwnerReadError('OWNER_READ_TIMEOUT', 'The Owner READ request timed out.');
     }
@@ -366,6 +389,7 @@ export const fetchOwnerJson = async (
     );
   } finally {
     if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
   }
 };
 

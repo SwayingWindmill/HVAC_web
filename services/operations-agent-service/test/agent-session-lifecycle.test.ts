@@ -25,6 +25,18 @@ class MemoryAgentSessionStateStore {
     this.state = next;
     return next;
   }
+
+  async interruptActiveRuns(at) {
+    if (this.state === null || this.state.session.status !== 'ACTIVE') return 0;
+    let interrupted = 0;
+    const runs = this.state.runs.map((run) => {
+      if (run.id !== this.state.session.activeRunId || run.status !== 'RUNNING') return run;
+      interrupted += 1;
+      return Object.freeze({ ...run, status: 'FAILED', finishedAt: at, failureCode: 'RUN_INTERRUPTED' });
+    });
+    if (interrupted > 0) this.state = Object.freeze({ ...this.state, runs: Object.freeze(runs) });
+    return interrupted;
+  }
 }
 
 const descriptor = Object.freeze({

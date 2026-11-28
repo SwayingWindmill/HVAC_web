@@ -53,6 +53,7 @@ export interface AgentSessionStateStore {
     sessionId: string,
     update: (current: AgentSessionState | null) => AgentSessionState,
   ): Promise<AgentSessionState>;
+  interruptActiveRuns(at: number): Promise<number>;
 }
 
 export interface StartAgentSessionRunCommand {
@@ -100,6 +101,7 @@ export interface AgentSessionLifecycle {
   start(command: StartAgentSessionRunCommand): Promise<AgentSessionState>;
   continueWithInput(command: ContinueAgentSessionWithInputCommand): Promise<AgentSessionState>;
   interrupt(command: InterruptAgentSessionRunCommand): Promise<AgentSessionState>;
+  interruptActiveRuns(at: number): Promise<number>;
   complete(command: CompleteAgentSessionRunCommand): Promise<AgentSessionState>;
   cancel(command: CancelAgentSessionRunCommand): Promise<AgentSessionState>;
 }
@@ -577,6 +579,10 @@ export const createAgentSessionLifecycle = ({
   },
   interrupt(command: InterruptAgentSessionRunCommand) {
     return store.transact(command.sessionId, (current) => interruptState(current, command));
+  },
+  interruptActiveRuns(at: number) {
+    requireTimestamp(at, 'Interrupt timestamp');
+    return store.interruptActiveRuns(at);
   },
   complete(command: CompleteAgentSessionRunCommand) {
     return store.transact(command.sessionId, (current) => completeState(current, command));

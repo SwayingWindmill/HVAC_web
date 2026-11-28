@@ -39,7 +39,6 @@ import {
   type GatewayToolAuthorizationReaderConfig,
   type RegistryOwnerReaderConfig,
 } from '../../tools/index.js';
-import { createAgentSessionEventStreamResponse } from '../../transport-events/index.js';
 import {
   createAgentSessionHttpHandler,
   type AgentSessionHttpAuthorizer,
@@ -122,6 +121,7 @@ export const createProductionAgentSessionRuntime = async (
     };
     const budget = requireBudget(options.budget);
     const lifecycle = createAgentSessionLifecycle({ store: persistence.agentSessionStateStore });
+    await lifecycle.interruptActiveRuns((options.now ?? Date.now)());
     const service = createAgentSessionService({
       lifecycle,
       engine: modelRuntime.engine,
@@ -154,7 +154,6 @@ export const createProductionAgentSessionRuntime = async (
       usage: persistence.agentUsageReader,
       authorizer: options.authorizer,
       service,
-      createEventStreamResponse: createAgentSessionEventStreamResponse,
     });
     return Object.freeze({
       service,

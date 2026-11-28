@@ -147,6 +147,7 @@ const baseOwnerContext = (
     },
     authorization,
     correlationId: context.correlationId,
+    ...(context.signal === undefined ? {} : { signal: context.signal }),
   };
 };
 

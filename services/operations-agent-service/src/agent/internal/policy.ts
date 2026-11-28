@@ -8,6 +8,7 @@ export interface AgentRunContext {
   readonly sessionId: string;
   readonly runId: string;
   readonly correlationId: string;
+  readonly signal?: AbortSignal;
 }
 
 export interface AgentModelRef {

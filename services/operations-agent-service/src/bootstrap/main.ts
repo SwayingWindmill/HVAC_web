@@ -192,10 +192,20 @@ const main = async () => {
   });
   server.listen(Number(process.env.AGENT_LISTEN_PORT ?? 8451));
 
-  // Readiness for the orchestrator; it carries no data.
+  // Liveness and readiness probes for the orchestrator; they carry no data.
   const diagnostics = createHttpServer((request, response) => {
-    if (request.url === '/health/ready') {
+    if (request.url === '/healthz') {
       response.writeHead(200).end();
+      return;
+    }
+    if (request.url === '/health/ready') {
+      void runtime.persistence.ping()
+        .then(() => {
+          response.writeHead(200).end();
+        })
+        .catch(() => {
+          response.writeHead(503).end();
+        });
       return;
     }
     if (request.url === '/metrics') {

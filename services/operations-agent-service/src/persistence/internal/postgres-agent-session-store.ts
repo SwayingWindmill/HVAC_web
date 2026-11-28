@@ -68,17 +68,88 @@ interface ToolExecutionRow extends QueryResultRow {
 }
 
 interface ArtifactRow extends QueryResultRow {
-  readonly artifact_payload: AgentSessionState['artifacts'][number];
-}
-
-interface SessionIdentityRow extends QueryResultRow {
   readonly session_id: string;
+  readonly artifact_payload: AgentSessionState['artifacts'][number];
 }
 
 const toSafeInteger = (value: string, label: string): number => {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) throw new Error(`${label} is outside the safe integer range.`);
   return parsed;
+};
+
+const freezeSessionState = (
+  sessionRow: SessionRow,
+  runsRows: readonly RunRow[],
+  messageRows: readonly MessageRow[],
+  executionRows: readonly ToolExecutionRow[],
+  artifactRows: readonly ArtifactRow[],
+): AgentSessionState => {
+  const session = Object.freeze({
+    id: sessionRow.session_id,
+    tenantId: sessionRow.tenant_id,
+    siteId: sessionRow.site_id,
+    agentDefinitionId: sessionRow.agent_definition_id,
+    createdBy: sessionRow.created_by,
+    revision: toSafeInteger(sessionRow.revision, 'Session revision'),
+    status: sessionRow.status,
+    activeRunId: sessionRow.active_run_id,
+    createdAt: toSafeInteger(sessionRow.created_at_ms, 'Session createdAt'),
+    updatedAt: toSafeInteger(sessionRow.updated_at_ms, 'Session updatedAt'),
+  }) as AgentSessionState['session'];
+
+  return Object.freeze({
+    session,
+    runs: Object.freeze(runsRows.map((row) => Object.freeze({
+      id: row.run_id,
+      sessionId: row.session_id,
+      modelRef: Object.freeze({ provider: row.model_provider, model: row.model_id }),
+      status: row.status,
+      startedAt: toSafeInteger(row.started_at_ms, 'Run startedAt'),
+      finishedAt: row.finished_at_ms === null ? null : toSafeInteger(row.finished_at_ms, 'Run finishedAt'),
+      usage: Object.freeze({
+        inputTokens: toSafeInteger(row.input_tokens, 'Run inputTokens'),
+        outputTokens: toSafeInteger(row.output_tokens, 'Run outputTokens'),
+        modelCalls: toSafeInteger(row.model_calls, 'Run modelCalls'),
+        toolCalls: toSafeInteger(row.tool_calls, 'Run toolCalls'),
+      }),
+      failureCode: row.failure_code,
+    }))),
+    messages: Object.freeze(messageRows.map((row) => Object.freeze({
+      id: row.message_id,
+      sessionId: row.session_id,
+      runId: row.run_id,
+      role: row.role,
+      content: row.content,
+      createdAt: toSafeInteger(row.created_at_ms, 'Message createdAt'),
+    }))),
+    toolExecutions: Object.freeze(executionRows.map((row) => Object.freeze({
+      id: row.tool_execution_id,
+      sessionId: row.session_id,
+      runId: row.run_id,
+      toolName: row.tool_name,
+      argumentsDigest: row.arguments_digest,
+      status: row.status,
+      startedAt: toSafeInteger(row.started_at_ms, 'ToolExecution startedAt'),
+      finishedAt: toSafeInteger(row.finished_at_ms, 'ToolExecution finishedAt'),
+      resultSummary: row.result_summary,
+      provenance: Object.freeze([...row.provenance]),
+      failureCode: row.failure_code,
+    }))),
+    artifacts: Object.freeze(artifactRows.map(({ artifact_payload }) => Object.freeze(artifact_payload))),
+  });
+};
+
+const groupBySessionId = <T extends { readonly session_id: string }>(
+  rows: readonly T[],
+): Map<string, T[]> => {
+  const grouped = new Map<string, T[]>();
+  for (const row of rows) {
+    const existing = grouped.get(row.session_id);
+    if (existing === undefined) grouped.set(row.session_id, [row]);
+    else existing.push(row);
+  }
+  return grouped;
 };
 
 const loadAgentSessionState = async (
@@ -120,66 +191,20 @@ const loadAgentSessionState = async (
     [sessionId],
   );
   const artifactsResult = await queryable.query<ArtifactRow>(
-    `SELECT artifact_payload
+    `SELECT session_id, artifact_payload
      FROM agent_operations.agent_artifacts
      WHERE session_id = $1
      ORDER BY created_at_ms, artifact_id`,
     [sessionId],
   );
 
-  const session = Object.freeze({
-    id: sessionRow.session_id,
-    tenantId: sessionRow.tenant_id,
-    siteId: sessionRow.site_id,
-    agentDefinitionId: sessionRow.agent_definition_id,
-    createdBy: sessionRow.created_by,
-    revision: toSafeInteger(sessionRow.revision, 'Session revision'),
-    status: sessionRow.status,
-    activeRunId: sessionRow.active_run_id,
-    createdAt: toSafeInteger(sessionRow.created_at_ms, 'Session createdAt'),
-    updatedAt: toSafeInteger(sessionRow.updated_at_ms, 'Session updatedAt'),
-  }) as AgentSessionState['session'];
-
-  return Object.freeze({
-    session,
-    runs: Object.freeze(runsResult.rows.map((row) => Object.freeze({
-      id: row.run_id,
-      sessionId: row.session_id,
-      modelRef: Object.freeze({ provider: row.model_provider, model: row.model_id }),
-      status: row.status,
-      startedAt: toSafeInteger(row.started_at_ms, 'Run startedAt'),
-      finishedAt: row.finished_at_ms === null ? null : toSafeInteger(row.finished_at_ms, 'Run finishedAt'),
-      usage: Object.freeze({
-        inputTokens: toSafeInteger(row.input_tokens, 'Run inputTokens'),
-        outputTokens: toSafeInteger(row.output_tokens, 'Run outputTokens'),
-        modelCalls: toSafeInteger(row.model_calls, 'Run modelCalls'),
-        toolCalls: toSafeInteger(row.tool_calls, 'Run toolCalls'),
-      }),
-      failureCode: row.failure_code,
-    }))),
-    messages: Object.freeze(messagesResult.rows.map((row) => Object.freeze({
-      id: row.message_id,
-      sessionId: row.session_id,
-      runId: row.run_id,
-      role: row.role,
-      content: row.content,
-      createdAt: toSafeInteger(row.created_at_ms, 'Message createdAt'),
-    }))),
-    toolExecutions: Object.freeze(executionsResult.rows.map((row) => Object.freeze({
-      id: row.tool_execution_id,
-      sessionId: row.session_id,
-      runId: row.run_id,
-      toolName: row.tool_name,
-      argumentsDigest: row.arguments_digest,
-      status: row.status,
-      startedAt: toSafeInteger(row.started_at_ms, 'ToolExecution startedAt'),
-      finishedAt: toSafeInteger(row.finished_at_ms, 'ToolExecution finishedAt'),
-      resultSummary: row.result_summary,
-      provenance: Object.freeze([...row.provenance]),
-      failureCode: row.failure_code,
-    }))),
-    artifacts: Object.freeze(artifactsResult.rows.map(({ artifact_payload }) => Object.freeze(artifact_payload))),
-  });
+  return freezeSessionState(
+    sessionRow,
+    runsResult.rows,
+    messagesResult.rows,
+    executionsResult.rows,
+    artifactsResult.rows,
+  );
 };
 
 const insertSession = async (client: PoolClient, state: AgentSessionState): Promise<void> => {
@@ -373,20 +398,60 @@ export const createPostgresAgentSessionStateStore = (
     return loadAgentSessionState(operationsPool, sessionId, false);
   },
   async list(tenantId: string, siteId: string, createdBy: string, limit: number) {
-    const sessions = await operationsPool.query<SessionIdentityRow>(
-      `SELECT session_id
+    const sessions = await operationsPool.query<SessionRow>(
+      `SELECT session_id, tenant_id, site_id, agent_definition_id, created_by,
+              revision, status, active_run_id, created_at_ms, updated_at_ms
        FROM agent_operations.agent_sessions
        WHERE tenant_id = $1 AND site_id = $2 AND created_by = $3
        ORDER BY created_at_ms DESC, session_id
        LIMIT $4`,
       [tenantId, siteId, createdBy, limit],
     );
-    const states: AgentSessionState[] = [];
-    for (const { session_id: sessionId } of sessions.rows) {
-      const state = await loadAgentSessionState(operationsPool, sessionId, false);
-      if (state !== null) states.push(state);
-    }
-    return Object.freeze(states);
+    if (sessions.rows.length === 0) return Object.freeze([]);
+    const sessionIds = sessions.rows.map(({ session_id }) => session_id);
+    const [runsResult, messagesResult, executionsResult, artifactsResult] = await Promise.all([
+      operationsPool.query<RunRow>(
+        `SELECT session_id, run_id, model_provider, model_id, status, started_at_ms,
+                finished_at_ms, input_tokens, output_tokens, model_calls, tool_calls, failure_code
+         FROM agent_operations.agent_runs
+         WHERE session_id = ANY($1::text[])
+         ORDER BY session_id, started_at_ms, run_id`,
+        [sessionIds],
+      ),
+      operationsPool.query<MessageRow>(
+        `SELECT message_id, session_id, run_id, role, content, created_at_ms
+         FROM agent_operations.agent_messages
+         WHERE session_id = ANY($1::text[])
+         ORDER BY session_id, created_at_ms, message_id`,
+        [sessionIds],
+      ),
+      operationsPool.query<ToolExecutionRow>(
+        `SELECT tool_execution_id, session_id, run_id, tool_name, arguments_digest, status,
+                started_at_ms, finished_at_ms, result_summary, provenance, failure_code
+         FROM agent_operations.agent_tool_executions
+         WHERE session_id = ANY($1::text[])
+         ORDER BY session_id, started_at_ms, tool_execution_id`,
+        [sessionIds],
+      ),
+      operationsPool.query<ArtifactRow>(
+        `SELECT session_id, artifact_payload
+         FROM agent_operations.agent_artifacts
+         WHERE session_id = ANY($1::text[])
+         ORDER BY session_id, created_at_ms, artifact_id`,
+        [sessionIds],
+      ),
+    ]);
+    const runsBySession = groupBySessionId(runsResult.rows);
+    const messagesBySession = groupBySessionId(messagesResult.rows);
+    const executionsBySession = groupBySessionId(executionsResult.rows);
+    const artifactsBySession = groupBySessionId(artifactsResult.rows);
+    return Object.freeze(sessions.rows.map((sessionRow) => freezeSessionState(
+      sessionRow,
+      runsBySession.get(sessionRow.session_id) ?? [],
+      messagesBySession.get(sessionRow.session_id) ?? [],
+      executionsBySession.get(sessionRow.session_id) ?? [],
+      artifactsBySession.get(sessionRow.session_id) ?? [],
+    )));
   },
   transact(
     sessionId: string,
@@ -400,6 +465,21 @@ export const createPostgresAgentSessionStateStore = (
       return next;
     });
   },
+  async interruptActiveRuns(at: number) {
+    const result = await operationsPool.query(
+      `UPDATE agent_operations.agent_runs r
+       SET status = 'FAILED',
+           finished_at_ms = $1,
+           failure_code = 'RUN_INTERRUPTED'
+       FROM agent_operations.agent_sessions s
+       WHERE s.session_id = r.session_id
+         AND s.status = 'ACTIVE'
+         AND s.active_run_id = r.run_id
+         AND r.status = 'RUNNING'`,
+      [at],
+    );
+    return result.rowCount ?? 0;
+  },
 });
 
 export interface PostgresAgentSessionPersistenceOptions {
@@ -410,6 +490,7 @@ export interface PostgresAgentSessionPersistenceOptions {
 export interface PostgresAgentSessionPersistence {
   readonly agentSessionStateStore: AgentSessionStateStore;
   readonly agentUsageReader: AgentUsageReader;
+  ping(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -426,6 +507,9 @@ export const createPostgresAgentSessionPersistence = (
   return Object.freeze({
     agentSessionStateStore: createPostgresAgentSessionStateStore(pool),
     agentUsageReader: createPostgresAgentUsageReader(pool),
+    async ping() {
+      await pool.query('SELECT 1');
+    },
     close: () => pool.end(),
   });
 };

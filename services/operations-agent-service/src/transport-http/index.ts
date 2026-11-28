@@ -1,3 +1,4 @@
+export { createAgentSessionEventStreamResponse } from './internal/agent-session-events.js';
 export {
   createAgentSessionHttpHandler,
   type AgentSessionHttpAuthorizationInput,

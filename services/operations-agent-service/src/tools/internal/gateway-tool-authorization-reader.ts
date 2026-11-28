@@ -57,6 +57,7 @@ export const createGatewayToolAuthorizationReader = (
           runId: context.runId,
           request,
         }),
+        ...(context.signal === undefined ? {} : { signal: context.signal }),
       });
       if (!isRecord(result)
         || !hasExactKeys(result, ['delegationGrant', 'policyRevision'])

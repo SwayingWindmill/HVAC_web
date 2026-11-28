@@ -1,5 +1,6 @@
 import type {
   AgentEngine,
+  AgentEngineResult,
   AgentEvent,
   AgentEventSink,
   AgentModelRef,
@@ -214,18 +215,33 @@ export const createAgentSessionService = ({
       sessionId: started.session.id,
       runId: run.id,
       correlationId: context.correlationId,
-    });
-    const result = await engine({
-      session: started.session,
-      run,
-      messages: started.messages,
-      tools: createTools(context, runContext),
-      context: runContext,
-      site: () => describeSite(context, runContext),
-      budget,
       signal: controller.signal,
-      emit: ((event) => publish(started.session.id, event)) satisfies AgentEventSink,
     });
+    let result: AgentEngineResult;
+    try {
+      result = await engine({
+        session: started.session,
+        run,
+        messages: started.messages,
+        tools: createTools(context, runContext),
+        context: runContext,
+        site: () => describeSite(context, runContext),
+        budget,
+        signal: controller.signal,
+        emit: ((event) => publish(started.session.id, event)) satisfies AgentEventSink,
+      });
+    } catch {
+      if (controller.signal.aborted) return;
+      result = Object.freeze({
+        runStatus: 'FAILED',
+        sessionStatus: 'FAILED',
+        failureCode: 'ENGINE_EXECUTION_FAILED',
+        usage: run.usage,
+        finalizedMessages: Object.freeze([]),
+        toolExecutions: Object.freeze([]),
+        artifacts: Object.freeze([]),
+      });
+    }
 
     if (result.runStatus === 'CANCELLED') return;
     const terminalRun: AgentRun = Object.freeze({
@@ -273,11 +289,15 @@ export const createAgentSessionService = ({
       settled: false,
     };
     liveRuns.set(started.session.id, live);
-    void finishRun(context, started, run, controller).finally(() => {
-      live.settled = true;
-      const current = liveRuns.get(started.session.id);
-      if (current === live && current.listeners.size === 0) liveRuns.delete(started.session.id);
-    });
+    void finishRun(context, started, run, controller)
+      .catch(async () => {
+        await lifecycle.interrupt({ sessionId: started.session.id, runId: run.id, at: now() }).catch(() => undefined);
+      })
+      .finally(() => {
+        live.settled = true;
+        const current = liveRuns.get(started.session.id);
+        if (current === live && current.listeners.size === 0) liveRuns.delete(started.session.id);
+      });
   };
 
   // A question and the Run it starts share one time, so the panel never orders the answer first.

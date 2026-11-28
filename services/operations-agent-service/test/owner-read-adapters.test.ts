@@ -1107,3 +1107,34 @@ test('Device Telemetry reader accepts SLEEPING displayState', async () => {
   assert.equal(result.payload.displayState, 'SLEEPING');
   assert.equal(result.quality, 'STALE');
 });
+
+test('Owner reader aborts in-flight fetch immediately when caller AbortSignal fires', async () => {
+  const controller = new AbortController();
+  let observedSignal = null;
+  const reader = createRegistryOwnerReader({
+    baseUrl: 'https://registry.internal',
+    requestTimeoutMs: 30_000,
+    fetchImplementation: async (_input, init) => {
+      observedSignal = init?.signal ?? null;
+      return await new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('aborted', 'AbortError'));
+        }, { once: true });
+      });
+    },
+  });
+
+  const startedAt = Date.now();
+  const pending = reader.read({
+    request: { tool: 'registry.getSite', requestId: 'req-abort-1', input: { siteId } },
+    context: { ...context, signal: controller.signal },
+  });
+  controller.abort();
+
+  await assert.rejects(
+    pending,
+    (error) => error instanceof OwnerReadError && error.code === 'OWNER_READ_UNAVAILABLE',
+  );
+  assert.equal(observedSignal?.aborted, true);
+  assert.equal(Date.now() - startedAt < 2_000, true);
+});

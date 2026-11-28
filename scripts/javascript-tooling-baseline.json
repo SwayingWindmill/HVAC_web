@@ -10,11 +10,11 @@
   "allowedLegacyRoots": {
     "scripts/": {
       "fileCount": 86,
-      "maxBytes": 1063079
+      "maxBytes": 1063057
     }
   },
   "fileCount": 86,
-  "maxBytes": 1063079,
+  "maxBytes": 1063057,
   "policyNotes": [
     "New repository tooling should use TypeScript rather than growing the reviewed legacy JavaScript caps.",
     "Product/runtime source must not use this baseline as an exception mechanism.",

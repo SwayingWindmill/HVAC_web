@@ -238,10 +238,14 @@ const adaptProjectTool = (
     }
     state.active += 1;
     try {
+      const effectiveSignal = signal ?? runSignal;
+      const toolContext = effectiveSignal === context.signal
+        ? context
+        : Object.freeze({ ...context, signal: effectiveSignal });
       const result = await tool.execute({
-        context,
+        context: toolContext,
         arguments: parameters,
-        signal: signal ?? runSignal,
+        signal: effectiveSignal,
       });
       const serialized = JSON.stringify(result);
       if (Buffer.byteLength(serialized, 'utf8') > state.budget.maxToolResultBytes) {

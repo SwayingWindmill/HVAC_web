@@ -6,6 +6,8 @@ import {
   type AgentUsageReader,
   type AuthorizationDecision,
 } from '../../application/index.js';
+import { createAgentSessionEventStreamResponse } from './agent-session-events.js';
+
 export interface AgentSessionHttpAuthorizationInput {
   readonly method: string;
   readonly path: string;
@@ -24,7 +26,7 @@ export interface AgentSessionHttpOptions {
   readonly authorizer: AgentSessionHttpAuthorizer;
   readonly service: AgentSessionService;
   readonly usage: AgentUsageReader;
-  readonly createEventStreamResponse: (
+  readonly createEventStreamResponse?: (
     service: AgentSessionService,
     context: AgentSessionAccessContext,
     sessionId: string,
@@ -254,6 +256,7 @@ const contextFromAuthorization = (
 };
 
 export const createAgentSessionHttpHandler = (options: AgentSessionHttpOptions): AgentSessionHttpHandler => {
+  const createEventStreamResponse = options.createEventStreamResponse ?? createAgentSessionEventStreamResponse;
   const maximumRequestBytes = options.maximumRequestBytes ?? defaultMaximumRequestBytes;
   if (!Number.isSafeInteger(maximumRequestBytes) || maximumRequestBytes <= 0) {
     throw new Error('maximumRequestBytes must be a positive safe integer.');
@@ -320,7 +323,7 @@ export const createAgentSessionHttpHandler = (options: AgentSessionHttpOptions):
         if (route.kind === 'GET') return jsonResponse(200, await options.service.get(context, sessionId));
         if (route.kind === 'STREAM') {
           await options.service.get(context, sessionId);
-          return options.createEventStreamResponse(options.service, context, sessionId);
+          return createEventStreamResponse(options.service, context, sessionId);
         }
         const body = await readBody(request, maximumRequestBytes);
         if (route.kind === 'START') {
