@@ -1,107 +1,89 @@
 # AGENTS.md
 
-商用 HVAC 智能节能平台，第一个场景是冷站。React SPA + Go 后端，第一阶段部署在一台 Linux 服务器上（Docker Compose）。这里是在本仓库写代码和文档的规则；和代码冲突时以代码为准。
+商用 HVAC 智能节能平台（React SPA + 微信小程序 + Go 后端 + Node AI 助手 + Python 求解器），Phase 1 单机 Docker Compose 部署。规则与代码冲突时以代码为准；涉及本项目业务名词、架构、设计或运维约定时优先检索本地文档而非依赖预训练习惯。
 
-## 先读什么
+## 本地文档索引
 
-- **流程与断点交接以 `pstack`（`.agents/skills/poteto-mode/SKILL.md`）为准**：先读对应剧本，派发子 Agent 时首行令其先读 `.agents/skills/poteto-mode/worker.md`，断点续跑走 `poteto-mode/playbooks/session-pickup.md`（优先查 `resume.ts` 断点，再看会话记录、活跃分支和开放 PR）；需求与待办认领只看 GitHub Issues（`docs/agents/issue-tracker.md`），不再把 `docs/HANDOFF.md` 当作任务排期队列。
-- `GLOSSARY.md` 和 `docs/adr/`：业务名词和架构决定。动一个领域的代码前，读相关的名词和决定。
-- `docs/specs/`：每个功能做什么、不做什么、怎么验收。
-- `DESIGN.md`：页面的设计系统。`PRODUCT.md`：用户是谁、要完成什么、哪些安全边界不能碰。
-- `docs/HANDOFF.md` 与 `docs/agents/local-environment.md`：仅在涉及服务器（`139.199.58.47`）已部署状态/待执行运维操作、松雅轩现场点位约束或本地环境偏差与已知坑时查阅。
+| 路径 | 何时先读 |
+| --- | --- |
+| `GLOSSARY.md`、`docs/adr/` | 改动业务领域代码前，对齐业务名词与架构决策 |
+| `docs/specs/`、`PRODUCT.md` | 核对功能边界、验收标准与产品安全红线 |
+| `DESIGN.md`、`apps/hvac-web/AGENTS.md` | 改动网页 UI、路由、状态或跑浏览器/1440px 验收前 |
+| `apps/hvac-miniprogram/AGENTS.md` | 改动微信小程序、审核隔离页或共享域模型前 |
+| `services/operations-agent-service/AGENTS.md` | 改动 AI 助手工具、会话、租户 RLS 或 `evals/` 前 |
+| `deploy/platform/phase1/README.md`、`docs/agents/local-environment.md` | 改动 Compose、PostgreSQL/ClickHouse 迁移或本地 `hvac-local` 环境前 |
+| `docs/HANDOFF.md` | 仅查生产服务器（`139.199.58.47`）、松雅轩现场点位与本地环境偏差（不作任务队列） |
+| `docs/agents/issue-tracker.md`、`docs/agents/issue-delivery.md`、`.agents/skills/poteto-mode/SKILL.md`、`.agents/skills/hao-mode/SKILL.md` | 认领 GitHub Issues、断点续跑与标准交付流 |
 
-## 仓库结构
+## 双平台分工与快速验证命令
 
-- `apps/hvac-web/`：唯一的网页
-- `apps/hvac-miniprogram/`：值班人员用的微信小程序（原生小程序 + TypeScript，见它的 README）
-- `cmd/`：可执行进程。`energy-api` 是平台网关，`telemetry-worker` 接收读数、实时推送、写历史、把电表读数算成用电量
-- `modules/`：各业务领域的代码和数据表，每类业务数据只由一个模块（它的负责方）修改；`services/`：单独部署的服务；`libs/`：共享库
-- `contracts/`：接口定义和「哪类数据归哪个模块」的登记；`infra/`：数据库迁移；`deploy/platform/phase1/`：Compose、迁移清单、镜像
-- `tools/eg8200-simulator/`：冷站模拟器，本地实时数据的来源
-
-## 命令
-
-代码构建、测试、Go、Docker 和浏览器验收在 WSL 的 `/mnt/e/Code/HVAC_web`（Windows 侧是 `E:\Code\HVAC_web`）运行；代码定位、文件读取和 `git` 查询直接留在 Windows 侧完成，减少跨子系统启动和命令审核停顿。
+- **Windows 侧**：代码定位先用 `codegraph_explore`（见 `docs/agents/codegraph.md`）；用 `read_file` 并行读切片（`150–250` 行）；查历史与全文直接跑单条 `git` 命令（不拼管道/`&&`/`||`）；推送用 Windows `git push`（WSL 访问 GitHub 有 TLS 问题）。
+- **WSL 侧（`/mnt/e/Code/HVAC_web`）**：执行 Node/npm、Go、Docker、Playwright 与 `gh`；`apps/hvac-web` 拒绝 Windows Node；多条命令先写入临时脚本再跑单条 `wsl -e bash -lc "bash <脚本路径>"`（遇 `WSAETIMEDOUT` 重试）。
 
 ```bash
-npm run check                                            # 仓库静态门禁与构建检查
-npm run preflight                                        # 提交/推送前一键预检（支持 --dry-run / --skip-e2e）
-npm run migrations:sync                                  # 由 manifest.v1.json 同步生成 migration-list.tsv、Dockerfile 与 compose.yaml
-npm run domain:run -- --domain=<域>                      # 按改动域跑门禁（见 scripts/domain-task-matrix.ts）
-npm run verify:doctor                                    # 检查 WSL Node、Linux Chromium 与验证端口（5190/5194/8443）
-npm run verify:live -- --slug=<标识> --route=<路径>     # Tier-2 实库网页 1440px 截图与错误门禁（无 8443 时返回退出码 2）
-npm run operations-agent:eval -- --only=<题号>         # Tier-2 AI 助手 Bearer 会话 CLI 评测（凭据靠环境变量，不进命令行）
-npm -w @hvac/web run typecheck
-npm -w @hvac/web run build
-npm run web:shell:test && npm run web:model:test         # 网页的单元测试
-npm run web:e2e                                          # 浏览器测试：录制的网关数据，不需要后端
-go vet ./modules/telemetry/... && go test ./modules/telemetry/...  # 根模块下直接按路径执行（go.work 另有 9 个独立模块）
-npm run command:formal                                   # 控制指令与 MQTT 关联状态机形式化模型检验（command-safety）
-npm run go:lint && npm run security:go-vuln              # 改了 Go 代码或依赖后：静态检查、漏洞扫描
-npm run deployment:phase1:check                          # 改了 Compose 或迁移清单后
+# 秒级单文件 / 局部验证（WSL 执行）
+go test -run <TestName> ./modules/<域>/...                                 # 根 Go 模块（含 cmd/modules/services/libs/tools）
+node scripts/run-go.mjs test -run <TestName> ./cmd/wecom-alert-adapter/...  # go.work 唯一独立子模块
+node --experimental-strip-types --test scripts/test-<名称>.ts                # Web 模型/壳层/治理脚本单测（也支持 .mjs）
+npm run web:e2e -- e2e/<名称>.spec.ts                                       # 录制网关单 Spec（并行/worktree 加 CI=1 PLAYWRIGHT_PORT=5194）
+npm -w @hvac/miniprogram run test                                           # 小程序双类型检查 + 共享同步校验 + 全套单测
+npm --prefix services/operations-agent-service run check                    # AI 助手契约 + 类型 + 模块边界 + 全套单测
+PYTHONPATH=services/ai-solver-service python3 -m unittest services/ai-solver-service/tests/test_solver.py  # Python 求解器单文件测试
+
+# 提交前门禁与实库验收（WSL 执行）
+npm run check                                                               # 静态治理 + 脚本类型 + 设计 AST/DAG + Web 构建 + 小程序检查
+npm run preflight -- --skip-e2e                                             # 按改动文件自动跑对应 contracts + unit（支持 --dry-run）
+npm run domain:run -- --domain=<域>                                         # 按 scripts/domain-task-matrix.ts 跑指定域
+npm run command:formal                                                      # 改控制指令/MQTT/设备围栏必跑形式化检验
+npm run go:lint && npm run security:go-vuln                                 # 改 Go 代码或依赖必跑
+npm run verify:doctor                                                       # 检查 WSL Node、Chromium 与 5190/5194/8443 端口
+npm run verify:live -- --slug=<标识> --route=<路径>                         # Tier-2 实库 1440px 巡检与截图（无 8443 返回退出码 2）
+npm run operations-agent:eval -- --only=<题号>                              # Tier-2 AI 助手 CLI 评测（凭据只走环境变量）
 ```
 
-- **搜索与上下文**：先用 `codegraph_explore`（见 `docs/agents/codegraph.md`）；查文本、列文件或看历史时直接跑单条 Git 命令（`git grep -n`、`git ls-files`、`git diff`、`git log`、`git show`），留在原平台执行，不拼管道（`|`）、`&&` 或 `||`。
-- **读文件与汇报**：用 `read_file` 并行读取相关的 `150–250` 行（`300` 行以内整文件一次读完）；回复只列结论、路径和实际跑过的验证结果。
-- 交 PR 前，把 `scripts/domain-task-matrix.ts` 里和改动相关的命令在本地跑一遍；Windows 上 `git push`、`gh` 在 WSL 里运行。
-- 浏览器测试的接口数据在 `apps/hvac-web/e2e/fixtures/`（从本地环境录制、已脱敏），写操作由 `e2e/gateway.ts` 按负责那类数据的模块的规则模拟。页面改了接口调用，同步改测试桩。
-- 日志里的 `error` 字段一律显示为 `[REDACTED]`；调试临时加的 `[DEBUG-*]` 字段须在提交前清理（`npm run repo:check` 拦截）。
-- 从 Windows 调 WSL 且需要多条 shell 语句时，先写成脚本文件再跑单条 `wsl -e bash -lc "bash <脚本路径>"`；偶发 `WSAETIMEDOUT` 时重试。
-- `deploy/platform/phase1/runtime/**` 里是密钥和凭据：只按路径引用，不打印、不提交、不改权限。
+- PR 门禁会对 Go 单测启用 `-race`；WSL 缺少 `gcc` 时，用 `golang:1.27.4-bookworm` 容器复现（见 `docs/HANDOFF.md`）。
 
-## 写代码
+## 架构不变量与生成物红线
 
-- **删掉旧路径。** 功能改了，旧的代码路径直接删，不留兼容层、回退或迁移代码。
-- **从最小的可用版本做起。** 先做一个从头到尾能用的版本，再一层层加；每一步之后产品都还能用。
-- **只写现在需要的。** 目录和抽象只描述已经存在的复杂度；将来的需求等它真的来了再加。
-- **做长期的决定。** 选一个经得起时间的方案，不做「先凑合、以后再换」。
-- **先用已有依赖和成熟的库。** 先看项目里已有的依赖能不能做，查它的文档和类型再下结论；确实要新加时，选维护良好的，固定版本。
-- **参照外部实现时读源码。** 设备接入、遥测、告警、资产、报表、权限、能源管理这类功能，动手前看 ThingsBoard、OpenEMS、MyEMS 的实际代码（固定版本的记录在 `docs/architecture/references/`）；工程工作流改造见 `docs/architecture/pstack-source-review-2026-11-13.md`。借鉴时固定版本和提交，读源码、测试和官方文档，在 `docs/architecture/` 里简短记下采纳、改造或拒绝了什么、为什么。已有代码和参照实现冲突、又说不出更好的理由时，按参照实现改。
+- **Go 模块与分层**：`go.work` 仅保留 `.` 与 `cmd/wecom-alert-adapter`（禁新建并行子模块）；`repo:check` 校验 `go1.27.4` `gofmt`；`ownership:check` 守住单写者表归属（`contracts/ownership/data-ownership.v1.json`）、Go 纵向分层（`libs` 不上引、`modules`/`services` 不引 `cmd`/`tools`、`cmd/edge-gateway` 非测试与 `tools/*` 不引 `modules`/`services`）及规范 `libs/uuidv7`。
+- **网关路由白名单**：网关仅放行 `contracts/ownership/route-ownership.v1.json` 登记的路由；未进 OpenAPI 契约的新增路由必须手工补登，集成测试不会替你拦截。
+- **迁移双向冻结与 ClickHouse**：PostgreSQL（`migration-list.tsv`）与 ClickHouse（`clickhouse-migration-list.tsv`）已登记 SQL 一字节不可改，改表结构只能新增业务主题命名迁移（PG 登记进 `manifest.v1.json` 后跑 `npm run migrations:sync`）；ClickHouse 查询须匹配最小权限角色并遵守 `clickhouse:sql:check`。
+- **不可手改的生成物与同步镜像（改源头后执行对应命令）**：
+  - `npm run contracts:generate` → `cmd/energy-api/internal/platformapi/api.gen.go`、`apps/hvac-web/src/api/generated/platformGateway.gen.ts`
+  - `npm run telemetry:contracts:generate` → `modules/telemetry/pkg/telemetryapi/api.gen.go`、`apps/hvac-web/src/api/generated/s2Telemetry.gen.ts`
+  - `npm run operations-agent:contracts:generate` → `apps/hvac-web/src/api/generated/operationsAgentSessions.gen.ts`、`services/operations-agent-service/src/agent/internal/session-contract.gen.ts`、`cmd/energy-api/internal/gateway/operations_agent_contract_gen.go`
+  - `npm run semantic:catalog:generate` → `libs/analyticsmodel/semantic_catalog.json`、`services/operations-agent-service/src/tools/internal/semantic-catalog.gen.ts`
+  - `npm run migrations:sync` → `deploy/platform/phase1/migrations/{migration-list.tsv,Dockerfile}`、`infra/registry/compose.yaml`
+  - `npm -w @hvac/miniprogram run sync` → `apps/hvac-miniprogram/miniprogram/shared/*`
+  - `npm run eg8200:config:generate` → `tools/eg8200-simulator/configs/central-plant.local.json`
+  - 自动/镜像维护：`apps/hvac-web/src/routeTree.gen.ts`（Vite 插件生成）；`.agents/skills/**` ↔ `.claude/skills/**`（逐字节 1:1 镜像，`repo:check` 强校验）。
 
-## 测试
+## 编码、防过度设计与核实准则
 
-- 测试守住约定：接口和数据格式、安全和数据规则、权限边界、用户看得到的行为，以及出现过的回归。覆盖率、实现细节和简单的 getter 不是测试的对象。
-- 每条要求用最少的、直接测行为的测试证明。
-- 约定变了（例如接口少了一个字段），就改或删旧测试，让代码保持干净。
+- **最小外科手术改动**：只做目标需要的变更，功能替换时直接删掉旧路径，不留兼容层、双写或废弃开关；优先复用仓库既有依赖与工具（借鉴外部实现时先读固定版本源码并简记于 `docs/architecture/`）；不确定需求边界或核心方案分叉时先沟通，不静默假设或过度抽象。
+- **精准防御与测试**：校验、重试与兜底仅放在信任边界、外部 I/O、并发、数据损坏与控制安全处，失败直接报错；测试只守契约、权限边界、状态机与历史回归，约定变更同步改/删旧测试。
+- **全栈接通自查**：新增后端能力须接到 `cmd/` 真实主链路与配置；改接口或共享域模型时同步核对 `apps/hvac-web` 与 `apps/hvac-miniprogram` 是否需联动，并更新 `apps/hvac-web/e2e/fixtures/` 与 `e2e/gateway.ts`。
+- **日志、固化与文档**：运行日志 `error` 字段固定脱敏为 `[REDACTED]`，排查优先写局部复现测试（临时 `[DEBUG-*]` 提交前清零）；同一错误或纠错出现两次走 `/correct` 固化为架构/类型/门禁；文档用中文大白话 + `GLOSSARY.md`，用户可见变更写 `changelog.d/YYYY-MM-DD-<slug>.md`（汇总用 `npm run changelog:release`）。
 
-## 防御和报错
+## 三层操作边界
 
-- 校验、重试、默认值和兜底只放在真实会失败的地方：信任边界、外部 I/O、并发、数据损坏、安全攸关的规则。类型、schema、数据库约束或上游接口已经排除的情况，信任它们。
-- 失败要明确报出来：抛出或返回错误，让调用方和用户看到错误状态。
+### Always（直接闭环执行）
+- 只读侦察、本地构建/单测/形式化检验、运行代码生成与同步脚本、修复 CI 失败。
+- 特性分支验证通过后直接 Windows `git push` + WSL `gh pr create` + `gh pr checks --watch`，CI 全绿即自动 `gh pr merge --squash --delete-branch`（用户显式要求保留或堆叠 PR 除外）。
 
-## 门禁（CI 检查）
+### Ask first（必须先征得确认）
+- 触发生产发布（`deploy-production.yml`、服务器 `139.199.58.47` 或松雅轩现场 EG8200 实操）。
+- 重置或销毁数据（`npm run local:reset`、`docker compose down -v`、删库删表）。
+- 对外发消息（企业微信/微信/邮件/公开渠道），或改变产品核心方向与现场点位基线。
 
-- 一条规则用一个最小的检查守住，只跑和改动相关的领域。
-- **被纠正两次的错误必须固化，不靠堆文档叮嘱。** 同一类错误出现两次，或靠人手同步两份清单维持一致时，按 `correct` 技能依次用「单一事实源/架构消除 → 编译期类型约束 → 报错直接写明改法的检查 → 行为测试」消掉，不再往本文或 `docs/HANDOFF.md` 写文字叮嘱。每新加一条检查，先在真实旧错误上证明它会失败。
-- 门禁只运行 `scripts/domain-task-matrix.ts` 里登记的命令，集成脚本只跑它用 `-run` 点名的 Go 测试。新检查要登记进去才会运行；不会运行的检查会悄悄过时，删掉它。
-- 检查只看代码和配置，文档的措辞靠审查。
+### Never（绝对禁止）
+- 读取、打印、提交或改权限受保护密钥：`deploy/platform/phase1/runtime/**`、`deploy/platform/phase1/environments/*.runtime.env`、`deploy/platform/phase1/observability/{wecom-webhook-url,smtp.env,smtp-password}`。
+- 手改上述生成物、同步镜像或已冻结的 PostgreSQL/ClickHouse 迁移 SQL。
+- 直推 `main`、`git push --force`、`git reset --hard`、`git clean -f`、`git checkout .`；在业务 PR 直改 `CHANGELOG.md` `## 未发布` 正文。
+- 靠删测试、加忽略注释或调松棘轮基线（`scripts/*-baseline.json`）换取绿灯；在 `.agents/` 新增 JS 或破坏 `.agents/skills` ↔ `.claude/skills` 镜像。
 
-| 规则 | 由什么自动守住 |
-| --- | --- |
-| 脚本严格类型检查、遗留 JS 数量与字节上限（见 `scripts/javascript-tooling-baseline.json`，禁止 `.agents/` 新增 JS）、`.agents/skills` 与 `.claude/skills` 逐字节镜像一致、`verify/features` 全覆盖与四段结构、禁止跟踪 `.audit/` 与代码残留 `[DEBUG-*]`、`docs/HANDOFF.md` 单次读取上限（`<= 28 KiB`）、Go 测试 `time.Sleep` 棘轮与并发日志无保护 `bytes.Buffer` 拦截、`changelog.d/` 碎片格式与禁止在业务 PR 直改 `CHANGELOG.md` `## 未发布` 正文 | `npm run typecheck:scripts`、`npm run repo:check` 与 `npm run changelog:check`（`tsconfig.scripts.json`、`scripts/check-repository-governance.ts`、`scripts/check-go-test-hygiene.ts`、`scripts/changelog-fragments.ts`） |
-| 破坏性 Git 命令、打印运行密钥与未授权生产发布/重置本地库拦截 | `.agents/hooks.json` + `.claude/settings.json`（`scripts/hooks/pre-tool-guard.ts`，由 `npm run pr:gates:test` 测试） |
-| 页面组合语法（`DataTableBlock`、禁止 `<main>`、`FactTile` 禁用 `className`、禁 `<Button variant="secondary">`）、`DESIGN.md` §1 禁用文案、全前端禁裸 `fetch`（仅允许 `api/gateway-client.ts` 与 `api/identity-sign-in.ts`）/ 禁 `createPlatformGatewayClient()` 散落实例（统一 `@/api/platform-client`）/ feature/route 禁 `new WebSocket()`、禁 `components/ui/` 外 `"use client"` / `transition-all`、禁 `@ts-ignore` / `eslint-disable` / `console.log` / `JSON.parse(JSON.stringify(...))`、`as unknown as` 与 `features/**` 非 `const` `as` 清零 + 存量 `as` 棘轮（`scripts/web-as-cast-baseline.json`）、禁 `nuqs` 与 `features/**` 直连 `sonner`、前端模块无环（Tarjan SCC）与四层依赖方向、前端单文件行数棘轮（`scripts/web-file-lines-baseline.json` `600` 行）、禁死类 `.real-shell-*`、循环动画须带 `motion-safe:`/`motion-reduce:animate-none`、禁硬编码 `calc(100s?vh-<N>px)`、禁无依赖数组 `useEffect`/`useLayoutEffect`、禁 ASCII `--` 缺值占位、`routeTree.gen.ts` 新鲜度、`Enter` 输入法防误触、预渲染防主题闪烁脚本、`color-scheme` 与浅/深双主题 WCAG 对比度 | `npm run design:check`（`scripts/check-design-system.ts`）与 `scripts/test-real-design-tokens.ts` |
-| 权限目录与内置角色展示同 IAM 契约严格一致 | `npm -w @hvac/web run typecheck` 与 `npm run web:principal:contract`（`scripts/test-rms-principal-capability-contract.mjs`） |
-| 网关路由负责方、数据表负责方、迁移清单唯一事实源（`manifest.v1.json` 同步 `migration-list.tsv`/`Dockerfile`/`compose.yaml`）、冻结迁移、表命名及中文 `COMMENT ON`、ClickHouse SQL 方言（别名遮蔽 / 保留字 / `fmt.Sprintf` 占位符） | `npm run ownership:check`、`npm run migrations:sync:check`、`npm run migrations:freeze:check`、`npm run migrations:conventions:check`、`npm run clickhouse:sql:check` |
-| 控制指令授权、执行围栏、MQTT 提交点、超时核验、设备冻结与回执恢复队列不变量 | `npm run command:formal`（`modules/command/pkg/commandformal` + `.agents/skills/command-safety/SKILL.md`） |
+## 多会话协作与交付流程
 
-## 网页和数据库
-
-- **改网页**前读 `apps/hvac-web/README.md`「约定」（技术栈、状态归属、组件、只显示真实数据、1440px 真实数据验收）和 `DESIGN.md`。
-- **改表结构**前读 `deploy/platform/phase1/README.md`「数据库和迁移」：新增迁移只需登记到 `manifest.v1.json` 并运行 `npm run migrations:sync` 自动生成 `migration-list.tsv`、`migrations/Dockerfile` 与 `infra/registry/compose.yaml`；迁移已经冻结，登记过的迁移不能再改，改表结构只能新增迁移。
-
-## 写文档
-
-- 用中文和具体的大白话：说清楚谁会看到什么、哪个数字会变，用事情本身代替抽象名词（写「把电表读数算成用电量」，而不是「投影」）；讲规则时给一个例子，例如「日期按站点本地日期，首尾都算：10 月 13 日到 16 日就是四整天」。
-- 业务概念用 `GLOSSARY.md` 里的词；专业词第一次出现时用一句话解释，或换成日常说法；代码里的名字（函数、字段、命令、路径）照原样写。
-- 只写现在成立的事：过时的直接改掉或删掉，历史留在 git 里。状态写「已采纳」「已实现」「还没做」这类现在的状态；阶段代号（S0–S5）和「目标态」「候选」这类标签换成具体的现状。
-- 调研和参照比对的记录，只在被现行的 ADR、规格、HANDOFF 或代码引用时保留。
-- 新的架构决定只在难以撤回、不看背景会让人意外、又确实在几个方案里做了取舍时写 ADR；格式和名词的维护见 `docs/agents/domain.md`。
-- 用户看得到的变化在 `changelog.d/YYYY-MM-DD-<slug>.md` 新增独立碎片（格式见 `changelog.d/README.md`，禁止直接在业务 PR 编辑 `CHANGELOG.md` `## 未发布` 正文；汇总发布时运行 `npm run changelog:release`）；只在实际改动了服务器部署前提、松雅轩现场基线或本地环境偏差时同步更新 `docs/HANDOFF.md`（不再在其中维护开发计划或写文字规则）。
-
-## 交付和 Git
-
-- 认领问题单、看标签、更新进度读 `docs/agents/issue-tracker.md` 和 `docs/agents/triage-labels.md`；实际开工、中途暂停/续跑与收尾均按 `.agents/skills/poteto-mode/SKILL.md` 对应 `pstack` 剧本（配合 `docs/agents/issue-delivery.md` 的仓库门禁）执行。
-- `main` 只通过 PR 合并。每项阶段性工作一个分支，用 Conventional Commits 写清楚原因；本地检查与审查完成后直接推分支、开 PR、盯完 GitHub Actions：CI 全绿即自动 squash 合并进 `main` 并清理分支，CI 失败则直接修复重跑直到全绿合并。
-- 文本文件统一 LF（见 `.gitattributes`）；构建产物和二进制留在仓库外。
-- `git push` 用 Windows 侧的 git（WSL 访问 GitHub 有 TLS 问题）；`gh` 用 WSL 里已登录的那份。
+- **多会话防撞**：改代码前先查 `git status` 与当前分支；主工作区脏或不在 `main` 时切独立 worktree 作业，合并后清理临时 worktree。
+- **流程与子 Agent**：任务按 `pstack`（`.agents/skills/poteto-mode/SKILL.md`）与 `hao-mode` 推进；派发任何子 Agent 提示词首行必须写 `Read <abs-path-to-poteto-mode>/worker.md before anything else.`。
+- **文本与产物**：文本文件统一 LF（见 `.gitattributes`），构建产物与二进制留在仓库外。
