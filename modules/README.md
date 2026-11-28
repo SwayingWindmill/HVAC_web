@@ -13,11 +13,10 @@
 - `alarm/`：告警规则和告警的发生、确认、恢复；`cmd/alarm-rules` 从文件发布站点的告警规则。
 - `workorder/`：工单。
 - `scheduler/`：定时任务的扫描和领取；在 `cmd/scheduler` 里跑。
-- `maintenance/`：运维作业；在 `cmd/maintenance-worker` 里跑，`maintenance-admin` 是手工执行的管理入口。
+- `maintenance/`：运维作业；在 `cmd/maintenance-worker` 里跑。
 
 ## 规则
 
 - 业务代码、它的数据库迁移和测试数据放在同一个模块里，一类数据只有一个模块负责。
 - 别的模块只用一个模块公开的包，不碰它的 `internal/`。
-- `modules/*/cmd/*-owner` 只在需要把某个模块单独拆成进程（验证一个模块出故障时别的不受影响）时使用，不是默认部署的一部分。
 - 共用的技术和安全小库放在 `libs/`，不要把 `modules/` 当成工具箱。
