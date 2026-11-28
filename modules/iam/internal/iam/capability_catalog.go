@@ -1,12 +1,12 @@
 package iam
 
 import (
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
+	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
 // catalogCapabilityValid reports whether a Role may carry the capability. A stored capability
@@ -16,27 +16,27 @@ func catalogCapabilityValid(value string) bool {
 		value == analyticsmodel.EnergySeriesAction || commandCapabilityValid(value) {
 		return true
 	}
-	switch alarmauth.Action(value) {
-	case alarmauth.ActionRead,
-		alarmauth.ActionAck,
-		alarmauth.ActionAssign,
-		alarmauth.ActionUnassign,
-		alarmauth.ActionSuppress,
-		alarmauth.ActionUnsuppress:
+	switch alarmmodel.Action(value) {
+	case alarmmodel.ActionRead,
+		alarmmodel.ActionAck,
+		alarmmodel.ActionAssign,
+		alarmmodel.ActionUnassign,
+		alarmmodel.ActionSuppress,
+		alarmmodel.ActionUnsuppress:
 		return true
 	}
-	switch workorderauth.Action(value) {
-	case workorderauth.ActionList,
-		workorderauth.ActionRead,
-		workorderauth.ActionCreate,
-		workorderauth.ActionAssign,
-		workorderauth.ActionPlan,
-		workorderauth.ActionStart,
-		workorderauth.ActionBlock,
-		workorderauth.ActionResume,
-		workorderauth.ActionComplete,
-		workorderauth.ActionCancel,
-		workorderauth.ActionReopen:
+	switch workordermodel.Action(value) {
+	case workordermodel.ActionList,
+		workordermodel.ActionRead,
+		workordermodel.ActionCreate,
+		workordermodel.ActionAssign,
+		workordermodel.ActionPlan,
+		workordermodel.ActionStart,
+		workordermodel.ActionBlock,
+		workordermodel.ActionResume,
+		workordermodel.ActionComplete,
+		workordermodel.ActionCancel,
+		workordermodel.ActionReopen:
 		return true
 	}
 	return false

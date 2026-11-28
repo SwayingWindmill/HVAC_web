@@ -1,7 +1,6 @@
 package iam
 
 import (
-	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -36,12 +35,8 @@ func (h *handler) handleAnalyticsWorkloadDecision(writer http.ResponseWriter, re
 		writeProblem(writer, http.StatusUnauthorized, "IAM_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.")
 		return http.StatusUnauthorized
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
-	var query analyticsmodel.EnergySeriesQuery
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&query) != nil || ensureJSONEOF(decoder) != nil || query.Validate() != nil {
-		writeProblem(writer, http.StatusBadRequest, "IAM_ANALYTICS_DECISION_REQUEST_INVALID", "The Analytics authorization request is invalid.")
+	query, ok := decodeStrictDecisionJSON[analyticsmodel.EnergySeriesQuery](writer, request, "IAM_ANALYTICS_DECISION_REQUEST_INVALID", "The Analytics authorization request is invalid.")
+	if !ok {
 		return http.StatusBadRequest
 	}
 	scope, err := query.ScopeDigest()

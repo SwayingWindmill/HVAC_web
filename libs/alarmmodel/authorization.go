@@ -1,11 +1,9 @@
-package alarmauth
+package alarmmodel
 
 import (
 	"errors"
 	"strings"
 	"time"
-
-	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 )
 
 type Action string
@@ -37,16 +35,16 @@ type DecisionRequest struct {
 }
 
 func (request DecisionRequest) Validate() error {
-	if !alarmmodel.IsUUIDv7(request.TenantID) || !alarmmodel.IsUUIDv7(request.SiteID) {
+	if !IsUUIDv7(request.TenantID) || !IsUUIDv7(request.SiteID) {
 		return errors.New("alarm authorization scope is invalid")
 	}
 	switch request.Action {
 	case ActionRead:
-		if strings.TrimSpace(request.AlarmID) != "" && !alarmmodel.IsUUIDv7(request.AlarmID) {
+		if strings.TrimSpace(request.AlarmID) != "" && !IsUUIDv7(request.AlarmID) {
 			return errors.New("alarm read authorization has an invalid Alarm identity")
 		}
 	case ActionAck, ActionAssign, ActionUnassign, ActionSuppress, ActionUnsuppress:
-		if !alarmmodel.IsUUIDv7(request.AlarmID) {
+		if !IsUUIDv7(request.AlarmID) {
 			return errors.New("alarm mutation authorization requires Alarm identity")
 		}
 	default:

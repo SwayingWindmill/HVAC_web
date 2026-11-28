@@ -15,7 +15,6 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/uuidv7"
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 	"github.com/quanlaihe/hvac-web/modules/workorder/pkg/workorderservice"
 )
@@ -45,7 +44,7 @@ type publicWorkOrderRoute struct {
 	template    string
 	siteID      string
 	workOrderID string
-	action      workorderauth.Action
+	action      workordermodel.Action
 	operation   workordermodel.Operation
 }
 
@@ -558,7 +557,7 @@ func matchPublicWorkOrderRoute(path string) (publicWorkOrderRoute, bool) {
 	}
 	route := publicWorkOrderRoute{
 		kind: publicWorkOrderCollection, template: "/api/v1/sites/{siteId}/work-orders",
-		siteID: siteID, action: workorderauth.ActionList,
+		siteID: siteID, action: workordermodel.ActionList,
 	}
 	if len(segments) == 2 {
 		return route, true
@@ -575,20 +574,20 @@ func matchPublicWorkOrderRoute(path string) (publicWorkOrderRoute, bool) {
 		route.kind = publicWorkOrderAssignment
 		route.template = "/api/v1/sites/{siteId}/work-orders/{workOrderId}:assign"
 		route.workOrderID = workOrderID
-		route.action = workorderauth.ActionAssign
+		route.action = workordermodel.ActionAssign
 		return route, true
 	}
 	for suffix, metadata := range map[string]struct {
-		action    workorderauth.Action
+		action    workordermodel.Action
 		operation workordermodel.Operation
 	}{
-		":plan":     {workorderauth.ActionPlan, workordermodel.OperationSchedule},
-		":start":    {workorderauth.ActionStart, workordermodel.OperationStart},
-		":block":    {workorderauth.ActionBlock, workordermodel.OperationBlock},
-		":resume":   {workorderauth.ActionResume, workordermodel.OperationResume},
-		":complete": {workorderauth.ActionComplete, workordermodel.OperationComplete},
-		":cancel":   {workorderauth.ActionCancel, workordermodel.OperationCancel},
-		":reopen":   {workorderauth.ActionReopen, workordermodel.OperationReopen},
+		":plan":     {workordermodel.ActionPlan, workordermodel.OperationSchedule},
+		":start":    {workordermodel.ActionStart, workordermodel.OperationStart},
+		":block":    {workordermodel.ActionBlock, workordermodel.OperationBlock},
+		":resume":   {workordermodel.ActionResume, workordermodel.OperationResume},
+		":complete": {workordermodel.ActionComplete, workordermodel.OperationComplete},
+		":cancel":   {workordermodel.ActionCancel, workordermodel.OperationCancel},
+		":reopen":   {workordermodel.ActionReopen, workordermodel.OperationReopen},
 	} {
 		if strings.HasSuffix(resourceSegment, suffix) {
 			workOrderID := strings.TrimSuffix(resourceSegment, suffix)
@@ -609,7 +608,7 @@ func matchPublicWorkOrderRoute(path string) (publicWorkOrderRoute, bool) {
 	route.kind = publicWorkOrderDetail
 	route.template = "/api/v1/sites/{siteId}/work-orders/{workOrderId}"
 	route.workOrderID = resourceSegment
-	route.action = workorderauth.ActionRead
+	route.action = workordermodel.ActionRead
 	return route, true
 }
 
@@ -786,10 +785,10 @@ func (h *handler) workOrderSession(writer http.ResponseWriter, request *http.Req
 	return session, true
 }
 
-func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, route publicWorkOrderRoute, assigneeID, teamID *string) (workorderauth.Decision, *workOrderFailure) {
+func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, route publicWorkOrderRoute, assigneeID, teamID *string) (workordermodel.Decision, *workOrderFailure) {
 	if h.identity == nil || h.identity.config.IAMURL == "" || h.identity.config.IAMHTTPClient == nil || h.identity.config.DelegationSigner == nil {
 		failure := workOrderUnavailable("Work Order authorization is not configured.")
-		return workorderauth.Decision{}, &failure
+		return workordermodel.Decision{}, &failure
 	}
 	now := h.identity.now().UTC()
 	expiresAt := now.Add(h.identity.config.DelegationTTL)
@@ -807,9 +806,9 @@ func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, 
 	delegation, err := identitycontext.SignDelegation(h.identity.config.DelegationSigner, claims)
 	if err != nil {
 		failure := workOrderUnavailable("The Work Order authorization request could not be signed.")
-		return workorderauth.Decision{}, &failure
+		return workordermodel.Decision{}, &failure
 	}
-	input := workorderauth.DecisionRequest{
+	input := workordermodel.DecisionRequest{
 		TenantID:    session.TenantID,
 		SiteID:      route.siteID,
 		WorkOrderID: route.workOrderID,
@@ -820,14 +819,14 @@ func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, 
 	body, err := json.Marshal(input)
 	if err != nil {
 		failure := workOrderUnavailable("The Work Order authorization request could not be encoded.")
-		return workorderauth.Decision{}, &failure
+		return workordermodel.Decision{}, &failure
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), h.workOrder.timeout)
 	defer cancel()
 	upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(h.identity.config.IAMURL, "/")+workOrderDecisionPath, bytes.NewReader(body))
 	if err != nil {
 		failure := workOrderUnavailable("The Work Order authorization request could not be constructed.")
-		return workorderauth.Decision{}, &failure
+		return workordermodel.Decision{}, &failure
 	}
 	upstream.Header.Set("Content-Type", "application/json")
 	upstream.Header.Set("Accept", "application/json, application/problem+json")
@@ -837,40 +836,40 @@ func (h *handler) authorizeWorkOrder(request *http.Request, session bffSession, 
 	response, err := h.identity.config.IAMHTTPClient.Do(upstream)
 	if err != nil {
 		failure := workOrderUnavailable("IAM Work Order authorization is temporarily unavailable.")
-		return workorderauth.Decision{}, &failure
+		return workordermodel.Decision{}, &failure
 	}
 	defer drainAndCloseBody(response.Body)
 	if response.StatusCode != http.StatusOK {
 		failure := workOrderUnavailable("IAM did not return a valid Work Order authorization decision.")
-		return workorderauth.Decision{}, &failure
+		return workordermodel.Decision{}, &failure
 	}
 	raw, err := readBoundedBody(response.Body, maximumWorkOrderDecisionLength)
 	if err != nil {
 		failure := workOrderUnavailable("IAM returned an unreadable Work Order authorization decision.")
-		return workorderauth.Decision{}, &failure
+		return workordermodel.Decision{}, &failure
 	}
-	var output workorderauth.DecisionResponse
+	var output workordermodel.DecisionResponse
 	if decodeStrictWorkOrderJSON(raw, &output) != nil || output.Decision.Validate() != nil {
 		failure := workOrderUnavailable("IAM returned an invalid Work Order authorization decision.")
-		return workorderauth.Decision{}, &failure
+		return workordermodel.Decision{}, &failure
 	}
 	decision := output.Decision
 	if decision.Subject != session.Principal.Subject || decision.SubjectIssuer != session.Principal.Issuer ||
 		decision.TenantID != session.TenantID || decision.SiteID != route.siteID || decision.WorkOrderID != route.workOrderID ||
 		!sameOptionalWorkOrderTarget(decision.AssigneeID, assigneeID) || !sameOptionalWorkOrderTarget(decision.TeamID, teamID) || decision.Action != route.action {
 		failure := workOrderUnavailable("IAM returned a Work Order decision outside the authenticated boundary.")
-		return workorderauth.Decision{}, &failure
+		return workordermodel.Decision{}, &failure
 	}
 	if !decision.Allowed {
 		failure := workOrderDenied()
-		return workorderauth.Decision{}, &failure
+		return workordermodel.Decision{}, &failure
 	}
 	return decision, nil
 }
 
 // signWorkOrderReadContext signs the context the work-order owner reads, naming the workload that
 // presents it: the Gateway for the pages, the Operations Agent for its list (#595).
-func (h *handler) signWorkOrderReadContext(session bffSession, route publicWorkOrderRoute, decision workorderauth.Decision, tenantID, presenter string) (string, *workOrderFailure) {
+func (h *handler) signWorkOrderReadContext(session bffSession, route publicWorkOrderRoute, decision workordermodel.Decision, tenantID, presenter string) (string, *workOrderFailure) {
 	if h.identity == nil || h.identity.config.DelegationSigner == nil || h.workOrder == nil || !isLowerUUIDv7(tenantID) || session.TenantID != tenantID {
 		failure := workOrderUnavailable("Work Order read context signing is unavailable.")
 		return "", &failure

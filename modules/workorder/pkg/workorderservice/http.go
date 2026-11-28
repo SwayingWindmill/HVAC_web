@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
@@ -439,7 +438,7 @@ func (handler *httpHandler) handleLifecycle(writer http.ResponseWriter, request 
 }
 
 func mutationKeyScope(idempotencyKey string) string {
-	return workorderauth.MutationKeyScope(idempotencyKey)
+	return workordermodel.MutationKeyScope(idempotencyKey)
 }
 
 func (handler *httpHandler) authorize(request *http.Request, action string, resourceScopes []string, write bool) (identitycontext.DelegationClaims, bool) {

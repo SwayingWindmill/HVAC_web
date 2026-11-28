@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
@@ -517,15 +516,15 @@ func newDataGapsTestHandler(
 				Decision: decision, DelegationGrant: commandUnsignedRegistryGrant(claims),
 			}), nil
 		case alarmDecisionPath:
-			var input alarmauth.DecisionRequest
+			var input alarmmodel.DecisionRequest
 			if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
 				t.Fatal(err)
 			}
-			return telemetryJSONResponse(http.StatusOK, alarmauth.DecisionResponse{Decision: alarmauth.Decision{
+			return telemetryJSONResponse(http.StatusOK, alarmmodel.DecisionResponse{Decision: alarmmodel.Decision{
 				Allowed: input.SiteID == siteID, PrincipalID: "01a14000-9000-7000-8000-000000000001",
 				SubjectIssuer: parent.SubjectIssuer, Subject: parent.Subject, TenantID: input.TenantID,
 				SiteID: input.SiteID, AlarmID: input.AlarmID, Action: input.Action,
-				PolicyRevision: "alarm-policy-1", ReasonCode: alarmauth.ReasonAllowExactScope,
+				PolicyRevision: "alarm-policy-1", ReasonCode: alarmmodel.ReasonAllowExactScope,
 				DecidedAt: now.Format(time.RFC3339Nano),
 			}}), nil
 		case telemetryDecisionPath:

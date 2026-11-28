@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
@@ -209,7 +210,8 @@ func (server *handler) ServeHTTP(writer http.ResponseWriter, request *http.Reque
 		writeProblem(writer, http.StatusBadRequest, "ANALYTICS_QUERY_INVALID", "The energy series query exceeds the supported product boundary.", false)
 		return
 	}
-	claims, valid, authorized := server.energyGrant(request.Header.Get("X-Delegation-Grant"), peerSPIFFE, query.TenantID, scope)
+	delegationGrant, _ := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	claims, valid, authorized := server.energyGrant(delegationGrant, peerSPIFFE, query.TenantID, scope)
 	if !valid {
 		writeProblem(writer, http.StatusUnauthorized, "ANALYTICS_DELEGATION_INVALID", "The analytics delegation grant is invalid.", false)
 		return
@@ -273,7 +275,8 @@ func (server *handler) serveSemanticQuery(writer http.ResponseWriter, request *h
 		writeProblem(writer, http.StatusBadRequest, "ANALYTICS_QUERY_INVALID", "The semantic query asks for members or a range outside the catalog.", false)
 		return
 	}
-	claims, valid, authorized := server.energyGrant(request.Header.Get("X-Delegation-Grant"), presenter, query.TenantID, scope)
+	delegationGrant, _ := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	claims, valid, authorized := server.energyGrant(delegationGrant, presenter, query.TenantID, scope)
 	if !valid {
 		writeProblem(writer, http.StatusUnauthorized, "ANALYTICS_DELEGATION_INVALID", "The analytics delegation grant is invalid.", false)
 		return
@@ -343,7 +346,8 @@ func (server *handler) serveDeviceHistory(writer http.ResponseWriter, request *h
 		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_HISTORY_QUERY_INVALID", "The Device History query exceeds the supported product boundary.", false)
 		return
 	}
-	claims, err := identitycontext.VerifyDelegation(server.delegationPublicKey, request.Header.Get("X-Delegation-Grant"))
+	delegationGrant, _ := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	claims, err := identitycontext.VerifyDelegation(server.delegationPublicKey, delegationGrant)
 	if err != nil {
 		writeProblem(writer, http.StatusUnauthorized, "TELEMETRY_HISTORY_DELEGATION_INVALID", "The Device History delegation grant is invalid.", false)
 		return
@@ -391,7 +395,8 @@ func (server *handler) serveDeviceHistoryAggregate(writer http.ResponseWriter, r
 		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_HISTORY_AGGREGATE_QUERY_INVALID", "The Device History aggregate query exceeds the supported product boundary.", false)
 		return
 	}
-	claims, err := identitycontext.VerifyDelegation(server.delegationPublicKey, request.Header.Get("X-Delegation-Grant"))
+	delegationGrant, _ := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	claims, err := identitycontext.VerifyDelegation(server.delegationPublicKey, delegationGrant)
 	if err != nil {
 		writeProblem(writer, http.StatusUnauthorized, "TELEMETRY_HISTORY_AGGREGATE_DELEGATION_INVALID", "The Device History aggregate delegation grant is invalid.", false)
 		return
@@ -439,7 +444,8 @@ func (server *handler) serveCounterAudit(writer http.ResponseWriter, request *ht
 		writeProblem(writer, http.StatusBadRequest, "TELEMETRY_COUNTER_AUDIT_QUERY_INVALID", "The counter audit query exceeds the supported product boundary.", false)
 		return
 	}
-	_, valid, authorized := server.energyGrant(request.Header.Get("X-Delegation-Grant"), peerSPIFFE, canonical.TenantID, scope)
+	delegationGrant, _ := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	_, valid, authorized := server.energyGrant(delegationGrant, peerSPIFFE, canonical.TenantID, scope)
 	if !valid {
 		writeProblem(writer, http.StatusUnauthorized, "ANALYTICS_DELEGATION_INVALID", "The analytics delegation grant is invalid.", false)
 		return

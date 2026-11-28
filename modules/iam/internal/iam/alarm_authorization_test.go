@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 )
 
 const (
@@ -21,28 +21,28 @@ const (
 func TestEvaluateAlarmAuthorizationAllowsTheAssignedSiteOnly(t *testing.T) {
 	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	store := alarmAuthorizationFixture(now, []RoleAssignment{{
-		TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, RoleKey: "operator", Capabilities: []string{string(alarmauth.ActionRead)},
+		TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, RoleKey: "operator", Capabilities: []string{string(alarmmodel.ActionRead)},
 		Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),
 	}}, nil)
-	decision, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmauth.DecisionRequest{
-		TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, AlarmID: alarmTestAlarmID, Action: alarmauth.ActionRead,
+	decision, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmmodel.DecisionRequest{
+		TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, AlarmID: alarmTestAlarmID, Action: alarmmodel.ActionRead,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !decision.Allowed || decision.PrincipalID != alarmTestPrincipalID || decision.ReasonCode != alarmauth.ReasonAllowExactScope {
+	if !decision.Allowed || decision.PrincipalID != alarmTestPrincipalID || decision.ReasonCode != alarmmodel.ReasonAllowExactScope {
 		t.Fatalf("unexpected decision: %#v", decision)
 	}
 	if err := decision.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	crossSite, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmauth.DecisionRequest{
-		TenantID: alarmTestTenantID, SiteID: alarmTestOtherSiteID, Action: alarmauth.ActionRead,
+	crossSite, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmmodel.DecisionRequest{
+		TenantID: alarmTestTenantID, SiteID: alarmTestOtherSiteID, Action: alarmmodel.ActionRead,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if crossSite.Allowed || crossSite.ReasonCode != alarmauth.ReasonDenyScope {
+	if crossSite.Allowed || crossSite.ReasonCode != alarmmodel.ReasonDenyScope {
 		t.Fatalf("cross-Site Alarm authorization was not denied: %#v", crossSite)
 	}
 }
@@ -50,20 +50,20 @@ func TestEvaluateAlarmAuthorizationAllowsTheAssignedSiteOnly(t *testing.T) {
 func TestEvaluateAlarmAuthorizationHonoursAnExplicitDenyOverATenantRole(t *testing.T) {
 	now := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	store := alarmAuthorizationFixture(now,
-		[]RoleAssignment{{TenantID: alarmTestTenantID, RoleKey: "operator", Capabilities: []string{string(alarmauth.ActionRead)}, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
-		[]ExplicitDeny{{TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, Capability: string(alarmauth.ActionRead), ValidFrom: now.Add(-time.Hour)}},
+		[]RoleAssignment{{TenantID: alarmTestTenantID, RoleKey: "operator", Capabilities: []string{string(alarmmodel.ActionRead)}, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour)}},
+		[]ExplicitDeny{{TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, Capability: string(alarmmodel.ActionRead), ValidFrom: now.Add(-time.Hour)}},
 	)
-	denied, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmauth.DecisionRequest{
-		TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, Action: alarmauth.ActionRead,
+	denied, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmmodel.DecisionRequest{
+		TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, Action: alarmmodel.ActionRead,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if denied.Allowed || denied.ReasonCode != alarmauth.ReasonDenyExplicit {
+	if denied.Allowed || denied.ReasonCode != alarmmodel.ReasonDenyExplicit {
 		t.Fatalf("explicit deny was not authoritative: %#v", denied)
 	}
-	other, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmauth.DecisionRequest{
-		TenantID: alarmTestTenantID, SiteID: alarmTestOtherSiteID, Action: alarmauth.ActionRead,
+	other, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmmodel.DecisionRequest{
+		TenantID: alarmTestTenantID, SiteID: alarmTestOtherSiteID, Action: alarmmodel.ActionRead,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -84,10 +84,10 @@ func alarmAuthorizationFixture(now time.Time, assignments []RoleAssignment, deni
 
 func TestEvaluateAlarmAuthorizationHandlesSuppressionAndUnassignActions(t *testing.T) {
 	now := time.Date(2026, 4, 15, 9, 0, 0, 0, time.UTC)
-	actions := []alarmauth.Action{
-		alarmauth.ActionUnassign,
-		alarmauth.ActionSuppress,
-		alarmauth.ActionUnsuppress,
+	actions := []alarmmodel.Action{
+		alarmmodel.ActionUnassign,
+		alarmmodel.ActionSuppress,
+		alarmmodel.ActionUnsuppress,
 	}
 	for _, action := range actions {
 		if !catalogCapabilityValid(string(action)) {
@@ -97,17 +97,17 @@ func TestEvaluateAlarmAuthorizationHandlesSuppressionAndUnassignActions(t *testi
 			TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, RoleKey: "dispatcher",
 			Capabilities: []string{string(action)}, Status: FactStatusActive, ValidFrom: now.Add(-time.Hour),
 		}}, nil)
-		allowed, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmauth.DecisionRequest{
+		allowed, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmmodel.DecisionRequest{
 			TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, AlarmID: alarmTestAlarmID, Action: action,
 		})
 		if err != nil || !allowed.Allowed || allowed.Action != action {
 			t.Fatalf("evaluateAlarmAuthorization(%q) allow got (%+v, %v), want allowed", action, allowed, err)
 		}
 
-		crossSite, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmauth.DecisionRequest{
+		crossSite, err := evaluateAlarmAuthorization(context.Background(), store, now, alarmTestIssuer, alarmTestSubject, alarmmodel.DecisionRequest{
 			TenantID: alarmTestTenantID, SiteID: alarmTestOtherSiteID, AlarmID: alarmTestAlarmID, Action: action,
 		})
-		if err != nil || crossSite.Allowed || crossSite.ReasonCode != alarmauth.ReasonDenyScope {
+		if err != nil || crossSite.Allowed || crossSite.ReasonCode != alarmmodel.ReasonDenyScope {
 			t.Fatalf("evaluateAlarmAuthorization(%q) cross-site got (%+v, %v), want deny scope", action, crossSite, err)
 		}
 
@@ -117,10 +117,10 @@ func TestEvaluateAlarmAuthorizationHandlesSuppressionAndUnassignActions(t *testi
 		}}, []ExplicitDeny{{
 			TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, Capability: string(action), ValidFrom: now.Add(-time.Hour),
 		}})
-		denied, err := evaluateAlarmAuthorization(context.Background(), deniedStore, now, alarmTestIssuer, alarmTestSubject, alarmauth.DecisionRequest{
+		denied, err := evaluateAlarmAuthorization(context.Background(), deniedStore, now, alarmTestIssuer, alarmTestSubject, alarmmodel.DecisionRequest{
 			TenantID: alarmTestTenantID, SiteID: alarmTestSiteID, AlarmID: alarmTestAlarmID, Action: action,
 		})
-		if err != nil || denied.Allowed || denied.ReasonCode != alarmauth.ReasonDenyExplicit {
+		if err != nil || denied.Allowed || denied.ReasonCode != alarmmodel.ReasonDenyExplicit {
 			t.Fatalf("evaluateAlarmAuthorization(%q) explicit deny got (%+v, %v), want explicit deny", action, denied, err)
 		}
 	}

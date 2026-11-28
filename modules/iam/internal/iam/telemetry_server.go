@@ -1,7 +1,6 @@
 package iam
 
 import (
-	"encoding/json"
 	"net/http"
 	"regexp"
 	"strings"
@@ -14,12 +13,8 @@ import (
 var safeCorrelationPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,128}$`)
 
 func (h *handler) handleTelemetryDecision(writer http.ResponseWriter, request *http.Request, inbound identitycontext.DelegationClaims, presenter string) int {
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
-	var input telemetryauth.DecisionRequest
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil || ensureJSONEOF(decoder) != nil || input.Validate() != nil {
-		writeProblem(writer, http.StatusBadRequest, "IAM_TELEMETRY_DECISION_REQUEST_INVALID", "The Telemetry authorization request is invalid.")
+	input, ok := decodeStrictDecisionJSON[telemetryauth.DecisionRequest](writer, request, "IAM_TELEMETRY_DECISION_REQUEST_INVALID", "The Telemetry authorization request is invalid.")
+	if !ok {
 		return http.StatusBadRequest
 	}
 	if input.TenantID != inbound.TenantID {
@@ -47,20 +42,14 @@ func (h *handler) handleTelemetryDecision(writer http.ResponseWriter, request *h
 	if decision.Allowed {
 		if h.telemetryGrantSigner == nil {
 			deliveryCode = "GRANT_SIGNER_UNAVAILABLE"
-			if !h.recordTelemetryDecision(request, decision, false, deliveryCode, requestID) {
-				writeProblem(writer, http.StatusServiceUnavailable, "IAM_AUTHORIZATION_AUDIT_UNAVAILABLE", "The Telemetry authorization evidence could not be recorded.")
-				return http.StatusServiceUnavailable
-			}
+			h.logTelemetryDecision(request, decision, false, deliveryCode, requestID)
 			writeProblem(writer, http.StatusServiceUnavailable, "IAM_TELEMETRY_GRANT_SIGNER_UNAVAILABLE", "The Telemetry delegation signer is unavailable.")
 			return http.StatusServiceUnavailable
 		}
 		grantID := h.newTelemetryGrantID()
 		if grantID == "" {
 			deliveryCode = "GRANT_ID_UNAVAILABLE"
-			if !h.recordTelemetryDecision(request, decision, false, deliveryCode, requestID) {
-				writeProblem(writer, http.StatusServiceUnavailable, "IAM_AUTHORIZATION_AUDIT_UNAVAILABLE", "The Telemetry authorization evidence could not be recorded.")
-				return http.StatusServiceUnavailable
-			}
+			h.logTelemetryDecision(request, decision, false, deliveryCode, requestID)
 			writeProblem(writer, http.StatusServiceUnavailable, "IAM_TELEMETRY_GRANT_ID_UNAVAILABLE", "The Telemetry delegation identifier is unavailable.")
 			return http.StatusServiceUnavailable
 		}
@@ -77,20 +66,14 @@ func (h *handler) handleTelemetryDecision(writer http.ResponseWriter, request *h
 		})
 		if err != nil {
 			deliveryCode = "GRANT_SIGNING_FAILED"
-			if !h.recordTelemetryDecision(request, decision, false, deliveryCode, requestID) {
-				writeProblem(writer, http.StatusServiceUnavailable, "IAM_AUTHORIZATION_AUDIT_UNAVAILABLE", "The Telemetry authorization evidence could not be recorded.")
-				return http.StatusServiceUnavailable
-			}
+			h.logTelemetryDecision(request, decision, false, deliveryCode, requestID)
 			writeProblem(writer, http.StatusServiceUnavailable, "IAM_TELEMETRY_GRANT_SIGNING_FAILED", "The Telemetry delegation could not be signed.")
 			return http.StatusServiceUnavailable
 		}
 		response.DelegationGrant = grant
 		deliveryCode = "GRANT_SIGNED"
 	}
-	if !h.recordTelemetryDecision(request, decision, response.DelegationGrant != "", deliveryCode, requestID) {
-		writeProblem(writer, http.StatusServiceUnavailable, "IAM_AUTHORIZATION_AUDIT_UNAVAILABLE", "The Telemetry authorization evidence could not be recorded.")
-		return http.StatusServiceUnavailable
-	}
+	h.logTelemetryDecision(request, decision, response.DelegationGrant != "", deliveryCode, requestID)
 	_ = h.observability.Metrics.AddCounter(
 		"s2_iam_telemetry_authorization_decisions_total",
 		"IAM exact Telemetry authorization decisions.",
@@ -101,14 +84,27 @@ func (h *handler) handleTelemetryDecision(writer http.ResponseWriter, request *h
 	return http.StatusOK
 }
 
-func (h *handler) recordTelemetryDecision(request *http.Request, decision telemetryauth.Decision, grantSigned bool, deliveryCode, requestID string) bool {
+func (h *handler) logTelemetryDecision(request *http.Request, decision telemetryauth.Decision, grantSigned bool, deliveryCode, requestID string) {
+	if h.logger == nil {
+		return
+	}
 	targetCount, keyCount := telemetryDecisionCounts(decision)
-	return h.telemetryAuditSink.RecordTelemetryDecision(request.Context(), TelemetryDecisionAudit{
-		PrincipalID: decision.PrincipalID, TenantID: decision.TenantID, Action: decision.Action,
-		Allowed: decision.Allowed, TargetCount: targetCount, KeyCount: keyCount, ScopeDigest: decision.ScopeDigest,
-		PolicyRevision: decision.PolicyRevision, ReasonCode: decision.ReasonCode, GrantSigned: grantSigned,
-		DeliveryCode: deliveryCode, RequestID: requestID, TraceID: observability.TraceID(request.Context()), OccurredAt: formatInstant(h.now()),
-	}) == nil
+	h.logger.InfoContext(request.Context(), "iam_telemetry_authorization_decision",
+		"trace_id", observability.TraceID(request.Context()),
+		"request_id", requestID,
+		"principal_id", decision.PrincipalID,
+		"tenant_id", decision.TenantID,
+		"action", decision.Action,
+		"allowed", decision.Allowed,
+		"target_count", targetCount,
+		"key_count", keyCount,
+		"scope_digest", decision.ScopeDigest,
+		"policy_revision", decision.PolicyRevision,
+		"reason_code", decision.ReasonCode,
+		"grant_signed", grantSigned,
+		"delivery_code", deliveryCode,
+		"occurred_at", formatInstant(h.now()),
+	)
 }
 
 func telemetryDecisionCounts(decision telemetryauth.Decision) (int, int) {

@@ -5,9 +5,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
@@ -71,7 +71,8 @@ func (server *server) handleAuthorizedWrite(writer http.ResponseWriter, request 
 		}
 		input.SourceSiteID, input.DeviceID = route.parentID, route.id
 		var targetClaimsPtr *registryauth.GrantClaims
-		if rawTargetGrant := strings.TrimSpace(request.Header.Get("X-Target-Delegation-Grant")); rawTargetGrant != "" {
+		if len(request.Header.Values("X-Target-Delegation-Grant")) > 0 {
+			rawTargetGrant, _ := grant.SingleHeader(request.Header, "X-Target-Delegation-Grant")
 			peerSPIFFE, _ := verifiedPeerSPIFFE(request)
 			targetClaims, errStatus, errCode, errDetail, retryable := server.authorizeDelegationGrant(request, peerSPIFFE, rawTargetGrant, func(registryauth.GrantClaims) registryauth.Action {
 				return registryauth.ActionDeviceWrite

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -75,7 +76,6 @@ type Config struct {
 	TelemetryGrantLifetime            time.Duration
 	AllowedTelemetryGrantPresenters   []string
 	NewTelemetryGrantID               func() string
-	TelemetryAuditSink                TelemetryDecisionAuditSink
 	TelemetryRuntimeSPIFFE            string
 	TelemetryGrantStore               TelemetryGrantStore
 	CommandAuthorizationStore         CommandAuthorizationStore
@@ -124,7 +124,6 @@ type handler struct {
 	telemetryGrantLifetime            time.Duration
 	allowedTelemetryGrantPresenters   map[string]struct{}
 	newTelemetryGrantID               func() string
-	telemetryAuditSink                TelemetryDecisionAuditSink
 	telemetryRuntimeSPIFFE            string
 	telemetryGrantStore               TelemetryGrantStore
 	commandAuthorizationStore         CommandAuthorizationStore
@@ -250,10 +249,6 @@ func NewHandler(config Config) http.Handler {
 	if newTelemetryGrantID == nil {
 		newTelemetryGrantID = randomIdentifier
 	}
-	telemetryAuditSink := config.TelemetryAuditSink
-	if telemetryAuditSink == nil {
-		telemetryAuditSink = newLoggerTelemetryDecisionAuditSink(logger)
-	}
 	commandStore := config.CommandAuthorizationStore
 	if commandStore == nil {
 		commandStore = newDenyAllCommandAuthorizationStore("command-policy-unconfigured")
@@ -336,7 +331,6 @@ func NewHandler(config Config) http.Handler {
 		telemetryGrantLifetime:            telemetryLifetime,
 		allowedTelemetryGrantPresenters:   allowedTelemetryGrantPresenters,
 		newTelemetryGrantID:               newTelemetryGrantID,
-		telemetryAuditSink:                telemetryAuditSink,
 		telemetryRuntimeSPIFFE:            config.TelemetryRuntimeSPIFFE,
 		telemetryGrantStore:               config.TelemetryGrantStore,
 		commandAuthorizationStore:         commandStore,
@@ -436,9 +430,15 @@ func (h *handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		writeProblem(writer, status, "IAM_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.")
 		return
 	}
-	grant := request.Header.Get("X-Delegation-Grant")
-	claims, err := identitycontext.VerifyDelegation(peerCertificate.PublicKey, grant)
-	if err != nil {
+	delegationToken, ok := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	var (
+		claims identitycontext.DelegationClaims
+		err    error
+	)
+	if ok {
+		claims, err = identitycontext.VerifyDelegation(peerCertificate.PublicKey, delegationToken)
+	}
+	if !ok || err != nil {
 		status = http.StatusUnauthorized
 		writeProblem(writer, status, "IAM_DELEGATION_INVALID", "The delegated identity context is invalid.")
 		return
@@ -629,20 +629,8 @@ func effectivePrincipalRoles(facts AuthorizationFacts, tenantID string, now time
 }
 
 func (h *handler) handleRegistryDecision(writer http.ResponseWriter, request *http.Request, inbound identitycontext.DelegationClaims, presenter string) int {
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
-	var decisionRequest registryauth.DecisionRequest
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&decisionRequest); err != nil {
-		writeProblem(writer, http.StatusBadRequest, "IAM_REGISTRY_DECISION_REQUEST_INVALID", "The Registry authorization request is invalid.")
-		return http.StatusBadRequest
-	}
-	if err := decisionRequest.Validate(); err != nil {
-		writeProblem(writer, http.StatusBadRequest, "IAM_REGISTRY_DECISION_REQUEST_INVALID", "The Registry authorization request is invalid.")
-		return http.StatusBadRequest
-	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		writeProblem(writer, http.StatusBadRequest, "IAM_REGISTRY_DECISION_REQUEST_INVALID", "The Registry authorization request must contain one JSON object.")
+	decisionRequest, ok := decodeStrictDecisionJSON[registryauth.DecisionRequest](writer, request, "IAM_REGISTRY_DECISION_REQUEST_INVALID", "The Registry authorization request is invalid.")
+	if !ok {
 		return http.StatusBadRequest
 	}
 
@@ -851,6 +839,19 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 		return err
 	}
 	return nil
+}
+
+func decodeStrictDecisionJSON[T interface{ Validate() error }](writer http.ResponseWriter, request *http.Request, errorCode, errorDetail string) (T, bool) {
+	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
+	var input T
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || input.Validate() != nil {
+		writeProblem(writer, http.StatusBadRequest, errorCode, errorDetail)
+		var zero T
+		return zero, false
+	}
+	return input, true
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {

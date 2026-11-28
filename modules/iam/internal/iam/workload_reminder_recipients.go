@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/libs/observability"
@@ -64,7 +63,7 @@ func (h *handler) handleReminderRecipientDecision(writer http.ResponseWriter, re
 	switch input.Kind {
 	case "ALARM":
 		valid = valid && alarmmodel.IsUUIDv7(input.AlarmID) &&
-			(alarmauth.DecisionRequest{TenantID: input.TenantID, SiteID: input.SiteID, AlarmID: input.AlarmID, Action: alarmauth.ActionRead}).Validate() == nil
+			(alarmmodel.DecisionRequest{TenantID: input.TenantID, SiteID: input.SiteID, AlarmID: input.AlarmID, Action: alarmmodel.ActionRead}).Validate() == nil
 	case "DAILY":
 		valid = valid && input.AlarmID == "" && alarmmodel.IsUUIDv7(input.TenantID) && alarmmodel.IsUUIDv7(input.SiteID)
 	default:
@@ -105,7 +104,7 @@ func (h *handler) mayGetReminder(writer http.ResponseWriter, request *http.Reque
 			map[string]string{"kind": "DAILY", "result": decisionResult(decision.Allowed)}, 1)
 		return decision.Allowed, http.StatusOK
 	}
-	read := alarmauth.DecisionRequest{TenantID: input.TenantID, SiteID: input.SiteID, AlarmID: input.AlarmID, Action: alarmauth.ActionRead}
+	read := alarmmodel.DecisionRequest{TenantID: input.TenantID, SiteID: input.SiteID, AlarmID: input.AlarmID, Action: alarmmodel.ActionRead}
 	decision, err := evaluateAlarmAuthorization(request.Context(), h.alarmAuthorizationStore, h.now(), person.SubjectIssuer, person.Subject, read)
 	if err != nil {
 		writeProblem(writer, http.StatusServiceUnavailable, "IAM_AUTHORIZATION_UNAVAILABLE", "The IAM authorization facts are unavailable.")

@@ -2,7 +2,6 @@ package iam
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -301,12 +300,8 @@ func (h *handler) handleCommandWorkloadDecision(writer http.ResponseWriter, requ
 		return http.StatusUnauthorized
 	}
 
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
-	var input commandauth.WorkloadDecisionRequest
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || input.Validate() != nil {
-		writeProblem(writer, http.StatusBadRequest, "IAM_COMMAND_DECISION_REQUEST_INVALID", "The workload Command authorization request is invalid.")
+	input, ok := decodeStrictDecisionJSON[commandauth.WorkloadDecisionRequest](writer, request, "IAM_COMMAND_DECISION_REQUEST_INVALID", "The workload Command authorization request is invalid.")
+	if !ok {
 		return http.StatusBadRequest
 	}
 

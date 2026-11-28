@@ -2,7 +2,6 @@ package iam
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"slices"
 	"time"
@@ -13,12 +12,8 @@ import (
 )
 
 func (h *handler) handleAnalyticsDecision(writer http.ResponseWriter, request *http.Request, inbound identitycontext.DelegationClaims) int {
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
-	var input analyticsmodel.AuthorizationDecisionRequest
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || input.Validate() != nil {
-		writeProblem(writer, http.StatusBadRequest, "IAM_ANALYTICS_DECISION_REQUEST_INVALID", "The Analytics authorization request is invalid.")
+	input, ok := decodeStrictDecisionJSON[analyticsmodel.AuthorizationDecisionRequest](writer, request, "IAM_ANALYTICS_DECISION_REQUEST_INVALID", "The Analytics authorization request is invalid.")
+	if !ok {
 		return http.StatusBadRequest
 	}
 	if input.TenantID != inbound.TenantID {

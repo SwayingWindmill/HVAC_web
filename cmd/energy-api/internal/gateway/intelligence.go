@@ -19,7 +19,6 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
@@ -497,7 +496,7 @@ func (h *handler) validateFDDWorkOrder(request *http.Request, session bffSession
 	}
 	route := publicWorkOrderRoute{
 		kind: publicWorkOrderDetail, template: "/api/v1/sites/{siteId}/work-orders/{workOrderId}",
-		siteID: siteID, workOrderID: workOrderID, action: workorderauth.ActionRead,
+		siteID: siteID, workOrderID: workOrderID, action: workordermodel.ActionRead,
 	}
 	decision, failure := h.authorizeWorkOrder(request, session, route, nil, nil)
 	if failure != nil {

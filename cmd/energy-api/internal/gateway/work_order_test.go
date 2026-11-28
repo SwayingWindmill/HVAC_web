@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 	"github.com/quanlaihe/hvac-web/modules/workorder/pkg/workorderservice"
 )
@@ -22,12 +21,12 @@ const (
 func TestGatewayWorkOrderCanonicalRoutes(t *testing.T) {
 	tests := []struct {
 		path   string
-		action workorderauth.Action
+		action workordermodel.Action
 	}{
-		{"/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders", workorderauth.ActionList},
-		{"/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders/" + gatewayWorkOrderID, workorderauth.ActionRead},
-		{"/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders/" + gatewayWorkOrderID + ":assign", workorderauth.ActionAssign},
-		{"/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders/" + gatewayWorkOrderID + ":start", workorderauth.ActionStart},
+		{"/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders", workordermodel.ActionList},
+		{"/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders/" + gatewayWorkOrderID, workordermodel.ActionRead},
+		{"/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders/" + gatewayWorkOrderID + ":assign", workordermodel.ActionAssign},
+		{"/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders/" + gatewayWorkOrderID + ":start", workordermodel.ActionStart},
 	}
 	for _, test := range tests {
 		route, ok := matchPublicWorkOrderRoute(test.path)
@@ -110,7 +109,7 @@ func TestDirectWorkOrderAdapterOperations(t *testing.T) {
 		idempotencyKey: "idemp-wo-create-001",
 		create:         createReq,
 	}
-	createRoute := publicWorkOrderRoute{kind: publicWorkOrderCollection, template: "/api/v1/sites/{siteId}/work-orders", siteID: siteID, action: workorderauth.ActionCreate}
+	createRoute := publicWorkOrderRoute{kind: publicWorkOrderCollection, template: "/api/v1/sites/{siteId}/work-orders", siteID: siteID, action: workordermodel.ActionCreate}
 	body, status, replayed, failure := adapter.ExecuteMutation(ctx, reqCreate, createRoute, createParsed, "")
 	if failure != nil || status != http.StatusCreated || replayed {
 		t.Fatalf("Create failed: status=%d replayed=%v failure=%#v", status, replayed, failure)
@@ -122,7 +121,7 @@ func TestDirectWorkOrderAdapterOperations(t *testing.T) {
 
 	// 2. Test Read Detail
 	reqGet, _ := http.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/sites/"+siteID+"/work-orders/"+createdWO.WorkOrderID, nil)
-	getRoute := publicWorkOrderRoute{kind: publicWorkOrderDetail, template: "/api/v1/sites/{siteId}/work-orders/{workOrderId}", siteID: siteID, workOrderID: createdWO.WorkOrderID, action: workorderauth.ActionRead}
+	getRoute := publicWorkOrderRoute{kind: publicWorkOrderDetail, template: "/api/v1/sites/{siteId}/work-orders/{workOrderId}", siteID: siteID, workOrderID: createdWO.WorkOrderID, action: workordermodel.ActionRead}
 	getBody, getStatus, getFailure := adapter.ExecuteRead(ctx, reqGet, getRoute, "")
 	if getFailure != nil || getStatus != http.StatusOK {
 		t.Fatalf("Get failed: status=%d failure=%#v", getStatus, getFailure)
@@ -134,7 +133,7 @@ func TestDirectWorkOrderAdapterOperations(t *testing.T) {
 
 	// 3. Test Read List
 	reqList, _ := http.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/sites/"+siteID+"/work-orders", nil)
-	listRoute := publicWorkOrderRoute{kind: publicWorkOrderCollection, template: "/api/v1/sites/{siteId}/work-orders", siteID: siteID, action: workorderauth.ActionList}
+	listRoute := publicWorkOrderRoute{kind: publicWorkOrderCollection, template: "/api/v1/sites/{siteId}/work-orders", siteID: siteID, action: workordermodel.ActionList}
 	listBody, listStatus, listFailure := adapter.ExecuteRead(ctx, reqList, listRoute, "")
 	if listFailure != nil || listStatus != http.StatusOK {
 		t.Fatalf("List failed: status=%d failure=%#v", listStatus, listFailure)
@@ -161,7 +160,7 @@ func TestDirectWorkOrderAdapterOperations(t *testing.T) {
 		assignment:       assignReq,
 		assignmentTarget: &assignee,
 	}
-	assignRoute := publicWorkOrderRoute{kind: publicWorkOrderAssignment, template: "/api/v1/sites/{siteId}/work-orders/{workOrderId}:assign", siteID: siteID, workOrderID: createdWO.WorkOrderID, action: workorderauth.ActionAssign}
+	assignRoute := publicWorkOrderRoute{kind: publicWorkOrderAssignment, template: "/api/v1/sites/{siteId}/work-orders/{workOrderId}:assign", siteID: siteID, workOrderID: createdWO.WorkOrderID, action: workordermodel.ActionAssign}
 	assignBody, assignStatus, assignReplayed, assignFailure := adapter.ExecuteMutation(ctx, reqAssign, assignRoute, assignParsed, "")
 	if assignFailure != nil || assignStatus != http.StatusOK || assignReplayed {
 		t.Fatalf("Assign failed: status=%d replayed=%v failure=%#v", assignStatus, assignReplayed, assignFailure)
@@ -183,7 +182,7 @@ func TestDirectWorkOrderAdapterOperations(t *testing.T) {
 		template:    "/api/v1/sites/{siteId}/work-orders/{workOrderId}:start",
 		siteID:      siteID,
 		workOrderID: createdWO.WorkOrderID,
-		action:      workorderauth.ActionStart,
+		action:      workordermodel.ActionStart,
 		operation:   workordermodel.OperationStart,
 	}
 	startMutation := parsedPublicWorkOrderLifecycle{

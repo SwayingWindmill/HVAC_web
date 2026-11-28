@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
+	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
 type WorkOrderDecisionAudit struct {
@@ -14,10 +14,10 @@ type WorkOrderDecisionAudit struct {
 	WorkOrderID    string
 	AssigneeID     *string
 	TeamID         *string
-	Action         workorderauth.Action
+	Action         workordermodel.Action
 	Allowed        bool
 	PolicyRevision string
-	ReasonCode     workorderauth.ReasonCode
+	ReasonCode     workordermodel.ReasonCode
 	RequestID      string
 	TraceID        string
 	OccurredAt     string

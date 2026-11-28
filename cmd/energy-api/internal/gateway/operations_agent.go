@@ -12,13 +12,13 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
+	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
 // The Operations Agent behind the Gateway: its Agent Session routes (operations_agent_sessions.go)
@@ -333,7 +333,7 @@ func authorizeWorkOrderTool(ctx operationsToolAuthContext) (operationsToolAuthor
 	if ctx.handler.workOrder == nil {
 		return operationsToolAuthorizationResponse{}, unavailableOperationsProblem("The Work Order Service is not configured.")
 	}
-	route := publicWorkOrderRoute{kind: publicWorkOrderCollection, template: "/api/v1/sites/{siteId}/work-orders", siteID: ctx.siteID, action: workorderauth.ActionList}
+	route := publicWorkOrderRoute{kind: publicWorkOrderCollection, template: "/api/v1/sites/{siteId}/work-orders", siteID: ctx.siteID, action: workordermodel.ActionList}
 	decision, failure := ctx.handler.authorizeWorkOrder(ctx.request, ctx.session, route, nil, nil)
 	if failure == nil {
 		var grant string
@@ -372,7 +372,7 @@ func authorizeAlarmTool(ctx operationsToolAuthContext) (operationsToolAuthorizat
 	if ctx.handler.alarm == nil {
 		return operationsToolAuthorizationResponse{}, unavailableOperationsProblem("The Alarm Service is not configured.")
 	}
-	route := publicAlarmRoute{template: "/api/v1/alarms", action: alarmauth.ActionRead, siteID: ctx.siteID}
+	route := publicAlarmRoute{template: "/api/v1/alarms", action: alarmmodel.ActionRead, siteID: ctx.siteID}
 	caller := ownerCaller{session: ctx.session, presenter: ctx.handler.operations.workloadSPIFFEID}
 	grant, decision, failure := grantOwner(ctx.request.Context(), ctx.handler, caller, ctx.handler.alarmOwner(), string(route.action), route.scope(ctx.session.TenantID))
 	if failure == nil {

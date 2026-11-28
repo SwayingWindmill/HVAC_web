@@ -1,7 +1,6 @@
 package iam
 
 import (
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -28,11 +27,11 @@ func (h *handler) handleRegistryWorkloadDecision(writer http.ResponseWriter, req
 		writeProblem(writer, http.StatusUnauthorized, "IAM_WORKLOAD_IDENTITY_INVALID", "The calling workload identity is not trusted.")
 		return http.StatusUnauthorized
 	}
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
-	var decisionRequest registryauth.DecisionRequest
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&decisionRequest); err != nil || ensureJSONEOF(decoder) != nil || decisionRequest.Validate() != nil || decisionRequest.GrantPresenter != "" {
+	decisionRequest, ok := decodeStrictDecisionJSON[registryauth.DecisionRequest](writer, request, "IAM_REGISTRY_DECISION_REQUEST_INVALID", "The Registry authorization request is invalid.")
+	if !ok {
+		return http.StatusBadRequest
+	}
+	if decisionRequest.GrantPresenter != "" {
 		writeProblem(writer, http.StatusBadRequest, "IAM_REGISTRY_DECISION_REQUEST_INVALID", "The Registry authorization request is invalid.")
 		return http.StatusBadRequest
 	}

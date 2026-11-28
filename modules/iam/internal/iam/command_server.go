@@ -1,7 +1,6 @@
 package iam
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
@@ -9,11 +8,11 @@ import (
 )
 
 func (h *handler) handleCommandDecision(writer http.ResponseWriter, request *http.Request, inbound identitycontext.DelegationClaims, presenter string) int {
-	request.Body = http.MaxBytesReader(writer, request.Body, maximumDecisionRequestSize)
-	var input commandauth.DecisionRequest
-	decoder := json.NewDecoder(request.Body)
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&input) != nil || ensureJSONEOF(decoder) != nil || input.Validate() != nil || input.TenantID != inbound.TenantID {
+	input, ok := decodeStrictDecisionJSON[commandauth.DecisionRequest](writer, request, "IAM_COMMAND_DECISION_REQUEST_INVALID", "The Command authorization request is invalid.")
+	if !ok {
+		return http.StatusBadRequest
+	}
+	if input.TenantID != inbound.TenantID {
 		writeProblem(writer, http.StatusBadRequest, "IAM_COMMAND_DECISION_REQUEST_INVALID", "The Command authorization request is invalid.")
 		return http.StatusBadRequest
 	}

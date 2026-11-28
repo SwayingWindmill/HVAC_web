@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 )
 
 // AlarmAuthorizationStore reads the Principal's access under the Alarm policy.
@@ -33,17 +33,17 @@ func (store *staticAlarmAuthorizationStore) LookupAlarmAuthorization(_ context.C
 	return cloneAuthorizationFacts(value), nil
 }
 
-func evaluateAlarmAuthorization(ctx context.Context, store AlarmAuthorizationStore, now time.Time, subjectIssuer, subject string, request alarmauth.DecisionRequest) (alarmauth.Decision, error) {
+func evaluateAlarmAuthorization(ctx context.Context, store AlarmAuthorizationStore, now time.Time, subjectIssuer, subject string, request alarmmodel.DecisionRequest) (alarmmodel.Decision, error) {
 	facts, err := store.LookupAlarmAuthorization(ctx, AuthorizationLookup{
 		SubjectIssuer: subjectIssuer, Subject: subject, TenantID: request.TenantID,
 	})
 	if err != nil {
-		return alarmauth.Decision{}, err
+		return alarmmodel.Decision{}, err
 	}
-	decision := alarmauth.Decision{
+	decision := alarmmodel.Decision{
 		SubjectIssuer: subjectIssuer, Subject: subject,
 		TenantID: request.TenantID, SiteID: request.SiteID, AlarmID: request.AlarmID,
-		Action: request.Action, PolicyRevision: facts.PolicyRevision, ReasonCode: alarmauth.ReasonDenyPrincipal,
+		Action: request.Action, PolicyRevision: facts.PolicyRevision, ReasonCode: alarmmodel.ReasonDenyPrincipal,
 		DecidedAt: now.UTC().Format(time.RFC3339Nano),
 	}
 	if !facts.Found || facts.Principal.Status != FactStatusActive {
@@ -51,18 +51,18 @@ func evaluateAlarmAuthorization(ctx context.Context, store AlarmAuthorizationSto
 	}
 	decision.PrincipalID = facts.Principal.ID
 	if active, _ := facts.member(request.TenantID, now); !active {
-		decision.ReasonCode = alarmauth.ReasonDenyMembership
+		decision.ReasonCode = alarmmodel.ReasonDenyMembership
 		return decision, nil
 	}
 	allowed, denied := facts.grantsAt(request.TenantID, request.SiteID, string(request.Action), now)
 	switch {
 	case denied:
-		decision.ReasonCode = alarmauth.ReasonDenyExplicit
+		decision.ReasonCode = alarmmodel.ReasonDenyExplicit
 	case !allowed:
-		decision.ReasonCode = alarmauth.ReasonDenyScope
+		decision.ReasonCode = alarmmodel.ReasonDenyScope
 	default:
 		decision.Allowed = true
-		decision.ReasonCode = alarmauth.ReasonAllowExactScope
+		decision.ReasonCode = alarmmodel.ReasonAllowExactScope
 	}
 	return decision, nil
 }

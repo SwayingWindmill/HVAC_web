@@ -10,11 +10,11 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
+	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 	"github.com/quanlaihe/hvac-web/modules/iam/internal/iam"
 )
 
@@ -53,10 +53,10 @@ func currentPrincipal(t *testing.T, facts iam.AuthorizationFacts) identitycontex
 func TestIAMPublishesEffectiveCapabilitiesFromRoleAssignments(t *testing.T) {
 	response := currentPrincipal(t, principalFacts([]iam.RoleAssignment{
 		{TenantID: iam.S1FixtureTenantAID, RoleKey: "viewer", Status: iam.FactStatusActive, Capabilities: []string{
-			string(registryauth.ActionRegistryRead), string(telemetryauth.ActionSnapshotRead), string(alarmauth.ActionRead), string(workorderauth.ActionList),
+			string(registryauth.ActionRegistryRead), string(telemetryauth.ActionSnapshotRead), string(alarmmodel.ActionRead), string(workordermodel.ActionList),
 		}},
 		{TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, RoleKey: "site-manager", Status: iam.FactStatusActive, Capabilities: []string{
-			string(alarmauth.ActionAssign), string(workorderauth.ActionStart),
+			string(alarmmodel.ActionAssign), string(workordermodel.ActionStart),
 			// A Site assignment never carries a Tenant-scoped capability.
 			string(identitycontext.CapabilityIAMAdmin),
 		}},
@@ -207,7 +207,7 @@ func assertCapabilitiesEqual(t *testing.T, actual, expected []identitycontext.Ca
 func principalSiteOperatorFacts(policyRevision string) iam.AuthorizationFacts {
 	facts := principalFacts([]iam.RoleAssignment{{
 		TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite1ID, RoleKey: "operator", Status: iam.FactStatusActive,
-		Capabilities: []string{string(alarmauth.ActionRead), string(alarmauth.ActionAssign), string(workorderauth.ActionList), string(workorderauth.ActionRead), string(workorderauth.ActionCreate), string(workorderauth.ActionAssign), string(workorderauth.ActionStart)},
+		Capabilities: []string{string(alarmmodel.ActionRead), string(alarmmodel.ActionAssign), string(workordermodel.ActionList), string(workordermodel.ActionRead), string(workordermodel.ActionCreate), string(workordermodel.ActionAssign), string(workordermodel.ActionStart)},
 	}}, nil)
 	facts.PolicyRevision = policyRevision
 	return facts

@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
+	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
 type PrincipalCapabilityLookup struct {
@@ -33,14 +33,14 @@ func newPrincipalCapabilityResolver(store AuthorizationStore, now func() time.Ti
 // principalCapabilityActions maps a navigation capability to the stored capabilities that
 // imply it; any one is enough. A capability not listed is implied by itself.
 var principalCapabilityActions = map[identitycontext.Capability][]string{
-	identitycontext.CapabilityAlarmList:          {string(alarmauth.ActionRead)},
-	identitycontext.CapabilityAlarmRead:          {string(alarmauth.ActionRead)},
-	identitycontext.CapabilityAlarmAssign:        {string(alarmauth.ActionAssign)},
-	identitycontext.CapabilityWorkOrderList:      {string(workorderauth.ActionList)},
-	identitycontext.CapabilityWorkOrderRead:      {string(workorderauth.ActionRead)},
-	identitycontext.CapabilityWorkOrderCreate:    {string(workorderauth.ActionCreate)},
-	identitycontext.CapabilityWorkOrderAssign:    {string(workorderauth.ActionAssign)},
-	identitycontext.CapabilityWorkOrderLifecycle: {string(workorderauth.ActionPlan), string(workorderauth.ActionStart), string(workorderauth.ActionBlock), string(workorderauth.ActionResume), string(workorderauth.ActionComplete), string(workorderauth.ActionCancel), string(workorderauth.ActionReopen)},
+	identitycontext.CapabilityAlarmList:          {string(alarmmodel.ActionRead)},
+	identitycontext.CapabilityAlarmRead:          {string(alarmmodel.ActionRead)},
+	identitycontext.CapabilityAlarmAssign:        {string(alarmmodel.ActionAssign)},
+	identitycontext.CapabilityWorkOrderList:      {string(workordermodel.ActionList)},
+	identitycontext.CapabilityWorkOrderRead:      {string(workordermodel.ActionRead)},
+	identitycontext.CapabilityWorkOrderCreate:    {string(workordermodel.ActionCreate)},
+	identitycontext.CapabilityWorkOrderAssign:    {string(workordermodel.ActionAssign)},
+	identitycontext.CapabilityWorkOrderLifecycle: {string(workordermodel.ActionPlan), string(workordermodel.ActionStart), string(workordermodel.ActionBlock), string(workordermodel.ActionResume), string(workordermodel.ActionComplete), string(workordermodel.ActionCancel), string(workordermodel.ActionReopen)},
 }
 
 // ResolvePrincipalCapabilities lists what the Principal can do anywhere in the Tenant: the union

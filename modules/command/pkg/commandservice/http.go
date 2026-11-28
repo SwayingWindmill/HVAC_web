@@ -13,6 +13,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 )
@@ -263,7 +264,8 @@ func (h *HTTPHandler) createCommand(writer http.ResponseWriter, request *http.Re
 		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", false)
 		return
 	}
-	claims, err := commandauth.VerifyGrant(h.config.CommandGrantPublicKey, request.Header.Get(commandGrantHeader))
+	grantToken, _ := grant.SingleHeader(request.Header, commandGrantHeader)
+	claims, err := commandauth.VerifyGrant(h.config.CommandGrantPublicKey, grantToken)
 	if err != nil {
 		writeCommandProblem(writer, http.StatusUnauthorized, "COMMAND_GRANT_INVALID", false)
 		return
@@ -319,7 +321,8 @@ func (h *HTTPHandler) approveCommand(writer http.ResponseWriter, request *http.R
 		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_APPROVAL_REQUEST_INVALID", false)
 		return
 	}
-	claims, err := commandauth.VerifyGrant(h.config.CommandGrantPublicKey, request.Header.Get(commandGrantHeader))
+	grantToken, _ := grant.SingleHeader(request.Header, commandGrantHeader)
+	claims, err := commandauth.VerifyGrant(h.config.CommandGrantPublicKey, grantToken)
 	if err != nil {
 		writeCommandProblem(writer, http.StatusUnauthorized, "COMMAND_GRANT_INVALID", false)
 		return
@@ -428,7 +431,8 @@ func (h *HTTPHandler) cancelPendingCommands(writer http.ResponseWriter, request 
 		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_REQUEST_INVALID", false)
 		return
 	}
-	claims, err := identitycontext.VerifyDelegation(h.config.GatewayDelegationPublicKey, request.Header.Get(commandControlContextHeader))
+	controlToken, _ := grant.SingleHeader(request.Header, commandControlContextHeader)
+	claims, err := identitycontext.VerifyDelegation(h.config.GatewayDelegationPublicKey, controlToken)
 	if err != nil || claims.TenantID != input.TenantID || len(claims.Scopes) != 2 ||
 		identitycontext.ValidateDelegationAnyScope(claims, h.now().UTC(), h.config.GatewaySPIFFE, h.config.GatewayReadAudience,
 			"command:cancel-pending", []string{"tenant:" + input.TenantID, "site:" + input.SiteID}) != nil ||
@@ -453,7 +457,8 @@ func (h *HTTPHandler) cancelPendingCommands(writer http.ResponseWriter, request 
 }
 
 func (h *HTTPHandler) authorizeSubmittedDeviceAction(writer http.ResponseWriter, request *http.Request, commandID, tenantID, siteID, deviceID, principalID string) (commandauth.GrantClaims, bool) {
-	claims, err := commandauth.VerifyGrant(h.config.CommandGrantPublicKey, request.Header.Get(commandGrantHeader))
+	grantToken, _ := grant.SingleHeader(request.Header, commandGrantHeader)
+	claims, err := commandauth.VerifyGrant(h.config.CommandGrantPublicKey, grantToken)
 	if err != nil {
 		writeCommandProblem(writer, http.StatusUnauthorized, "COMMAND_GRANT_INVALID", false)
 		return commandauth.GrantClaims{}, false
@@ -489,7 +494,8 @@ func (h *HTTPHandler) getCommand(writer http.ResponseWriter, request *http.Reque
 		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_READ_CONTEXT_INVALID", false)
 		return
 	}
-	claims, err := identitycontext.VerifyDelegation(h.config.GatewayDelegationPublicKey, request.Header.Get(commandReadContextHeader))
+	readToken, _ := grant.SingleHeader(request.Header, commandReadContextHeader)
+	claims, err := identitycontext.VerifyDelegation(h.config.GatewayDelegationPublicKey, readToken)
 	if err != nil || claims.TenantID != tenantID || len(claims.Scopes) != 2 ||
 		identitycontext.ValidateDelegationAnyScope(claims, h.now().UTC(), h.config.GatewaySPIFFE, h.config.GatewayReadAudience,
 			"command:read", []string{"tenant:" + tenantID, "command:" + commandID}) != nil ||
@@ -517,7 +523,8 @@ func (h *HTTPHandler) listCommands(writer http.ResponseWriter, request *http.Req
 		writeCommandProblem(writer, http.StatusBadRequest, "COMMAND_LIST_REQUEST_INVALID", false)
 		return
 	}
-	claims, err := identitycontext.VerifyDelegation(h.config.GatewayDelegationPublicKey, request.Header.Get(commandReadContextHeader))
+	readToken, _ := grant.SingleHeader(request.Header, commandReadContextHeader)
+	claims, err := identitycontext.VerifyDelegation(h.config.GatewayDelegationPublicKey, readToken)
 	if err != nil || claims.TenantID != tenantID || len(claims.Scopes) != 2 ||
 		identitycontext.ValidateDelegationAnyScope(claims, h.now().UTC(), h.config.GatewaySPIFFE, h.config.GatewayReadAudience,
 			"command:read", []string{"tenant:" + tenantID, "site:" + siteID}) != nil ||

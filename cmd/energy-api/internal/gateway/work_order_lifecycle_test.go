@@ -6,22 +6,21 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/quanlaihe/hvac-web/libs/workorderauth"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
 func TestGatewayWorkOrderLifecycleRoutesAreClosedAndActionSpecific(t *testing.T) {
 	expected := map[string]struct {
-		action    workorderauth.Action
+		action    workordermodel.Action
 		operation workordermodel.Operation
 	}{
-		":plan":     {workorderauth.ActionPlan, workordermodel.OperationSchedule},
-		":start":    {workorderauth.ActionStart, workordermodel.OperationStart},
-		":block":    {workorderauth.ActionBlock, workordermodel.OperationBlock},
-		":resume":   {workorderauth.ActionResume, workordermodel.OperationResume},
-		":complete": {workorderauth.ActionComplete, workordermodel.OperationComplete},
-		":cancel":   {workorderauth.ActionCancel, workordermodel.OperationCancel},
-		":reopen":   {workorderauth.ActionReopen, workordermodel.OperationReopen},
+		":plan":     {workordermodel.ActionPlan, workordermodel.OperationSchedule},
+		":start":    {workordermodel.ActionStart, workordermodel.OperationStart},
+		":block":    {workordermodel.ActionBlock, workordermodel.OperationBlock},
+		":resume":   {workordermodel.ActionResume, workordermodel.OperationResume},
+		":complete": {workordermodel.ActionComplete, workordermodel.OperationComplete},
+		":cancel":   {workordermodel.ActionCancel, workordermodel.OperationCancel},
+		":reopen":   {workordermodel.ActionReopen, workordermodel.OperationReopen},
 	}
 	for suffix, want := range expected {
 		route, ok := matchPublicWorkOrderRoute("/api/v1/sites/" + gatewayWorkOrderSiteID + "/work-orders/" + gatewayWorkOrderID + suffix)

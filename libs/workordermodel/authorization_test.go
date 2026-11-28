@@ -1,4 +1,4 @@
-package workorderauth
+package workordermodel
 
 import "testing"
 

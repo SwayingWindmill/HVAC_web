@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/quanlaihe/hvac-web/libs/alarmauth"
+	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/analyticsmodel"
 	"github.com/quanlaihe/hvac-web/modules/iam/internal/iam"
 )
@@ -33,7 +33,7 @@ func (store factsBySubject) LookupRegistryAuthorization(_ context.Context, looku
 func reminderRecipientsHarness(t *testing.T, sink *capturingAlarmAuditSink) iamHarness {
 	moved := principalFacts([]iam.RoleAssignment{{
 		TenantID: iam.S1FixtureTenantAID, SiteID: iam.S1FixtureOwnerASite2ID, RoleKey: "operator", Status: iam.FactStatusActive,
-		Capabilities: []string{string(alarmauth.ActionRead), analyticsmodel.EnergySeriesAction},
+		Capabilities: []string{string(alarmmodel.ActionRead), analyticsmodel.EnergySeriesAction},
 	}}, nil)
 	moved.PolicyRevision = principalCapabilityAlarmPolicy
 	energyOnly := principalFacts([]iam.RoleAssignment{{
