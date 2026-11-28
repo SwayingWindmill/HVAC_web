@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type PostgresStore struct {
@@ -54,7 +55,7 @@ func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore,
 		pool.Close()
 		return nil, fmt.Errorf("ping Alarm database: %w", err)
 	}
-	return &PostgresStore{pool: pool, newID: newUUIDv7}, nil
+	return &PostgresStore{pool: pool, newID: uuidv7.NewAt}, nil
 }
 
 func (store *PostgresStore) Close() {

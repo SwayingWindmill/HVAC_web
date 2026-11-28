@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-import { readGoWorkspace } from './lib/go-workspace.mjs';
+import { readGoWorkspace } from './lib/go-workspace.ts';
 
 const root = resolve(import.meta.dirname, '..');
 export const baselinePath = 'scripts/coverage-baseline.json';

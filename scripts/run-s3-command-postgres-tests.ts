@@ -132,7 +132,7 @@ try {
     S3_COMMAND_TEST_DATABASE_URL: `postgres://s3_command_service:s3-command-service-local-only@127.0.0.1:${postgresHostPort}/hvac_s3?sslmode=disable`,
     S3_COMMAND_ADMIN_DATABASE_URL: `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s3?sslmode=disable`,
   };
-  run(process.execPath, ['scripts/run-go.mjs', 'test', './modules/command/...'], { env: testEnvironment, stdio: 'inherit' });
+  run(process.execPath, ['--experimental-strip-types', 'scripts/run-go.ts', 'test', './modules/command/...'], { env: testEnvironment, stdio: 'inherit' });
   report.assertions.goIntegrationTests = true;
 
   report.status = 'passed';

@@ -83,7 +83,7 @@ function replay() {
     if (held > 0) throw new Error(`${site.siteName} already holds ${held} observations of what this replay writes in this window; reset the local stack or choose another window`);
   }
   ensureReplayIdentity();
-  run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', path.join(out, 'eg8200-history-replay'), './tools/eg8200-simulator/cmd/eg8200-history-replay'],
+  run(process.execPath, ['--experimental-strip-types', 'scripts/run-go.ts', 'build', '-o', path.join(out, 'eg8200-history-replay'), './tools/eg8200-simulator/cmd/eg8200-history-replay'],
     { env: { ...process.env, CGO_ENABLED: '0', GOOS: 'linux' } });
 
   const points = (values['weather-only'] ? [weatherPoint] : [...meterPoints, weatherPoint]).join(',');

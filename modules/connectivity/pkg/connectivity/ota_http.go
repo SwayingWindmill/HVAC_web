@@ -133,7 +133,7 @@ func NewOTAHandler(
 		r.Body = http.MaxBytesReader(w, r.Body, maxPkgBytes+maxOTAMultipartFormOverhead)
 		mr := multipart.NewReader(r.Body, params["boundary"])
 
-		fileKeyID, err := newUUIDv7(nowFn().UTC())
+		fileKeyID, err := uuidv7.NewAt(nowFn().UTC())
 		if err != nil {
 			writeOTAErrorJSON(w, http.StatusInternalServerError, "OTA_SERVICE_UNAVAILABLE", "unable to allocate OTA package identifier")
 			return

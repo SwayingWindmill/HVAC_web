@@ -77,7 +77,7 @@ hvac/v1/{网关 id}/up/event
 
 ```text
 (cd modules/connectivity && go test ./...)
-node scripts/run-s1-registry-postgres-tests.mjs   # 含接入服务的数据存取和登记读取接口
-node scripts/run-mqtt-broker-acl-tests.mjs
+node --experimental-strip-types scripts/run-s1-registry-postgres-tests.ts   # 含接入服务的数据存取和登记读取接口
+node --experimental-strip-types scripts/run-mqtt-broker-acl-tests.ts
 node --experimental-strip-types scripts/run-mqtt-broker-crl-kick-tests.ts
 ```

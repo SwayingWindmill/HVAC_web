@@ -1,9 +1,8 @@
-import { spawnSync } from 'node:child_process';
-import { once } from 'node:events';
+import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
-import { pullDockerImageWithRetry, runDockerCompose } from './lib/docker-cli.mjs';
+import { pullDockerImageWithRetry, runDockerCompose } from './lib/docker-cli.ts';
+import { findAvailablePort } from './lib/postgres-compose-harness.ts';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/telemetry/compose.yaml');
@@ -11,21 +10,12 @@ const projectName = `hvac-s2-history-${process.pid}`;
 const reportPath = resolve(root, process.env.S2_HISTORY_REPORT_PATH ?? 'out/s2-history/clickhouse-integration.json');
 const postgresImage = 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412';
 const clickHouseImage = 'clickhouse/clickhouse-server:26.3.39.7@sha256:3a91276f066905da0edbbd622d3fc2a2df632c87ea7fe32ef4e74fdf8c9567b0';
-const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-async function findAvailablePort() {
-  const server = createTCPServer();
-  server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
-  await once(server, 'listening');
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('S2 telemetry history port allocator failed');
-  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
-  return address.port;
-}
+const pause = (milliseconds: number): Promise<void> => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
 const [postgresHostPort, clickHouseHostPort, clickHouseNativePort] = await Promise.all([
-  findAvailablePort(),
-  findAvailablePort(),
-  findAvailablePort(),
+  findAvailablePort('S2 telemetry history Postgres'),
+  findAvailablePort('S2 telemetry history ClickHouse HTTP'),
+  findAvailablePort('S2 telemetry history ClickHouse native'),
 ]);
 const composeEnvironment = {
   ...process.env,
@@ -39,32 +29,32 @@ const adminURL = `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHo
 const clickHouseURL = `http://127.0.0.1:${clickHouseHostPort}`;
 const clickHouseNativeAddr = `127.0.0.1:${clickHouseNativePort}`;
 
-function run(command, args, options = {}) {
+function run(command: string, args: string[], options: SpawnSyncOptions = {}): string {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
   if (result.error || result.status !== 0) {
-    const detail = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || String(result.status);
+    const detail = result.error?.message || String(result.stderr ?? '').trim() || String(result.stdout ?? '').trim() || String(result.status);
     throw new Error(`${command} ${args.join(' ')} failed: ${detail}`);
   }
   return String(result.stdout ?? '').trim();
 }
 
-function compose(args) {
+function compose(args: string[]): string {
   return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
-function container(service) {
+function container(service: string): string {
   return compose(['ps', '-q', service]);
 }
 
-function psql(sql) {
+function psql(sql: string): string {
   return run('docker', ['exec', container('postgres'), 'psql', '-U', 'postgres', '-d', 'hvac_s2', '-v', 'ON_ERROR_STOP=1', '-Atqc', sql]);
 }
 
-function clickHouse(sql) {
+function clickHouse(sql: string): string {
   return run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'telemetry_history', '--query', sql]);
 }
 
-async function waitForServices() {
+async function waitForServices(): Promise<void> {
   let stableChecks = 0;
   for (let attempt = 0; attempt < 360; attempt += 1) {
     try {
@@ -84,7 +74,17 @@ async function waitForServices() {
   throw new Error(`S2 telemetry history fixtures did not initialize\n${logs}`);
 }
 
-const report = {
+const report: {
+  schemaVersion: number;
+  capability: string;
+  status: string;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+  postgresImage: string;
+  clickHouseImage: string;
+  assertions: Record<string, string>;
+} = {
   schemaVersion: 1,
   capability: 's2-clickhouse-history',
   status: 'failed',
@@ -102,7 +102,8 @@ try {
   await waitForServices();
 
   report.assertions.goIntegration = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=modules/telemetry',
     'test', '-count=1', '-run', 'TestPostgresOutboxProjectsClickHouseHistoryDeduplicatesRetry|TestPostgresOutboxProjectsClickHouseNativePrepareBatchDeduplicatesRetry|TestPostgresOutboxDeduplicatesRetransmittedTimestampBeforeClickHouseMV|TestHistoryMicrobatch', '-v', './pkg/telemetry/...',
   ], {
@@ -123,7 +124,8 @@ try {
     throw new Error('history integration tests must execute, not skip');
   }
   report.assertions.queryClient = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=modules/telemetry',
     'test', '-count=1', '-run', 'TestClickHouseHistoryClient', '-v', './internal/history/...',
   ], {

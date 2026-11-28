@@ -1,4 +1,4 @@
-# golangci-lint rules for every Go module in go.work (run by scripts/run-go-lint.mjs as the go unit profile of the PR gates).
+# golangci-lint rules for every Go module in go.work (run by scripts/run-go-lint.ts as the go unit profile of the PR gates).
 version: "2"
 
 linters:

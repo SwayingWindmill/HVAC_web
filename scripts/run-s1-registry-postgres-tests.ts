@@ -1,12 +1,12 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type SpawnSyncOptions } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { createServer as createTCPServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
-import { runDockerCompose } from './lib/docker-cli.mjs';
+import { runDockerCompose } from './lib/docker-cli.ts';
+import { findAvailablePort } from './lib/postgres-compose-harness.ts';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/registry/compose.yaml');
@@ -15,37 +15,28 @@ const containerName = `${projectName}-postgres-1`;
 const reportPath = resolve(root, process.env.S1_REGISTRY_REPORT_PATH ?? 'out/s1-registry-core/postgres-baseline.json');
 const goBinary = process.env.GO_BINARY ?? 'go';
 const goCacheDir = process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache');
-const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-async function findAvailablePort(requestedPort = 0) {
-  const server = createTCPServer();
-  server.listen({ host: '127.0.0.1', port: Number(requestedPort) || 0, exclusive: true });
-  await once(server, 'listening');
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('S1 PostgreSQL port allocator did not expose a TCP address');
-  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
-  return address.port;
-}
+const pause = (milliseconds: number): Promise<void> => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
-const postgresHostPort = await findAvailablePort(process.env.S1_POSTGRES_HOST_PORT ?? 0);
+const postgresHostPort = await findAvailablePort('S1 PostgreSQL', Number(process.env.S1_POSTGRES_HOST_PORT ?? 0) || 0);
 const telemetryGrantPassword = randomBytes(24).toString('hex');
 const iamAdminPassword = randomBytes(24).toString('hex');
 const coreServicePassword = randomBytes(24).toString('hex');
 const connectivityPassword = randomBytes(24).toString('hex');
 const composeEnvironment = { ...process.env, S1_POSTGRES_HOST_PORT: String(postgresHostPort) };
 
-function run(command, args, options = {}) {
+function run(command: string, args: string[], options: SpawnSyncOptions = {}): string {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
   if (result.error || result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} failed: ${result.error?.message ?? result.stderr?.trim() ?? result.status}`);
+    throw new Error(`${command} ${args.join(' ')} failed: ${result.error?.message ?? String(result.stderr ?? '').trim() ?? result.status}`);
   }
   return String(result.stdout ?? '').trim();
 }
 
-function compose(args) {
+function compose(args: string[]): string {
   return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
-function psql(sql, { expectFailure = false } = {}) {
+function psql(sql: string, { expectFailure = false }: { expectFailure?: boolean } = {}): string {
   const result = spawnSync('docker', [
     'exec', containerName, 'psql', '-U', 'postgres', '-d', 'hvac_s1', '-v', 'ON_ERROR_STOP=1', '-Atqc', sql,
   ], { cwd: root, encoding: 'utf8', windowsHide: true });
@@ -54,12 +45,12 @@ function psql(sql, { expectFailure = false } = {}) {
     return String(result.stderr ?? '').trim();
   }
   if (result.error || result.status !== 0) {
-    throw new Error(`SQL failed: ${result.error?.message ?? result.stderr?.trim() ?? result.status}\n${sql}`);
+    throw new Error(`SQL failed: ${result.error?.message ?? String(result.stderr ?? '').trim() ?? result.status}\n${sql}`);
   }
   return String(result.stdout ?? '').trim();
 }
 
-async function waitForPostgres() {
+async function waitForPostgres(): Promise<void> {
   let stablePostmasterStart = '';
   let stableChecks = 0;
   for (let attempt = 0; attempt < 300; attempt += 1) {
@@ -86,7 +77,7 @@ async function waitForPostgres() {
   throw new Error(`S1 PostgreSQL fixture did not reach a stable initialized postmaster\n${logs}`);
 }
 
-function expectEqual(actual, expected, label) {
+function expectEqual(actual: string, expected: string, label: string): void {
   if (actual !== expected) throw new Error(`${label}: expected ${expected}, got ${actual}`);
 }
 
@@ -97,7 +88,7 @@ function assertRegistryReadPort() {
   const gatewayA = '018f1e00-4000-7000-8000-000000000002';
   const gatewayB = '018f1e00-4100-7000-8000-000000000003';
   const meterA = '018f1e00-4100-7000-8000-000000000001';
-  const asConnectivity = (tenantID, query) => `
+  const asConnectivity = (tenantID: string, query: string): string => `
     SET LOCAL ROLE connectivity_runtime;
     SELECT set_config('app.tenant_id', '${tenantID}', true);
     ${query};
@@ -165,7 +156,7 @@ function seedIAMIntegrationFixtures() {
   `);
 }
 
-function scopedCounts(tenantID, siteIDs) {
+function scopedCounts(tenantID: string, siteIDs: string): number[] {
   return psql(`
     BEGIN;
     SET LOCAL ROLE s1_core_runtime;
@@ -196,7 +187,7 @@ async function runIAMGoTests() {
       S1_IAM_ADMIN_DATABASE_URL: `postgres://s1_iam_admin:${iamAdminPassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
     },
   });
-  const [code, signal] = await once(child, 'exit');
+  const [code, signal] = await once(child, 'exit') as [number | null, NodeJS.Signals | null];
   if (signal || code !== 0) throw new Error(`S1 IAM PostgreSQL tests failed: ${signal ?? code}`);
 }
 
@@ -213,7 +204,7 @@ async function runCoreGoTests() {
       S1_CORE_DATABASE_URL: `postgres://s1_core_service:${coreServicePassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
     },
   });
-  const [code, signal] = await once(child, 'exit');
+  const [code, signal] = await once(child, 'exit') as [number | null, NodeJS.Signals | null];
   if (signal || code !== 0) throw new Error(`S1 Core PostgreSQL tests failed: ${signal ?? code}`);
 }
 
@@ -232,7 +223,7 @@ async function runConnectivityGoTests() {
       CONNECTIVITY_POSTGRES_DSN: `postgres://connectivity_runtime:${connectivityPassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
     },
   });
-  const [code, signal] = await once(child, 'exit');
+  const [code, signal] = await once(child, 'exit') as [number | null, NodeJS.Signals | null];
   if (signal || code !== 0) throw new Error(`Connectivity PostgreSQL tests failed: ${signal ?? code}`);
 }
 
@@ -253,7 +244,7 @@ async function runPlantTwinGoTests() {
       PLANTTWIN_TEST_FDD_DSN: `postgres://fdd_runtime:${fddPassword}@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`,
     },
   });
-  const [code, signal] = await once(child, 'exit');
+  const [code, signal] = await once(child, 'exit') as [number | null, NodeJS.Signals | null];
   if (signal || code !== 0) throw new Error(`PlantTwin PostgreSQL tests failed: ${signal ?? code}`);
 }
 
@@ -265,11 +256,18 @@ async function runGatewayRoutingGoTests() {
     shell: false,
     env: { ...process.env, GOCACHE: goCacheDir },
   });
-  const [code, signal] = await once(child, 'exit');
+  const [code, signal] = await once(child, 'exit') as [number | null, NodeJS.Signals | null];
   if (signal || code !== 0) throw new Error(`S1 Gateway Registry routing tests failed: ${signal ?? code}`);
 }
 
-const report = {
+const report: {
+  schemaVersion: number;
+  status: string;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+  assertions: Record<string, unknown>;
+} = {
   schemaVersion: 1,
   status: 'failed',
   startedAt: new Date().toISOString(),

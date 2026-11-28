@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
@@ -484,14 +485,13 @@ func (service *RealtimeService) Checkpoint(ctx context.Context, access AccessCon
 		if err != nil || int64(checkpoint.BusinessRevision) > currentRevision {
 			return telemetryapi.RecoveryCursorCheckpointResponse{}, ErrRecoveryCursorRejected
 		}
-		cursorID, err := newUUIDv7(now)
+		cursorID, err := uuidv7.NewAt(now)
 		if err != nil {
 			return telemetryapi.RecoveryCursorCheckpointResponse{}, ErrRealtimeUnavailable
 		}
 		expiresAt := now.Add(service.recoveryCursorTTL)
 		claims := recoveryCursorClaims{
-			Version:          1,
-			CursorID:         cursorID,
+			Version: 1, CursorID: cursorID,
 			SubscriptionID:   subscription.SubscriptionID,
 			PrincipalID:      subscription.PrincipalID,
 			Subject:          subscription.Subject,

@@ -28,6 +28,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type RuleActionStatus string
@@ -886,12 +887,11 @@ func (store *PostgresStore) nextID(at time.Time) (string, error) {
 	if store != nil && store.newID != nil {
 		return store.newID(at)
 	}
-	return newUUIDv7(at)
+	return uuidv7.NewAt(at)
 }
 
 func (store *PostgresStore) enqueueRuleActionsInTx(
-	ctx context.Context,
-	tx pgx.Tx,
+	ctx context.Context, tx pgx.Tx,
 	tenantID, siteID string,
 	alarm alarmmodel.Alarm,
 	assigned assignedAlarmPolicy,

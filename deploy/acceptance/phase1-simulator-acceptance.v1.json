@@ -49,19 +49,19 @@
     },
     {
       "id": "GATE-S2-POSTGRES",
-      "command": "node scripts/run-s2-telemetry-postgres-tests.mjs",
+      "command": "node --experimental-strip-types scripts/run-s2-telemetry-postgres-tests.ts",
       "category": "database",
       "evidence": ["out/s2-telemetry-baseline/postgres-baseline.json"]
     },
     {
       "id": "GATE-S2-INGEST-POSTGRES",
-      "command": "node scripts/run-s2-telemetry-ingest-postgres-tests.mjs",
+      "command": "node --experimental-strip-types scripts/run-s2-telemetry-ingest-postgres-tests.ts",
       "category": "telemetry",
       "evidence": ["out/s2-telemetry-ingest/telemetry-ingest-postgres.json"]
     },
     {
       "id": "GATE-ENERGY-GOLDEN",
-      "command": "node scripts/run-go.mjs test -count=1 ./modules/energy/internal/energy/...",
+      "command": "node --experimental-strip-types scripts/run-go.ts test -count=1 ./modules/energy/internal/energy/...",
       "category": "metric"
     },
     {
@@ -90,7 +90,7 @@
     },
     {
       "id": "GATE-RESTORE",
-      "command": "node scripts/run-phase1-postgres-restore-test.mjs",
+      "command": "node --experimental-strip-types scripts/run-phase1-postgres-restore-test.ts",
       "category": "recovery",
       "evidence": ["out/phase1-acceptance/restore-report.json"]
     },
@@ -101,13 +101,13 @@
     },
     {
       "id": "GATE-GO-VULN-1",
-      "command": "node scripts/run-go-vulnerability-scan.mjs --shard=1/2",
+      "command": "node --experimental-strip-types scripts/run-go-vulnerability-scan.ts --shard=1/2",
       "category": "security",
       "evidence": ["out/security/go-vuln-shard-1-of-2.json"]
     },
     {
       "id": "GATE-GO-VULN-2",
-      "command": "node scripts/run-go-vulnerability-scan.mjs --shard=2/2",
+      "command": "node --experimental-strip-types scripts/run-go-vulnerability-scan.ts --shard=2/2",
       "category": "security",
       "evidence": ["out/security/go-vuln-shard-2-of-2.json"]
     }

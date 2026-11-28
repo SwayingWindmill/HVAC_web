@@ -1,10 +1,9 @@
-import { spawnSync } from 'node:child_process';
-import { once } from 'node:events';
+import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
 
-import { runDockerCompose } from './lib/docker-cli.mjs';
+import { runDockerCompose } from './lib/docker-cli.ts';
+import { findAvailablePort } from './lib/postgres-compose-harness.ts';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/telemetry/compose.yaml');
@@ -12,42 +11,33 @@ const projectName = `hvac-s2-telemetry-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
 const redisContainerName = `${projectName}-latest-redis-1`;
 const reportPath = resolve(root, process.env.S2_TELEMETRY_REPORT_PATH ?? 'out/s2-telemetry-baseline/postgres-baseline.json');
-const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-async function findAvailablePort() {
-  const server = createTCPServer();
-  server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
-  await once(server, 'listening');
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('S2 PostgreSQL port allocator did not expose a TCP address');
-  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
-  return address.port;
-}
+const pause = (milliseconds: number): Promise<void> => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
-const postgresHostPort = await findAvailablePort();
-const latestRedisHostPort = await findAvailablePort();
+const postgresHostPort = await findAvailablePort('S2 PostgreSQL');
+const latestRedisHostPort = await findAvailablePort('S2 Latest Redis');
 const composeEnvironment = {
   ...process.env,
   S2_POSTGRES_HOST_PORT: String(postgresHostPort),
   S2_LATEST_REDIS_HOST_PORT: String(latestRedisHostPort),
 };
 
-function run(command, args, options = {}) {
+function run(command: string, args: string[], options: SpawnSyncOptions = {}): string {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
   if (result.error || result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} failed: ${result.error?.message ?? result.stderr?.trim() ?? result.status}`);
+    throw new Error(`${command} ${args.join(' ')} failed: ${result.error?.message ?? String(result.stderr ?? '').trim() ?? result.status}`);
   }
   return String(result.stdout ?? '').trim();
 }
 
-function compose(args) {
+function compose(args: string[]): string {
   return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
-function redisCli(args) {
+function redisCli(args: string[]): string {
   return run('docker', ['exec', redisContainerName, 'redis-cli', ...args]);
 }
 
-function psql(sql, { expectFailure = false } = {}) {
+function psql(sql: string, { expectFailure = false }: { expectFailure?: boolean } = {}): string {
   const result = spawnSync('docker', [
     'exec', containerName, 'psql', '-U', 'postgres', '-d', 'hvac_s2', '-v', 'ON_ERROR_STOP=1', '-Atqc', sql,
   ], { cwd: root, encoding: 'utf8', windowsHide: true });
@@ -104,11 +94,11 @@ async function waitForPostgres() {
   throw new Error(`S2 PostgreSQL fixture did not initialize\n${logs}`);
 }
 
-function expectEqual(actual, expected, label) {
+function expectEqual(actual: string, expected: string, label: string): void {
   if (actual !== expected) throw new Error(`${label}: expected ${expected}, got ${actual}`);
 }
 
-function expectPermissionDenied(sql, label) {
+function expectPermissionDenied(sql: string, label: string): boolean {
   const failure = psql(sql, { expectFailure: true }).toLowerCase();
   if (!failure.includes('permission denied') && !failure.includes('must be member of role')) {
     throw new Error(`${label}: expected permission denial, got ${failure}`);
@@ -116,7 +106,16 @@ function expectPermissionDenied(sql, label) {
   return true;
 }
 
-const report = {
+const report: {
+  schemaVersion: number;
+  ticket: number;
+  status: string;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+  postgresImage: string;
+  assertions: Record<string, unknown>;
+} = {
   schemaVersion: 1,
   ticket: 60,
   status: 'failed',
@@ -397,8 +396,8 @@ try {
   if (!dlqMeta.includes('DEAD_LETTER') || !dlqMeta.includes('alarm_dead_lettered_at') || !dlqMeta.includes('|true|true|') || !/[\u4e00-\u9fff]/.test(dlqMeta)) {
     throw new Error(`Alarm DLQ schema/grant/comment check failed: ${dlqMeta}`);
   }
-  const runTelemetryGo = (pattern, extraEnv) => run(process.execPath, [
-    'scripts/run-isolated-go.mjs', '--module=modules/telemetry', 'test', '-count=1', '-run', pattern, '-v', './pkg/telemetry/...',
+  const runTelemetryGo = (pattern: string, extraEnv: NodeJS.ProcessEnv): string => run(process.execPath, [
+    '--experimental-strip-types', 'scripts/run-isolated-go.ts', '--module=modules/telemetry', 'test', '-count=1', '-run', pattern, '-v', './pkg/telemetry/...',
   ], { env: { ...process.env, ...extraEnv } });
   report.assertions.alarmEvaluationDeadLetter = { schemaAndGrantReady: true };
   report.assertions.redisLatestCAS = runTelemetryGo('Test(RedisLatestCacheNeverRegressesBusinessRevision|RebuildLatestCacheRestoresBusinessSnapshots)', {

@@ -228,7 +228,7 @@ WHERE tenant_id = $1::uuid
 
 	inserted := make([]ProvisioningBatchDevice, 0, len(entries))
 	for _, e := range entries {
-		rowID, idErr := newUUIDv7(now)
+		rowID, idErr := uuidv7.NewAt(now)
 		if idErr != nil {
 			return nil, idErr
 		}
@@ -322,7 +322,7 @@ func (service *CredentialService) CreateProvisioningBatch(
 	secretDigest := hashCredential([]byte(productSecret))
 
 	now := service.store.clock().UTC()
-	batchID, err := newUUIDv7(now)
+	batchID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return ProvisioningBatchCreated{}, err
 	}
@@ -780,7 +780,7 @@ WHERE connectivity.gateway_enrollments.revoked_at IS NULL
 	if err != nil {
 		return IssuedCredential{}, err
 	}
-	credID, err := newUUIDv7(now)
+	credID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return IssuedCredential{}, err
 	}

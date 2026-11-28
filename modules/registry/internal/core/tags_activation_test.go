@@ -435,7 +435,7 @@ func TestCoreHTTPCrossSiteSearchCursorAndTemplateRead(t *testing.T) {
 		},
 	}
 
-	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, now, store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 
 	crossClaims := testGrantClaims(registryauth.ActionAssetList)
 	crossClaims.AllowedSiteIDs = []string{testSiteA1, testSiteA2}

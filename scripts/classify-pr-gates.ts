@@ -64,7 +64,7 @@ async function changedFiles(): Promise<string[]> {
 const files = [...new Set(await changedFiles())];
 const isGoCheckInput = (file: string): boolean => file.endsWith('.go')
   || /(?:^|\/)go\.(?:mod|sum)$/u.test(file)
-  || ['go.work', 'go.work.sum', '.golangci.yml', 'scripts/run-go.mjs', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs', 'scripts/lib/go-workspace.mjs', 'scripts/lib/go-workspace.d.mts'].includes(file);
+  || ['go.work', 'go.work.sum', '.golangci.yml', 'scripts/run-go.ts', 'scripts/run-go-lint.ts', 'scripts/run-go-vulnerability-scan.ts', 'scripts/lib/go-workspace.ts'].includes(file);
 
 // Every Phase 1 migration is listed here; a change to one reruns the migration integration test.
 const phase1Migrations = new Set(
@@ -271,9 +271,9 @@ for (const file of files) {
   match(file.startsWith('apps/hvac-web/'), () => selectWeb(file, 'HVAC Web runtime changed'));
   match(file.startsWith('apps/hvac-miniprogram/'), () => selectWeb(file, 'WeChat mini program changed'));
   // The Agent's semantic query whitelist is generated from the Cube model (#573).
-  match(file.startsWith('semantic/cube/') || file === 'libs/analyticsmodel/semantic_catalog.json' || file === 'scripts/generate-semantic-catalog.mjs', () => add(contractProfiles, ['core']));
+  match(file.startsWith('semantic/cube/') || file === 'libs/analyticsmodel/semantic_catalog.json' || file === 'scripts/generate-semantic-catalog.ts', () => add(contractProfiles, ['core']));
   // The Cube model and the ClickHouse schema only run against each other in the analytics
-  // integration profile (run-analytics-history-tests.mjs, run-analytics-cube-tests.mjs).
+  // integration profile (run-analytics-history-tests.ts, run-analytics-cube-tests.ts).
   match(file.startsWith('semantic/cube/') || file.startsWith('infra/telemetry/clickhouse/'), () => selectAnalytics(file, 'analytics ClickHouse schema or Cube model changed', { integration: true }));
   match(file.startsWith('contracts/'), () => {
     add(contractProfiles, ['core']);
@@ -415,9 +415,9 @@ for (const file of files) {
     ].includes(file), () => {});
     scriptMatch(file === 'scripts/README.md', () => addReason(file, 'scripts guide documentation changed'));
     scriptMatch(
-      ['scripts/run-go.mjs', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs', 'scripts/run-isolated-go.mjs', 'scripts/lib/go-workspace.mjs', 'scripts/lib/go-workspace.d.mts'].includes(file),
+      ['scripts/run-go.ts', 'scripts/run-go-lint.ts', 'scripts/run-go-vulnerability-scan.ts', 'scripts/run-isolated-go.ts', 'scripts/lib/go-workspace.ts'].includes(file),
       () => {
-        if (file === 'scripts/run-isolated-go.mjs') add(unitProfiles, ['go']);
+        if (file === 'scripts/run-isolated-go.ts') add(unitProfiles, ['go']);
         addReason(file, 'Go execution tooling changed');
       },
     );
@@ -437,13 +437,13 @@ for (const file of files) {
       'scripts/test-local-runtime-env.ts',
       'scripts/run-preflight.ts',
       'scripts/js-yaml.d.ts',
-      'scripts/lib/docker-cli.mjs',
-      'scripts/clean-local-workspace.mjs',
+      'scripts/lib/docker-cli.ts',
+      'scripts/clean-local-workspace.ts',
     ].includes(file), () => addReason(file, 'repository governance baseline or script runtime utility changed (verified in static gate)'));
     scriptMatch(
       file === 'scripts/web-as-cast-baseline.json' ||
         file === 'scripts/web-file-lines-baseline.json' ||
-        file === 'scripts/shadcn-cli.mjs' ||
+        file === 'scripts/shadcn-cli.ts' ||
         file === 'scripts/check-web-js-runtime.mjs' ||
         file === 'scripts/lib/browser-runtime.mjs',
       () => selectWeb(file, 'web static guardrail or runtime script changed'),
@@ -464,7 +464,7 @@ for (const file of files) {
       selectTelemetry(file, 'central plant simulator rig helper changed');
       selectCommand(file, 'central plant simulator rig helper changed');
     });
-    scriptMatch(file === 'scripts/run-mqtt-e2e-tests.mjs', () => {
+    scriptMatch(file === 'scripts/run-mqtt-e2e-tests.ts', () => {
       selectTelemetry(file, 'MQTT end-to-end test runner changed', { integration: true });
       selectCommand(file, 'MQTT end-to-end test runner changed');
     });
@@ -499,7 +499,7 @@ for (const file of files) {
         file === 'scripts/check-phase1-recovery-attainment.ts' ||
         file === 'scripts/check-phase1-simulator-acceptance.ts' ||
         file === 'scripts/check-s16-notification.ts' ||
-        file === 'scripts/generate-semantic-catalog.mjs',
+        file === 'scripts/generate-semantic-catalog.ts',
       () => {
         add(contractProfiles, ['core']);
         addReason(file, 'contract, schema, or architecture checker script changed');
@@ -508,7 +508,7 @@ for (const file of files) {
     scriptMatch(
       [
         'scripts/run-phase1-clickhouse-restore-test.ts',
-        'scripts/run-phase1-postgres-restore-test.mjs',
+        'scripts/run-phase1-postgres-restore-test.ts',
         'scripts/run-phase1-migration-integration.mjs',
         'scripts/run-identity-postgres-tests.ts',
         'scripts/run-notification-postgres-tests.ts',
@@ -523,7 +523,7 @@ for (const file of files) {
         'scripts/check-production-licenses.ts',
         'scripts/test-npm-production-audit-retry.ts',
         'scripts/run-phase1-process-failure-drill.ts',
-        'scripts/run-phase1-simulator-acceptance.mjs',
+        'scripts/run-phase1-simulator-acceptance.ts',
         'scripts/verify-phase1-recovery-drill.mjs',
         'scripts/issue-workload-identities.mjs',
         'scripts/local-environment.mjs',

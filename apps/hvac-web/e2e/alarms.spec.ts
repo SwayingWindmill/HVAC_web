@@ -1,8 +1,6 @@
-import { mkdirSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import { SITE_ID } from './gateway';
-import { expect, test } from './test';
+import { captureVerifyScreenshot, expect, test } from './test';
 
 const principalFixture = JSON.parse(
   readFileSync(new URL('./fixtures/principal.json', import.meta.url), 'utf8'),
@@ -484,17 +482,15 @@ test('offline edge alarm replay projects cleared history, bundle metadata, and l
   // Strict sanitization: zero UUIDs, raw addresses, or internal enums.
   await expect(detail).not.toContainText(/[0-9a-f]{8}-[0-9a-f]{4}-|EDGE_RULE|PROTECTION_COMMAND|CLEAR_PREDICATE_MATCHED|edge-gateway:|\bSTOP\b/);
 
-  const verifyDir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '.scratch', 'verify', 'issue-950-edge-alarm-ui');
-  mkdirSync(verifyDir, { recursive: true });
   const appearance = page.getByRole('radiogroup', { name: '外观' });
 
   await appearance.getByRole('radio', { name: '浅色' }).click();
   await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('light');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-  await page.screenshot({ path: join(verifyDir, 'edge-alarm-detail-light.png'), fullPage: true });
+  await captureVerifyScreenshot(page, 'issue-950-edge-alarm-ui/edge-alarm-detail-light.png', { fullPage: true });
 
   await appearance.getByRole('radio', { name: '深色' }).click();
   await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme)).toBe('dark');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-  await page.screenshot({ path: join(verifyDir, 'edge-alarm-detail-dark.png'), fullPage: true });
+  await captureVerifyScreenshot(page, 'issue-950-edge-alarm-ui/edge-alarm-detail-dark.png', { fullPage: true });
 });

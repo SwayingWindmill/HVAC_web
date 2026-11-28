@@ -285,7 +285,7 @@ func applyMembership(ctx context.Context, tx pgx.Tx, tenantID string, request Ad
 		if request.ExpectedRevision != 0 {
 			return "", 0, ErrAdminRevisionConflict
 		}
-		id, err = newUUIDv7(now)
+		id, err = uuidv7.NewAt(now)
 		if err != nil {
 			return "", 0, err
 		}
@@ -321,7 +321,7 @@ func applyRoleTemplate(ctx context.Context, tx pgx.Tx, tenantID string, request 
 		if request.ExpectedRevision != 0 {
 			return "", 0, ErrAdminRevisionConflict
 		}
-		id, err = newUUIDv7(now)
+		id, err = uuidv7.NewAt(now)
 		if err != nil {
 			return "", 0, err
 		}
@@ -379,7 +379,7 @@ func applyRoleBinding(ctx context.Context, tx pgx.Tx, tenantID string, request A
 		if request.ExpectedRevision != 0 {
 			return "", 0, ErrAdminRevisionConflict
 		}
-		id, err = newUUIDv7(now)
+		id, err = uuidv7.NewAt(now)
 		if err != nil {
 			return "", 0, err
 		}
@@ -409,7 +409,7 @@ func applyExplicitDeny(ctx context.Context, tx pgx.Tx, tenantID string, request 
 		if request.ExpectedRevision != 0 {
 			return "", 0, ErrAdminRevisionConflict
 		}
-		id, err := newUUIDv7(now)
+		id, err := uuidv7.NewAt(now)
 		if err != nil {
 			return "", 0, err
 		}
@@ -440,7 +440,7 @@ func bumpAuthorizationRevision(ctx context.Context, tx pgx.Tx, tenantID string, 
 }
 
 func insertAdminAudit(ctx context.Context, tx pgx.Tx, actor AdminActor, actorPrincipalID, action, resourceType, resourceID, policyRevision string) (string, error) {
-	eventID, err := newUUIDv7(actor.OccurredAt)
+	eventID, err := uuidv7.NewAt(actor.OccurredAt)
 	if err != nil {
 		return "", err
 	}

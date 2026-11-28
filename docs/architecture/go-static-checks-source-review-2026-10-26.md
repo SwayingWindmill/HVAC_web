@@ -6,7 +6,7 @@
 
 | 检查 | 命令 | 在哪个门禁跑 |
 | --- | --- | --- |
-| 静态检查 | `npm run go:lint`（`scripts/run-go-lint.mjs`，golangci-lint v2.14.0，规则在 `.golangci.yml`） | 单元门禁的 `go` 一项：PR 改了 `.go`、`go.mod`/`go.sum`、`go.work` 或这些检查本身时，检查 `go.work` 列出的全部模块 |
+| 静态检查 | `npm run go:lint`（`scripts/run-go-lint.ts`，golangci-lint v2.14.0，规则在 `.golangci.yml`） | 单元门禁的 `go` 一项：PR 改了 `.go`、`go.mod`/`go.sum`、`go.work` 或这些检查本身时，检查 `go.work` 列出的全部模块 |
 | 依赖和标准库漏洞 | `npm run security:go-vuln`（govulncheck v1.9.0） | 同上 |
 | 数据竞争 | 单元门禁里的 Go 测试都带 `-race`（`.github/workflows/pr-gates.yml` 的 `GOFLAGS`） | 单元门禁，按改动的领域 |
 

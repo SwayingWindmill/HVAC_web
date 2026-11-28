@@ -1,18 +1,5 @@
-import { mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { SITE_ID } from './gateway';
-import { expect, test } from './test';
-
-const OPS_SHOT_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  '..',
-  '.scratch',
-  'verify',
-  'p1-web-governance',
-);
+import { captureVerifyScreenshot, expect, test } from './test';
 
 test('a workspace opened without a Site carries the default Site in the URL', async ({ page }) => {
   await page.goto('/operations/systems-devices');
@@ -122,7 +109,6 @@ test('tag filter and device inspector tag chips work at 1440px in light and dark
   page,
   gateway,
 }) => {
-  mkdirSync(OPS_SHOT_DIR, { recursive: true });
   await page.setViewportSize({ width: 1440, height: 900 });
   gateway.setDeviceTags('018f3e00-4000-7000-8000-000000000001', {
     vendor: 'carrier',
@@ -141,12 +127,12 @@ test('tag filter and device inspector tag chips work at 1440px in light and dark
   const inspector = page.getByRole('dialog');
   await expect(inspector.getByLabel('设备标签')).toContainText('vendor:carrier');
   await expect(inspector.getByLabel('设备标签')).toContainText('criticality:tier1');
-  await page.screenshot({ path: join(OPS_SHOT_DIR, 'p1-ops-tags-light.png') });
+  await captureVerifyScreenshot(page, 'p1-web-governance/p1-ops-tags-light.png');
 
   await page.getByRole('radiogroup', { name: '外观' }).getByRole('radio', { name: '深色' }).click();
   await expect
     .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
     .toBe('dark');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: join(OPS_SHOT_DIR, 'p1-ops-tags-dark.png') });
+  await captureVerifyScreenshot(page, 'p1-web-governance/p1-ops-tags-dark.png');
 });

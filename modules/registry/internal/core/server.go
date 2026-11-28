@@ -30,7 +30,7 @@ type ServerConfig struct {
 	AdditionalAllowedPresenterSPIFFEs []string
 	AllowedCommandServiceSPIFFE       string
 	Audience                          string
-	GrantStatus                       GrantStatusProvider
+	GrantStatus                       registryauth.GrantStatusProvider
 	Logger                            *slog.Logger
 	Observability                     *observability.Runtime
 	Now                               func() time.Time
@@ -45,7 +45,7 @@ type server struct {
 	allowedPresenterSPIFFEs     map[string]struct{}
 	allowedCommandServiceSPIFFE string
 	audience                    string
-	grantStatus                 GrantStatusProvider
+	grantStatus                 registryauth.GrantStatusProvider
 	logger                      *slog.Logger
 	observability               *observability.Runtime
 	now                         func() time.Time

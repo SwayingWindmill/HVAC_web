@@ -40,10 +40,10 @@ const (
 
 type countingGrantStatusProvider struct {
 	calls  int
-	status GrantStatus
+	status registryauth.GrantStatus
 }
 
-func (provider *countingGrantStatusProvider) Lookup(_ context.Context, _ registryauth.GrantClaims) (GrantStatus, error) {
+func (provider *countingGrantStatusProvider) Lookup(_ context.Context, _ registryauth.GrantClaims) (registryauth.GrantStatus, error) {
 	provider.calls++
 	return provider.status, nil
 }
@@ -197,7 +197,7 @@ func TestServerReadsSiteTotalElectricitySources(t *testing.T) {
 			{PointID: "018f1e00-6000-7000-8000-000000000001", DeviceID: testDeviceA1, MeterName: "3号电表（A机组）", Ordinal: 0},
 		},
 	}}
-	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, now, store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	response := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites/"+testSiteA1+"/total-electricity-sources", testGrantClaims(registryauth.ActionMeterBindingResolve), nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
@@ -217,7 +217,7 @@ func TestServerReadsTheSitesTariffInEffect(t *testing.T) {
 		SiteID: testSiteA1, DisplayName: "两部制分时电价", Version: 1, EffectiveFrom: formatInstant(now), Timezone: "Asia/Shanghai", Currency: "CNY",
 		Periods: []TariffPeriod{{PeriodCode: "PEAK", DayType: "WEEKDAY", StartMinute: 480, EndMinute: 660, EnergyRatePerKWh: 1.2, DemandRatePerKW: 38}},
 	}}
-	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, now, store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	response := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites/"+testSiteA1+"/tariff", testGrantClaims(registryauth.ActionTariffRead), nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
@@ -237,7 +237,7 @@ func TestServerListsSitesAndReturnsBoundCursor(t *testing.T) {
 		Items:   []Site{{ID: testSiteA1, TenantID: testTenantA, DisplayName: "Site A1"}},
 		HasMore: true,
 	}}
-	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, now, store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	claims := testGrantClaims(registryauth.ActionSiteList)
 	response := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites?limit=1", claims, nil)
 	if response.Code != http.StatusOK {
@@ -269,7 +269,7 @@ func TestServerListsSiteMeterBindingsWithinPrivateCoreRoute(t *testing.T) {
 			DeviceID: testDeviceA1, PointID: testBindingA1, EffectiveFrom: now,
 		}},
 	}}
-	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, now, store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	path := RegistryPathPrefix + "sites/" + testSiteA1 + "/meter-bindings"
 	response := harness.serve(t, http.MethodGet, path, testGrantClaims(registryauth.ActionMeterBindingResolve), nil)
 	if response.Code != http.StatusOK {
@@ -331,7 +331,7 @@ func TestServerSerializesMeterBindingReadingUnitAndRatioVersions(t *testing.T) {
 			},
 		},
 	}}
-	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, now, store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	response := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites/"+testSiteA1+"/meter-bindings", testGrantClaims(registryauth.ActionMeterBindingResolve), nil)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
@@ -406,7 +406,7 @@ func TestAttachMeterRatioVersionsMatchesByPointOrBindingFallbackAndNormalizesUTC
 
 func TestServerRejectsInternalDirtyWindowWhenWriterNotConfigured(t *testing.T) {
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
-	harness := newCoreHarness(t, now, &fakeRegistryStore{}, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, now, &fakeRegistryStore{}, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 
 	claims := testGrantClaims(registryauth.ActionMeterBindingResolve)
 	claims.IssuedAt = now.Unix()
@@ -451,7 +451,7 @@ func TestServerAllowsAssetModelReadGrantOnTotalElectricitySources(t *testing.T) 
 		Synthesized: true,
 		SubMeters:   []SiteTotalSubMeter{{PointID: testBindingA1, DeviceID: testDeviceA1, MeterName: "D 机组电表", Ordinal: 0}},
 	}}
-	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, now, store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	path := RegistryPathPrefix + "sites/" + testSiteA1 + "/total-electricity-sources"
 	for _, action := range []registryauth.Action{registryauth.ActionMeterBindingResolve, registryauth.ActionAssetModelRead} {
 		response := harness.serve(t, http.MethodGet, path, testGrantClaims(action), nil)
@@ -468,7 +468,7 @@ func TestServerAllowsAssetModelReadGrantOnTotalElectricitySources(t *testing.T) 
 func TestServerAcceptsIAMGrantBoundToOperationsAgentPresenter(t *testing.T) {
 	now := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	store := &fakeRegistryStore{site: Site{ID: testSiteA1, TenantID: testTenantA}}
-	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, now, store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	claims := testGrantClaims(registryauth.ActionSiteRead)
 	response, _ := harness.serveAndGrantAsPresenter(
 		t,
@@ -497,7 +497,7 @@ func TestServerRoutesAllRegistryReadsThroughConcreteGrantActions(t *testing.T) {
 		device:    Device{ID: testDeviceA1},
 		bindings:  PageResult[DeviceBinding]{Items: []DeviceBinding{{ID: testBindingA1}}},
 	}
-	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, now, store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	tests := []struct {
 		path   string
 		action registryauth.Action
@@ -526,15 +526,15 @@ func TestServerFailsClosedForWrongActionRevocationStalePolicyAndForgedHeaders(t 
 	tests := []struct {
 		name       string
 		claims     registryauth.GrantClaims
-		status     GrantStatusProvider
+		status     registryauth.GrantStatusProvider
 		headers    http.Header
 		wantStatus int
 	}{
-		{"wrong action", testGrantClaims(registryauth.ActionDeviceRead), StaticGrantStatusProvider{PolicyRevision: testPolicy}, nil, http.StatusForbidden},
-		{"revoked", testGrantClaims(registryauth.ActionSiteList), StaticGrantStatusProvider{PolicyRevision: testPolicy, RevokedTokenIDs: map[string]struct{}{"grant-1": {}}}, nil, http.StatusForbidden},
-		{"stale policy", testGrantClaims(registryauth.ActionSiteList), StaticGrantStatusProvider{PolicyRevision: "registry-read:2"}, nil, http.StatusForbidden},
-		{"status unavailable", testGrantClaims(registryauth.ActionSiteList), StaticGrantStatusProvider{Err: errors.New("offline")}, nil, http.StatusServiceUnavailable},
-		{"forged scope", testGrantClaims(registryauth.ActionSiteList), StaticGrantStatusProvider{PolicyRevision: testPolicy}, http.Header{"X-Site-ID": []string{testSiteA1}}, http.StatusBadRequest},
+		{"wrong action", testGrantClaims(registryauth.ActionDeviceRead), registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy}, nil, http.StatusForbidden},
+		{"revoked", testGrantClaims(registryauth.ActionSiteList), registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy, RevokedTokenIDs: map[string]struct{}{"grant-1": {}}}, nil, http.StatusForbidden},
+		{"stale policy", testGrantClaims(registryauth.ActionSiteList), registryauth.StaticGrantStatusProvider{PolicyRevision: "registry-read:2"}, nil, http.StatusForbidden},
+		{"status unavailable", testGrantClaims(registryauth.ActionSiteList), registryauth.StaticGrantStatusProvider{Err: errors.New("offline")}, nil, http.StatusServiceUnavailable},
+		{"forged scope", testGrantClaims(registryauth.ActionSiteList), registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy}, http.Header{"X-Site-ID": []string{testSiteA1}}, http.StatusBadRequest},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -549,7 +549,7 @@ func TestServerFailsClosedForWrongActionRevocationStalePolicyAndForgedHeaders(t 
 
 func TestServerRejectsInvalidGrantBeforeOnlineStatusLookup(t *testing.T) {
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
-	status := &countingGrantStatusProvider{status: GrantStatus{CurrentPolicyRevision: testPolicy}}
+	status := &countingGrantStatusProvider{status: registryauth.GrantStatus{CurrentPolicyRevision: testPolicy}}
 	harness := newCoreHarness(t, now, &fakeRegistryStore{}, status)
 	response := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites", testGrantClaims(registryauth.Action("organization.read")), nil)
 	if response.Code != http.StatusForbidden {
@@ -565,7 +565,7 @@ func TestServerLogsExcludeGrantAndRequestCredentialMaterial(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))
 	store := &fakeRegistryStore{sites: PageResult[Site]{Items: []Site{}}}
-	harness := newCoreHarnessWithLogger(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy}, logger)
+	harness := newCoreHarnessWithLogger(t, now, store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy}, logger)
 	claims := testGrantClaims(registryauth.ActionSiteList)
 	response, grant := harness.serveAndGrant(t, http.MethodGet, RegistryPathPrefix+"sites", claims, http.Header{
 		"Cookie":        []string{"session=opaque-cookie-value"},
@@ -585,7 +585,7 @@ func TestServerLogsExcludeGrantAndRequestCredentialMaterial(t *testing.T) {
 func TestServerReturnsSameNotFoundForUnauthorizedAndMissingDetail(t *testing.T) {
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
 	store := &fakeRegistryStore{err: ErrNotFound}
-	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, now, store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	response := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites/"+testSiteA2, testGrantClaims(registryauth.ActionSiteRead), nil)
 	if response.Code != http.StatusNotFound || !strings.Contains(response.Body.String(), `"code":"RESOURCE_NOT_FOUND"`) {
 		t.Fatalf("status = %d; body=%s", response.Code, response.Body.String())
@@ -600,11 +600,11 @@ type coreHarness struct {
 	now     time.Time
 }
 
-func newCoreHarness(t *testing.T, now time.Time, store RegistryStore, status GrantStatusProvider) coreHarness {
+func newCoreHarness(t *testing.T, now time.Time, store RegistryStore, status registryauth.GrantStatusProvider) coreHarness {
 	return newCoreHarnessWithLogger(t, now, store, status, nil)
 }
 
-func newCoreHarnessWithLogger(t *testing.T, now time.Time, store RegistryStore, status GrantStatusProvider, logger *slog.Logger) coreHarness {
+func newCoreHarnessWithLogger(t *testing.T, now time.Time, store RegistryStore, status registryauth.GrantStatusProvider, logger *slog.Logger) coreHarness {
 	t.Helper()
 	signer, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -707,7 +707,7 @@ func testGrantClaims(action registryauth.Action) registryauth.GrantClaims {
 
 func TestServerRejectsAccountingConfigRoutesWhenStoreOrWriterNotConfigured(t *testing.T) {
 	now := time.Date(2026, 7, 22, 0, 0, 0, 0, time.UTC)
-	harness := newCoreHarness(t, now, &fakeRegistryStore{}, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, now, &fakeRegistryStore{}, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 
 	readRoutes := []string{
 		RegistryPathPrefix + "sites/" + testSiteA1 + "/accounting/holidays",

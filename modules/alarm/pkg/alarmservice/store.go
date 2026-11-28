@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 var (
@@ -177,7 +178,7 @@ type MemoryStore struct {
 }
 
 func NewMemoryStore(items []alarmmodel.Alarm) (*MemoryStore, error) {
-	return newMemoryStore(items, newUUIDv7)
+	return newMemoryStore(items, uuidv7.NewAt)
 }
 
 func newMemoryStore(items []alarmmodel.Alarm, generator idGenerator) (*MemoryStore, error) {

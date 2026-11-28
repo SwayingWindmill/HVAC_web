@@ -951,13 +951,13 @@ export async function validateDesignSystem(rawRoot = defaultRoot): Promise<{ err
 
   // shadcn's base styles are a copy of the pinned CLI version's dist/tailwind.css, not an
   // npm dependency; the copy and the CLI pin must move together.
-  const cliSource = await readFile(resolve(root, 'scripts/shadcn-cli.mjs'), 'utf8');
+  const cliSource = await readFile(resolve(root, 'scripts/shadcn-cli.ts'), 'utf8');
   const cliVersion = /SHADCN_CLI_VERSION = '([^']+)'/.exec(cliSource)?.[1];
   const shadcnStyles = await readFile(resolve(root, 'apps/hvac-web/src/styles/shadcn-tailwind.css'), 'utf8');
   if (!cliVersion) {
-    errors.push('scripts/shadcn-cli.mjs must pin SHADCN_CLI_VERSION');
+    errors.push('scripts/shadcn-cli.ts must pin SHADCN_CLI_VERSION');
   } else if (!shadcnStyles.includes(`shadcn@${cliVersion} dist/tailwind.css`)) {
-    errors.push(`apps/hvac-web/src/styles/shadcn-tailwind.css must be the dist/tailwind.css of shadcn@${cliVersion}, the version scripts/shadcn-cli.mjs runs`);
+    errors.push(`apps/hvac-web/src/styles/shadcn-tailwind.css must be the dist/tailwind.css of shadcn@${cliVersion}, the version scripts/shadcn-cli.ts runs`);
   }
   const indexHtml = await readFile(resolve(root, 'apps/hvac-web/index.html'), 'utf8');
   const globalCss = await readFile(resolve(root, 'apps/hvac-web/src/global.css'), 'utf8');

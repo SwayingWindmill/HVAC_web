@@ -1,10 +1,9 @@
-import { spawnSync } from 'node:child_process';
-import { once } from 'node:events';
+import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
 
-import { runDockerCompose } from './lib/docker-cli.mjs';
+import { runDockerCompose } from './lib/docker-cli.ts';
+import { findAvailablePort } from './lib/postgres-compose-harness.ts';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/telemetry/compose.yaml');
@@ -14,41 +13,31 @@ const containerName = `${projectName}-postgres-1`;
 const reportPath = resolve(root, process.env.S2_RUNTIME_REPORT_PATH ?? 'out/s2-realtime-backend/realtime-postgres.json');
 const testPattern = process.env.S2_RUNTIME_TEST_PATTERN ?? 'TestPostgresRealtime|TestPostgresLatestSnapshot';
 const ticketNumber = Number(process.env.S2_RUNTIME_TICKET_NUMBER ?? '65');
-const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
+const pause = (milliseconds: number): Promise<void> => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
-async function findAvailablePort() {
-  const server = createTCPServer();
-  server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
-  await once(server, 'listening');
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('S2 Telemetry Runtime PostgreSQL port allocator failed');
-  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
-  return address.port;
-}
-
-const postgresHostPort = await findAvailablePort();
+const postgresHostPort = await findAvailablePort('S2 Telemetry Runtime PostgreSQL');
 const composeEnvironment = { ...process.env, S2_POSTGRES_HOST_PORT: String(postgresHostPort) };
 const runtimeURL = `postgres://s2_telemetry_service:s2-telemetry-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s2?sslmode=disable`;
 const adminURL = `postgres://postgres:postgres-local-only@127.0.0.1:${postgresHostPort}/hvac_s2?sslmode=disable`;
 
-function run(command, args, options = {}) {
+function run(command: string, args: string[], options: SpawnSyncOptions = {}): string {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
   if (result.error || result.status !== 0) {
-    const detail = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || String(result.status);
+    const detail = result.error?.message || String(result.stderr ?? '').trim() || String(result.stdout ?? '').trim() || String(result.status);
     throw new Error(`${command} ${args.join(' ')} failed: ${detail}`);
   }
   return String(result.stdout ?? '').trim();
 }
 
-function compose(args) {
+function compose(args: string[]): string {
   return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
-function psql(sql) {
+function psql(sql: string): string {
   return run('docker', ['exec', containerName, 'psql', '-U', 'postgres', '-d', 'hvac_s2', '-v', 'ON_ERROR_STOP=1', '-Atqc', sql]);
 }
 
-async function waitForPostgres() {
+async function waitForPostgres(): Promise<void> {
   let stableStart = '';
   let stableChecks = 0;
   for (let attempt = 0; attempt < 300; attempt += 1) {
@@ -73,7 +62,16 @@ async function waitForPostgres() {
   throw new Error(`S2 Telemetry Runtime PostgreSQL fixture did not initialize\n${logs}`);
 }
 
-const report = {
+const report: {
+  schemaVersion: number;
+  ticket: number;
+  status: string;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+  postgresImage: string;
+  assertions: Record<string, unknown>;
+} = {
   schemaVersion: 1,
   ticket: ticketNumber,
   status: 'failed',
@@ -88,7 +86,8 @@ try {
   await waitForPostgres();
 
   const testOutput = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=modules/telemetry',
     'test', '-count=1', '-run', testPattern, '-v', './pkg/telemetry/...',
   ], {

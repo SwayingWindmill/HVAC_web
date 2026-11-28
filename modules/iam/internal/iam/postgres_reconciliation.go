@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const iamReconcilerDatabaseRole = "s1_iam_reconciler"
@@ -71,7 +72,7 @@ func (store *PostgresReconciliationStore) Reconcile(ctx context.Context, input R
 		return ReconciliationResult{}, err
 	}
 	now := store.now().UTC()
-	eventID, err := newUUIDv7(now)
+	eventID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return ReconciliationResult{}, err
 	}
@@ -307,7 +308,7 @@ func replaceReconciledFacts(ctx context.Context, transaction pgx.Tx, request Rec
 		}
 	}
 	for _, membership := range request.Memberships {
-		id, err := newUUIDv7(now)
+		id, err := uuidv7.NewAt(now)
 		if err != nil {
 			return err
 		}
@@ -320,7 +321,7 @@ INSERT INTO iam.tenant_memberships (
 		}
 	}
 	for _, binding := range request.RoleBindings {
-		bindingID, err := newUUIDv7(now)
+		bindingID, err := uuidv7.NewAt(now)
 		if err != nil {
 			return err
 		}
@@ -358,7 +359,7 @@ LIMIT 1
 		}
 	}
 	for _, deny := range request.ExplicitDenies {
-		id, err := newUUIDv7(now)
+		id, err := uuidv7.NewAt(now)
 		if err != nil {
 			return err
 		}
@@ -416,7 +417,7 @@ func quarantineReconciliation(ctx context.Context, transaction pgx.Tx, request R
 	if err := insertReconciliationEvent(ctx, transaction, request, result, now); err != nil {
 		return ReconciliationResult{}, err
 	}
-	quarantineID, err := newUUIDv7(now)
+	quarantineID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return ReconciliationResult{}, err
 	}

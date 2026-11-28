@@ -164,12 +164,12 @@ func OpenPostgresStoreWithConfig(ctx context.Context, databaseURL string, poolCo
 		pool.Close()
 		return nil, fmt.Errorf("ping telemetry runtime database: %w", err)
 	}
-	return &PostgresStore{pool: pool, newEventID: newUUIDv7, metadataCache: newMetadataCache()}, nil
+	return &PostgresStore{pool: pool, newEventID: uuidv7.NewAt, metadataCache: newMetadataCache()}, nil
 }
 
 func NewPostgresStore(pool *pgxpool.Pool, generator EventIDGenerator) *PostgresStore {
 	if generator == nil {
-		generator = newUUIDv7
+		generator = uuidv7.NewAt
 	}
 	return &PostgresStore{pool: pool, newEventID: generator, metadataCache: newMetadataCache()}
 }
@@ -856,10 +856,6 @@ func availabilityStrings(values []telemetryapi.AvailabilityReasonCode) []string 
 		result[index] = string(value)
 	}
 	return result
-}
-
-func newUUIDv7(now time.Time) (string, error) {
-	return uuidv7.NewAt(now)
 }
 
 var _ SnapshotStore = (*PostgresStore)(nil)

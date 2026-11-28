@@ -376,7 +376,7 @@ func newScheduleHTTPClientWithInterfaces(t *testing.T, store RegistryStore, writ
 		GrantIssuer:            testGrantIssuer,
 		AllowedPresenterSPIFFE: testPresenter,
 		Audience:               testAudience,
-		GrantStatus:            StaticGrantStatusProvider{PolicyRevision: testPolicy},
+		GrantStatus:            registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy},
 		Logger:                 slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		Now:                    func() time.Time { return now },
 	})

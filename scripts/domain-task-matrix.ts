@@ -59,7 +59,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
     web: Object.freeze([npmRun('web:principal:contract')]),
     registry: Object.freeze([nodeRun('--experimental-strip-types', 'scripts/check-s1-registry-baseline.ts')]),
     telemetry: Object.freeze([
-      nodeRun('scripts/generate-s2-telemetry-contracts.mjs', '--check'),
+      nodeRun('--experimental-strip-types', 'scripts/generate-s2-telemetry-contracts.ts', '--check'),
       nodeRun('--experimental-strip-types', 'scripts/check-s2-telemetry-public-contract.ts'),
     ]),
     command: Object.freeze([nodeRun('--experimental-strip-types', 'scripts/check-s3-command-gateway.ts')]),
@@ -73,7 +73,8 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       npmRun('test:durable-unit'),
       npmRun('test:phase1-scripts'),
       nodeRun(
-        'scripts/run-go.mjs',
+        '--experimental-strip-types',
+        'scripts/run-go.ts',
         'test',
         './libs/limitpolicy/...',
         './libs/schemagate/...',
@@ -83,12 +84,13 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       ),
     ]),
     registry: Object.freeze([
-      nodeRun('scripts/run-go.mjs', 'test', './libs/fixedpoint/...', './libs/planttwin/...', './libs/registryauth/...', './libs/schemagate/...', './modules/registry/...'),
+      nodeRun('--experimental-strip-types', 'scripts/run-go.ts', 'test', './libs/fixedpoint/...', './libs/planttwin/...', './libs/registryauth/...', './libs/schemagate/...', './modules/registry/...'),
       npmRun('test:registry-routing'),
     ]),
     telemetry: Object.freeze([
       nodeRun(
-        'scripts/run-go.mjs',
+        '--experimental-strip-types',
+        'scripts/run-go.ts',
         'test',
         './libs/clickhousehttp/...',
         './libs/edgetunnel/...',
@@ -108,7 +110,8 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
     ]),
     command: Object.freeze([
       nodeRun(
-        'scripts/run-go.mjs',
+        '--experimental-strip-types',
+        'scripts/run-go.ts',
         'test',
         './libs/commandauth/...',
         './libs/alarmexpr/...',
@@ -124,12 +127,13 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       npmRun('command:formal'),
     ]),
     alarm: Object.freeze([
-      nodeRun('scripts/run-go.mjs', 'test', './libs/alarmexpr/...', './libs/alarmmodel/...', './modules/alarm/...', './cmd/wecom-alert-adapter/...'),
+      nodeRun('--experimental-strip-types', 'scripts/run-go.ts', 'test', './libs/alarmexpr/...', './libs/alarmmodel/...', './modules/alarm/...', './cmd/wecom-alert-adapter/...'),
       npmRun('alarm:test'),
     ]),
     workorder: Object.freeze([
       nodeRun(
-        'scripts/run-go.mjs',
+        '--experimental-strip-types',
+        'scripts/run-go.ts',
         'test',
         './libs/workordermodel/...',
         './modules/iam/...',
@@ -140,7 +144,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
     analytics: Object.freeze([
       npmRun('test:analytics'),
       npmRun('test:analytics-gateway'),
-      nodeRun('scripts/run-go.mjs', 'test', './libs/planttwin/...'),
+      nodeRun('--experimental-strip-types', 'scripts/run-go.ts', 'test', './libs/planttwin/...'),
       npmRun('ai-solver:test'),
     ]),
     'operations-agent': Object.freeze([
@@ -151,20 +155,20 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
   }),
   integration: Object.freeze({
     platform: Object.freeze([npmRun('test:durable-postgres'), npmRun('test:identity-postgres'), npmRun('test:notification-postgres'), npmRun('deployment:phase1:migration:test'), npmRun('deployment:phase1:clickhouse:restore:test')]),
-    registry: Object.freeze([nodeRun('scripts/run-s1-registry-postgres-tests.mjs')]),
+    registry: Object.freeze([nodeRun('--experimental-strip-types', 'scripts/run-s1-registry-postgres-tests.ts')]),
     telemetry: Object.freeze([
-      nodeRun('scripts/run-s2-telemetry-postgres-tests.mjs'),
-      nodeRun('scripts/run-s2-telemetry-ingest-postgres-tests.mjs'),
-      nodeRun('scripts/run-s2-realtime-postgres-tests.mjs'),
-      nodeRun('scripts/run-s2-telemetry-history-tests.mjs'),
+      nodeRun('--experimental-strip-types', 'scripts/run-s2-telemetry-postgres-tests.ts'),
+      nodeRun('--experimental-strip-types', 'scripts/run-s2-telemetry-ingest-postgres-tests.ts'),
+      nodeRun('--experimental-strip-types', 'scripts/run-s2-realtime-postgres-tests.ts'),
+      nodeRun('--experimental-strip-types', 'scripts/run-s2-telemetry-history-tests.ts'),
       npmRun('mqtt:crl:integration'),
     ]),
     command: Object.freeze([nodeRun('--experimental-strip-types', 'scripts/run-s3-command-postgres-tests.ts')]),
     alarm: Object.freeze([nodeRun('--experimental-strip-types', 'scripts/run-s4-alarm-postgres-tests.ts')]),
     workorder: Object.freeze([nodeRun('--experimental-strip-types', 'scripts/run-s5-work-order-postgres-tests.ts')]),
     analytics: Object.freeze([
-      nodeRun('scripts/run-analytics-history-tests.mjs'),
-      nodeRun('scripts/run-analytics-cube-tests.mjs'),
+      nodeRun('--experimental-strip-types', 'scripts/run-analytics-history-tests.ts'),
+      nodeRun('--experimental-strip-types', 'scripts/run-analytics-cube-tests.ts'),
     ]),
     'operations-agent': Object.freeze([
       npmCi('services/operations-agent-service'),

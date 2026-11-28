@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "generatorVersion": "1.0.0",
-  "generator": "scripts/generate-s2-telemetry-contracts.mjs",
+  "generator": "scripts/generate-s2-telemetry-contracts.ts",
   "inputs": [
     "contracts/http/s2-telemetry-public.openapi.json",
     "contracts/events/s2-device-observation-publication.v1.schema.json",

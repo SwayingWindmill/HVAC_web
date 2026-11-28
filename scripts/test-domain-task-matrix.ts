@@ -155,10 +155,10 @@ test('telemetry integration is one domain profile with all durable fixtures', ()
   const plan = runDomainPlan('telemetry', ['integration']);
   assert.deepEqual(plan.profiles.integration, ['telemetry']);
   assert.deepEqual(plan.commands, [
-    'node scripts/run-s2-telemetry-postgres-tests.mjs',
-    'node scripts/run-s2-telemetry-ingest-postgres-tests.mjs',
-    'node scripts/run-s2-realtime-postgres-tests.mjs',
-    'node scripts/run-s2-telemetry-history-tests.mjs',
+    'node --experimental-strip-types scripts/run-s2-telemetry-postgres-tests.ts',
+    'node --experimental-strip-types scripts/run-s2-telemetry-ingest-postgres-tests.ts',
+    'node --experimental-strip-types scripts/run-s2-realtime-postgres-tests.ts',
+    'node --experimental-strip-types scripts/run-s2-telemetry-history-tests.ts',
     'npm run mqtt:crl:integration',
   ]);
 });

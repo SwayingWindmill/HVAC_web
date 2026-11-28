@@ -436,7 +436,7 @@ func (service *CredentialService) persistIssued(ctx context.Context, tx pgx.Tx, 
 	if err != nil {
 		return IssuedCredential{}, err
 	}
-	id, err := newUUIDv7(now)
+	id, err := uuidv7.NewAt(now)
 	if err != nil {
 		return IssuedCredential{}, err
 	}
@@ -739,7 +739,7 @@ func credentialAudit(ctx context.Context, tx pgx.Tx, tenant, gateway, actor, act
 }
 
 func credentialAuditWithID(ctx context.Context, tx pgx.Tx, tenant, gateway, actor, action string, credentialID *string, now time.Time) error {
-	id, err := newUUIDv7(now)
+	id, err := uuidv7.NewAt(now)
 	if err != nil {
 		return err
 	}

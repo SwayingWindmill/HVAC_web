@@ -72,7 +72,7 @@ test('design system check passes on the repository and rejects violations across
     for (const rel of [
       'apps/hvac-web/components.json',
       'apps/hvac-web/src/styles/shadcn-tailwind.css',
-      'scripts/shadcn-cli.mjs',
+      'scripts/shadcn-cli.ts',
       'scripts/web-as-cast-baseline.json',
       'scripts/web-file-lines-baseline.json',
     ]) {

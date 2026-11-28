@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer as createTCPServer } from 'node:net';
-import { dockerComposeInvocation } from './docker-cli.mjs';
+import { dockerComposeInvocation } from './docker-cli.ts';
 
 export function runCommand(command: string, args: string[], options: Record<string, unknown> = {}) {
   const result = spawnSync(command, args, {

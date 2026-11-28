@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { installGoTool, readGoWorkspace } from './lib/go-workspace.mjs';
+import { installGoTool, readGoWorkspace } from './lib/go-workspace.ts';
 
 // Runs golangci-lint (rules in .golangci.yml) on every module in go.work and fails if any module has findings.
 // The PR gates run it as the go unit profile, selected for any Go code, dependency or lint-rule change.
@@ -19,7 +19,7 @@ const golangciLint = installGoTool({
   version: 'v2.14.0',
 });
 
-const failed = [];
+const failed: string[] = [];
 for (const modulePath of modules) {
   console.log(`=== golangci-lint ${modulePath} ===`);
   const result = spawnSync(golangciLint, ['run', './...'], {

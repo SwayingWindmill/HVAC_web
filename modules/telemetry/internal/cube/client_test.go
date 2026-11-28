@@ -1068,25 +1068,25 @@ func TestClientCoalescesIdenticalInFlightLoadsPerTenantAndSite(t *testing.T) {
 			defer wg.Done()
 			breakdownResp, bdErr = client.QueryEnergySeries(context.Background(), analytics.CallerContext{PrincipalID: "user-1", PolicyRevision: "policy-1"}, breakdownQuery)
 		}()
-		// Wait deterministically until both in-flight coalesced entries have >= 2 waiters registered (no sleep).
+		// Wait deterministically until both shared in-flight queries (series & cost) have >= 2 waiters (no sleep).
 		deadline := time.Now().Add(2 * time.Second)
 		for {
 			client.inFlightMu.Lock()
-			maxWaiters := 0
+			coalescedEntries := 0
 			entryCount := len(client.inFlight)
 			for _, entry := range client.inFlight {
 				entry.mu.Lock()
-				if entry.waiters > maxWaiters {
-					maxWaiters = entry.waiters
+				if entry.waiters >= 2 {
+					coalescedEntries++
 				}
 				entry.mu.Unlock()
 			}
 			client.inFlightMu.Unlock()
-			if entryCount == 3 && maxWaiters >= 2 {
+			if entryCount == 3 && coalescedEntries == 2 {
 				break
 			}
 			if time.Now().After(deadline) {
-				t.Fatalf("timed out waiting for coalesced waiters: entries=%d maxWaiters=%d", entryCount, maxWaiters)
+				t.Fatalf("timed out waiting for coalesced waiters: entries=%d coalescedEntries=%d", entryCount, coalescedEntries)
 			}
 			runtime.Gosched()
 		}

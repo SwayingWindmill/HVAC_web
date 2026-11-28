@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findChangelogFragmentViolations } from './changelog-fragments.ts';
 import { findGoFileLineViolations } from './check-go-file-lines.ts';
 import { findGoTestHygieneViolations } from './check-go-test-hygiene.ts';
-import { goExecutableName, readGoWorkspace } from './lib/go-workspace.mjs';
+import { goExecutableName, readGoWorkspace } from './lib/go-workspace.ts';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const maximumInlineCommands = 4;

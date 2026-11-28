@@ -6,7 +6,7 @@
 
 ## 发现
 
-在镜像里读了上游的 `@cubejs-backend/schema-compiler/dist/src/compiler/CubeValidator.js`（视图的写法：`includes`/`excludes`、`accessPolicy`、`folders`、`defaultFilters`）和 `CubeEvaluator.js`（`prepareAccessPolicy`、`prepareViewFilters`），再用 `scripts/run-analytics-cube-tests.mjs` 在镜像上验证实际行为。
+在镜像里读了上游的 `@cubejs-backend/schema-compiler/dist/src/compiler/CubeValidator.js`（视图的写法：`includes`/`excludes`、`accessPolicy`、`folders`、`defaultFilters`）和 `CubeEvaluator.js`（`prepareAccessPolicy`、`prepareViewFilters`），再用 `scripts/run-analytics-cube-tests.ts` 在镜像上验证实际行为。
 
 - **视图和隐藏的 cube**：视图用 `cubes: [{ join_path, includes }]` 就能露出一个 `public: false` 的 cube 的字段。直接查 cube 的字段会报错「You requested hidden member」（1.6.51 里返回 HTTP 500）。
 - **访问策略**：查视图时，字段级的规则只看视图自己的；行级的过滤会把视图和底下 cube 的合在一起。基础 cube 上的行规则会通过 `extends` 继承，所以租户和站点的过滤写在 `energy_facts` 上，租户不用作为视图字段。测试证明两个视图对别的站点或租户都返回空。

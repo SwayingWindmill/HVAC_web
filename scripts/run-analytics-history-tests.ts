@@ -1,9 +1,8 @@
-import { spawnSync } from 'node:child_process';
-import { once } from 'node:events';
+import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
-import { runDockerCompose } from './lib/docker-cli.mjs';
+import { runDockerCompose } from './lib/docker-cli.ts';
+import { findAvailablePort } from './lib/postgres-compose-harness.ts';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/telemetry/compose.yaml');
@@ -11,19 +10,10 @@ const projectName = `hvac-analytics-history-${process.pid}`;
 const registryComposePath = resolve(root, 'infra/registry/compose.yaml');
 const registryProjectName = `hvac-forecast-history-registry-${process.pid}`;
 const reportPath = resolve(root, process.env.ANALYTICS_HISTORY_REPORT_PATH ?? 'out/analytics-history/clickhouse-integration.json');
-const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-async function findAvailablePort() {
-  const server = createTCPServer();
-  server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
-  await once(server, 'listening');
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('analytics history port allocator failed');
-  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
-  return address.port;
-}
+const pause = (milliseconds: number): Promise<void> => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
-const clickHouseHostPort = await findAvailablePort();
-const postgresHostPort = await findAvailablePort();
+const clickHouseHostPort = await findAvailablePort('analytics history ClickHouse');
+const postgresHostPort = await findAvailablePort('analytics history Postgres');
 const composeEnvironment = {
   ...process.env,
   S2_CLICKHOUSE_HTTP_HOST_PORT: String(clickHouseHostPort),
@@ -36,16 +26,16 @@ const fddPostgresDSN = `postgres://fdd_runtime:fdd-runtime-local-only@127.0.0.1:
 const mvPostgresDSN = `postgres://mv_runtime:mv-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
 const reportPostgresDSN = `postgres://report_runtime:report-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_s1?sslmode=disable`;
 
-function run(command, args, options = {}) {
+function run(command: string, args: string[], options: SpawnSyncOptions = {}): string {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
   if (result.error || result.status !== 0) {
-    const detail = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || String(result.status);
+    const detail = result.error?.message || String(result.stderr ?? '').trim() || String(result.stdout ?? '').trim() || String(result.status);
     throw new Error(`${command} ${args.join(' ')} failed: ${detail}`);
   }
   return String(result.stdout ?? '').trim();
 }
 
-function runExpectFailure(command, args, options = {}) {
+function runExpectFailure(command: string, args: string[], options: SpawnSyncOptions = {}): string {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
   if (!result.error && result.status === 0) {
     throw new Error(`${command} ${args.join(' ')} unexpectedly succeeded`);
@@ -53,31 +43,31 @@ function runExpectFailure(command, args, options = {}) {
   return String(result.stderr ?? result.stdout ?? '').trim().slice(-2000);
 }
 
-function compose(args) {
+function compose(args: string[]): string {
   return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
-function registryCompose(args) {
+function registryCompose(args: string[]): string {
   return runDockerCompose(run, ['-p', registryProjectName, '-f', registryComposePath, ...args], { env: composeEnvironment });
 }
 
-function container(service) {
+function container(service: string): string {
   return compose(['ps', '-q', service]);
 }
 
-function registryContainer(service) {
+function registryContainer(service: string): string {
   return registryCompose(['ps', '-q', service]);
 }
 
-function clickHouse(sql, user = 'telemetry_history') {
+function clickHouse(sql: string, user = 'telemetry_history'): string {
   return run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', user, '--query', sql]);
 }
 
-function clickHouseMustFail(sql, user) {
+function clickHouseMustFail(sql: string, user: string): string {
   return runExpectFailure('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', user, '--query', sql]);
 }
 
-function psql(sql) {
+function psql(sql: string): string {
   return run('docker', ['exec', registryContainer('postgres'), 'psql', '-U', 'postgres', '-d', 'hvac_s1', '-v', 'ON_ERROR_STOP=1', '-Atqc', sql]);
 }
 
@@ -437,7 +427,16 @@ function seedOptimizationPreparationFixture() {
      toDateTime64('2026-08-28 11:59:45', 3, 'UTC'), toDateTime64('2026-08-28 11:59:46', 3, 'UTC'), 'ACCEPTED', 'GOOD', [], repeat('8',64))`);
 }
 
-const report = {
+const report: {
+  schemaVersion: number;
+  capability: string;
+  status: string;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+  clickHouseImage: string;
+  assertions: Record<string, string | Record<string, string>>;
+} = {
   schemaVersion: 1,
   capability: 'analytics-energy-interval-read-model',
   status: 'failed',
@@ -455,7 +454,8 @@ try {
   await waitForPostgres();
   seedForecastPreparationFixture();
   report.assertions.goIntegration = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=modules/energy',
     'test', '-count=1', '-run', 'TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently|TestLateCounterObservationCorrectsSuccessorFactFromCheckpoint|TestProjectorWritesEveryIntervalOfALargeHistoryBatch|TestMixedAgeBatchProjectsTheSharedSuccessorOnce|TestPriceWindowProjectionShowsOnlyTheLatestTariffTimeline', '-v', './internal/clickhouse/...',
   ], {
@@ -466,7 +466,8 @@ try {
     },
   });
   report.assertions.metricCounterWindow = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=modules/metric',
     'test', '-count=1', '-run', 'TestCounterDeltaTakesTheStepIntoTheWindow|TestCounterDeltaSkipsTheStepAcrossAPointRevisionOrUnit|TestCounterDeltaSkipsCrossGapStepsForHourlyAndDailyMetrics', '-v', './pkg/metric/...',
   ], {
@@ -477,7 +478,8 @@ try {
     },
   });
   report.assertions.deviceHistoryQuery = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=modules/telemetry',
     'test', '-count=1', '-run', 'TestClickHouseHistoryClientQueriesBoundedRealProjection', '-v', './internal/history/...',
   ], {
@@ -488,7 +490,8 @@ try {
     },
   });
   report.assertions.forecastGoIntegration = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=services/forecast-service',
     'test', '-count=1', '-run', 'TestClickHouseForecastSinkPersistsTraceableBaseline', '-v', './internal/forecast/...',
   ], {
@@ -580,7 +583,8 @@ try {
     (toUUID('01990000-2000-7000-8000-000000000502'), toUUID('01990000-3000-7000-8000-000000000001'), toUUID('01990000-5000-7000-8000-000000000001'), toUUID('01990000-6000-7000-8000-000000000001'), toUUID('${nullUnitCounterPointId}'), 'gateway-a', toUUID('01990000-8000-7000-8000-000000000502'), 'counter-null-unit', 2, 'PUSH', 'pulse_total', 'COUNTER', 1, 'RESET_TO_ZERO', NULL, 'NUMBER', NULL, 12, toDateTime64('2026-08-11 11:01:00', 3, 'UTC'), toDateTime64('2026-08-11 11:01:01', 3, 'UTC'), 'ACCEPTED', 'GOOD', [], repeat('b', 64)),
     (toUUID('01990000-2000-7000-8000-000000000503'), toUUID('01990000-3000-7000-8000-000000000001'), toUUID('01990000-5000-7000-8000-000000000001'), toUUID('01990000-6000-7000-8000-000000000001'), toUUID('${nullUnitCounterPointId}'), 'gateway-a', toUUID('01990000-8000-7000-8000-000000000503'), 'counter-null-unit', 3, 'PUSH', 'pulse_total', 'COUNTER', 1, 'RESET_TO_ZERO', NULL, 'NUMBER', NULL, 15, toDateTime64('2026-08-11 11:02:00', 3, 'UTC'), toDateTime64('2026-08-11 11:02:01', 3, 'UTC'), 'ACCEPTED', 'GOOD', [], repeat('c', 64))`);
   const counterDeltaRow = "toString(observation_id) || ':' || transition_type || ':' || ifNull(toString(delta_value), 'NULL') || ':' || ifNull(toString(previous_observation_id), '')";
-  report.assertions.boundedCounterDeltas = {};
+  const boundedCounterDeltas: Record<string, string> = {};
+  report.assertions.boundedCounterDeltas = boundedCounterDeltas;
   // since, until, and the last sample the unbounded view is compared through: the second case's
   // range holds only the 11:01 rows, so its 11:02 deltas come from NEXT.
   for (const [since, until, through] of [
@@ -591,7 +595,7 @@ try {
       const bounded = clickHouse(`SELECT ${counterDeltaRow} FROM telemetry_history.counter_deltas_from(points = [toUUID('${pointId}')], since = '${since}', until = '${until}') ORDER BY sampled_at, observation_id FORMAT TSVRaw`);
       const unbounded = clickHouse(`SELECT ${counterDeltaRow} FROM telemetry_history.counter_deltas WHERE point_id = toUUID('${pointId}') AND sampled_at >= toDateTime64('${since}', 3, 'UTC') AND sampled_at <= toDateTime64('${through}', 3, 'UTC') ORDER BY sampled_at, observation_id FORMAT TSVRaw`);
       if (bounded === '' || bounded !== unbounded) throw new Error(`bounded Counter deltas for ${pointId} from ${since} through ${until} differ from the unbounded view:\n${bounded}\n---\n${unbounded}`);
-      report.assertions.boundedCounterDeltas[`${pointId}@${since}..${until}`] = bounded;
+      boundedCounterDeltas[`${pointId}@${since}..${until}`] = bounded;
     }
   }
   // The point filter must reach the observations key (015-energy-hourly-rollup.sql): filtered on
@@ -654,7 +658,8 @@ try {
      toUUID('01990000-2520-7000-8000-000000000001'), 1, toDateTime64('2026-08-28 11:30:00', 3, 'UTC'), toDateTime64('2026-08-28 11:45:00', 3, 'UTC'), toDateTime64('2026-08-28 11:45:10', 3, 'UTC'),
      '15MIN', 'NUMBER', '820', 820, NULL, NULL, 'kW', 'GOOD', 1.0, toUUID('01990000-2540-7000-8000-000000000004'), 1, '{"source":"metric-owner"}')`);
   report.assertions.forecastAuthoritativeHistoryTracer = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=services/forecast-service',
     'test', '-count=1', '-run', 'TestAuthoritativeHistoryPreparesAndPublishesServerOwnedForecast', '-v', './internal/forecast/...',
   ], {
@@ -667,7 +672,8 @@ try {
 
   seedOptimizationPreparationFixture();
   report.assertions.optimizationAuthoritativeInputTracer = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=services/optimization-service',
     'test', '-count=1', '-run', 'TestAuthoritativeOwnersPrepareSealedOptimizationAndPublishRecommendation', '-v', './internal/optimization/...',
   ], {
@@ -686,8 +692,9 @@ try {
     VALUES ('${fddRuleId}', '018f1d00-0000-7000-8000-000000000001', 'CHILLED_WATER_LOW_DELTA_T', 1, 5, 15, '2026-01-01T00:00:00Z', now())`);
   psql(`INSERT INTO core_registry.job_instances (job_id, trigger_type, job_type, tenant_id, site_id, scheduled_for, dedup_key, payload, state, max_attempts, timeout_seconds, created_at, updated_at)
     VALUES ('${fddJobId}', 'SCHEDULE', 'FDD_EVALUATION', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000002', now(), 'fdd-integration-scheduled-evaluation', '{}'::jsonb, 'READY', 3, 60, now(), now())`);
-  report.assertions.fddFindingPersistence = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+  const fddFindingPersistence = run(process.execPath, [
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=services/fdd-service',
     'test', '-count=1', '-run', 'TestPostgresServicePersistsAuthoritativeHistoryFinding|TestPostgresFDDRuntimeWorksItsScheduledEvaluations', '-v', './internal/fdd/...',
   ], {
@@ -701,8 +708,9 @@ try {
       FDD_POSTGRES_INTEGRATION_RULE_ID: fddRuleId,
     },
   });
+  report.assertions.fddFindingPersistence = fddFindingPersistence;
   for (const name of ['TestPostgresServicePersistsAuthoritativeHistoryFinding', 'TestPostgresFDDRuntimeWorksItsScheduledEvaluations']) {
-    if (!report.assertions.fddFindingPersistence.includes(`--- PASS: ${name}`)) throw new Error(`${name} did not run`);
+    if (!fddFindingPersistence.includes(`--- PASS: ${name}`)) throw new Error(`${name} did not run`);
   }
 
   // M&V keeps one reporting measure per Site, verifies each settled day once and works its
@@ -710,7 +718,7 @@ try {
   const mvJobId = '01990000-1995-7000-8000-000000000001';
   psql(`INSERT INTO core_registry.job_instances (job_id, trigger_type, job_type, tenant_id, site_id, scheduled_for, dedup_key, payload, state, max_attempts, timeout_seconds, created_at, updated_at)
     VALUES ('${mvJobId}', 'SCHEDULE', 'MV_EVALUATION', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', now(), 'mv-integration-scheduled-evaluation', '{}'::jsonb, 'READY', 3, 300, now(), now())`);
-  const mvHour = (id, code, start, revision, value) => `(toUUID('01990000-2850-7000-8000-00000000000${id}'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'), 'SITE', toUUID('018f1e00-1000-7000-8000-000000000001'),
+  const mvHour = (id: number, code: string, start: string, revision: number, value: number): string => `(toUUID('01990000-2850-7000-8000-00000000000${id}'), toUUID('018f1d00-0000-7000-8000-000000000001'), toUUID('018f1e00-1000-7000-8000-000000000001'), 'SITE', toUUID('018f1e00-1000-7000-8000-000000000001'),
      toUUID('01990000-2800-7000-8000-00000000001${id}'), toUUID('01990000-2810-7000-8000-00000000001${id}'), '${code}', 1,
      toUUID('01990000-2820-7000-8000-00000000001${id}'), 1, toDateTime64('${start}', 3, 'UTC'), toDateTime64('${start}', 3, 'UTC') + INTERVAL 1 HOUR, toDateTime64('2026-08-28 00:00:0${revision}', 3, 'UTC'),
      'HOUR', 'NUMBER', '${value}', ${value}, NULL, NULL, 'kWh', 'GOOD', 1.0, toUUID('01990000-2830-7000-8000-00000000001${id}'), ${revision}, '{"source":"metric-owner"}')`;
@@ -729,8 +737,9 @@ try {
     mvHour(6, 'hourly_energy', '2026-08-27 02:00:00', 1, 200),
   ].join(',\n')}`);
   const mvTests = ['TestPostgresMVRuntimeKeepsBoundariesApartAndVerifiesDaysOnce', 'TestPostgresMVRuntimeWorksItsScheduledEvaluations', 'TestClickHouseHoursReadTheLatestRevisionOfCompleteHours', 'TestPostgresSiteClockReadsTheSiteTimezone'];
-  report.assertions.mvSavingsVerification = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+  const mvSavingsVerification = run(process.execPath, [
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=services/mv-service',
     'test', '-count=1', '-run', mvTests.join('|'), '-v', './internal/mv/...',
   ], {
@@ -746,8 +755,9 @@ try {
       MV_CLICKHOUSE_INTEGRATION_URL: clickHouseURL,
     },
   });
+  report.assertions.mvSavingsVerification = mvSavingsVerification;
   for (const name of mvTests) {
-    if (!report.assertions.mvSavingsVerification.includes(`--- PASS: ${name}`)) throw new Error(`${name} did not run`);
+    if (!mvSavingsVerification.includes(`--- PASS: ${name}`)) throw new Error(`${name} did not run`);
   }
 
   // report-service takes a month's snapshot on a REPORT_GENERATE job as report_runtime. Its hours
@@ -755,8 +765,9 @@ try {
   const reportJobId = '01990000-1996-7000-8000-000000000001';
   psql(`INSERT INTO core_registry.job_instances (job_id, trigger_type, job_type, tenant_id, site_id, scheduled_for, dedup_key, payload, state, max_attempts, timeout_seconds, created_at, updated_at)
     VALUES ('${reportJobId}', 'BACKFILL', 'REPORT_GENERATE', '018f1d00-0000-7000-8000-000000000001', '018f1e00-1000-7000-8000-000000000001', now(), 'report-integration-2026-07', '{"month":"2026-07"}'::jsonb, 'READY', 3, 120, now(), now())`);
-  report.assertions.reportSnapshots = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+  const reportSnapshots = run(process.execPath, [
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=services/report-service',
     'test', '-count=1', '-run', 'TestReportRuntimeSnapshotsTheMonthItsJobNames', '-v', './internal/report/...',
   ], {
@@ -768,12 +779,13 @@ try {
       REPORT_INTEGRATION_JOB_ID: reportJobId,
     },
   });
-  if (!report.assertions.reportSnapshots.includes('--- PASS: TestReportRuntimeSnapshotsTheMonthItsJobNames')) throw new Error('TestReportRuntimeSnapshotsTheMonthItsJobNames did not run');
+  report.assertions.reportSnapshots = reportSnapshots;
+  if (!reportSnapshots.includes('--- PASS: TestReportRuntimeSnapshotsTheMonthItsJobNames')) throw new Error('TestReportRuntimeSnapshotsTheMonthItsJobNames did not run');
 
   // energy_interval_facts_visible keeps only a fact's latest revision, and filters on it after
   // choosing that revision: a fact corrected from SITE to BRANCH leaves the Site total. The caller's
   // Site and period filters must still reach the table's index, or every query reads the whole table.
-  const visibleFact = (revision, scope, energyKWh, projectedAt) => `(generateUUIDv4(), toUUID('01990000-2a00-7000-8000-000000000001'), toUUID('01990000-2a10-7000-8000-000000000001'),
+  const visibleFact = (revision: number, scope: string, energyKWh: number, projectedAt: string): string => `(generateUUIDv4(), toUUID('01990000-2a00-7000-8000-000000000001'), toUUID('01990000-2a10-7000-8000-000000000001'),
      toUUID('01990000-2a20-7000-8000-000000000001'), 'electricity', '${scope}', 'VALID', toDateTime64('2026-06-10 01:59:00', 3, 'UTC'), toDateTime64('2026-06-10 02:00:00', 3, 'UTC'), ${energyKWh},
      toUUID('01990000-2a30-7000-8000-000000000001'), ${revision}, toDateTime64('${projectedAt}', 3, 'UTC'))`;
   clickHouse(`INSERT INTO analytics.energy_interval_facts (fact_id, tenant_id, site_id, meter_binding_id, energy_type, accounting_scope, quality, period_start, period_end, energy_kwh, source_current_observation_id, fact_revision, projected_at) VALUES ${[

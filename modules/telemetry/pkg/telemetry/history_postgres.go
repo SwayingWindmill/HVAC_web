@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/schemagate"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type HistoryPostgresRepository struct {
@@ -44,12 +45,12 @@ func OpenHistoryPostgresRepository(ctx context.Context, databaseURL string) (*Hi
 		pool.Close()
 		return nil, fmt.Errorf("ping telemetry history database: %w", err)
 	}
-	return &HistoryPostgresRepository{pool: pool, newLeaseID: newUUIDv7}, nil
+	return &HistoryPostgresRepository{pool: pool, newLeaseID: uuidv7.NewAt}, nil
 }
 
 func NewHistoryPostgresRepository(pool *pgxpool.Pool, generator EventIDGenerator) *HistoryPostgresRepository {
 	if generator == nil {
-		generator = newUUIDv7
+		generator = uuidv7.NewAt
 	}
 	return &HistoryPostgresRepository{pool: pool, newLeaseID: generator}
 }

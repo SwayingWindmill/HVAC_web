@@ -52,7 +52,7 @@ func (store *Store) RecordTunnelAudit(ctx context.Context, event edgetunnel.Audi
 	if occurredAt.IsZero() {
 		occurredAt = time.Now().UTC()
 	}
-	auditID, err := newUUIDv7(occurredAt)
+	auditID, err := uuidv7.NewAt(occurredAt)
 	if err != nil {
 		return fmt.Errorf("generate tunnel audit id: %w", err)
 	}

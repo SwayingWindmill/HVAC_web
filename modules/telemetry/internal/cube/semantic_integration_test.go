@@ -12,7 +12,7 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/telemetry/internal/analytics"
 )
 
-// One question, several measures of a view: run-analytics-cube-tests.mjs projects the Site's
+// One question, several measures of a view: run-analytics-cube-tests.ts projects the Site's
 // Option A half-open intervals ((12:55, 12:58]: 2 kWh, (12:58, 13:00]: 1 kWh -> 3 kWh in 12:00;
 // (13:00, 13:05]: 1 kWh -> 1 kWh in 13:00) and cooling at four times it, so 12:00 reads 3 kWh,
 // 12 kWh, COP 4 and 13:00 reads 1 kWh, 4 kWh, COP 4. Another Site's query reads none of it.

@@ -15,7 +15,7 @@ import (
 
 // Each electricity fact follows Option A half-open interval attribution (period_start, period_end],
 // so it is bucketed and priced at addMilliseconds(period_end, -1); energy outside every window is
-// reported as unpriced, never as free. run-analytics-cube-tests.mjs projects the Site's facts
+// reported as unpriced, never as free. run-analytics-cube-tests.ts projects the Site's facts
 // ((12:55, 12:58]: 2 kWh, (12:58, 13:00]: 1 kWh, (13:00, 13:05]: 1 kWh) before it runs this test.
 func TestCubePricesTheSiteElectricityAtItsPriceWindows(t *testing.T) {
 	cubeURL := strings.TrimSpace(os.Getenv("ANALYTICS_CUBE_TEST_URL"))

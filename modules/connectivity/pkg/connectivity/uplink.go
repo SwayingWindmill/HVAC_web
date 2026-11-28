@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/packettap"
 )
@@ -570,7 +571,7 @@ WHERE id = $7::uuid
 			return fmt.Errorf("update uplink quarantine dedup row: %w", err)
 		}
 	case errors.Is(err, pgx.ErrNoRows):
-		id, idErr := newUUIDv7(input.receivedAt)
+		id, idErr := uuidv7.NewAt(input.receivedAt)
 		if idErr != nil {
 			return idErr
 		}

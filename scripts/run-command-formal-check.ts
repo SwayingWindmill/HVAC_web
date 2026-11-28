@@ -61,7 +61,7 @@ export const summarizeCommandFormalOutput = (rawOutput: string, exitCode: number
 };
 
 export const runCommandFormalCheck = (root = repositoryRoot): CommandFormalSummary => {
-  const result = spawnSync(process.execPath, ['scripts/run-go.mjs', 'test', '-count=1', '-v', formalPackage], {
+  const result = spawnSync(process.execPath, ['--experimental-strip-types', 'scripts/run-go.ts', 'test', '-count=1', '-v', formalPackage], {
     cwd: root,
     encoding: 'utf8',
     windowsHide: true,

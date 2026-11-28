@@ -1,8 +1,6 @@
 import { createHash } from 'node:crypto';
 import { SITE_ID, principal } from './gateway';
-import { expect, test } from './test';
-
-const SCREENSHOT_DIR = '.scratch/verify/ota-web-ui-920';
+import { captureVerifyScreenshot, expect, test } from './test';
 
 function grantDeviceWritePrincipal() {
   return {
@@ -48,7 +46,7 @@ test('integrations OTA console supports 1440px light/dark views, multipart packa
     () => document.documentElement.scrollWidth > window.innerWidth,
   );
   expect(overflowLight).toBe(false);
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/ota-tab-light.png` });
+  await captureVerifyScreenshot(page, 'ota-web-ui-920/ota-tab-light.png');
 
   // Switch to dark theme via the shell theme selector and confirm zero horizontal overflow.
   await switchTheme(page, '深色');
@@ -56,7 +54,7 @@ test('integrations OTA console supports 1440px light/dark views, multipart packa
     () => document.documentElement.scrollWidth > window.innerWidth,
   );
   expect(overflowDark).toBe(false);
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/ota-tab-dark.png` });
+  await captureVerifyScreenshot(page, 'ota-web-ui-920/ota-tab-dark.png');
   await switchTheme(page, '浅色');
 
   // Upload a new OTA package via multipart dialog (including inline validation before valid upload).
@@ -128,7 +126,7 @@ test('integrations OTA console supports 1440px light/dark views, multipart packa
       detailSheet.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).then(() => getComputedStyle(el).opacity)),
     )
     .toBe('1');
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/ota-detail-sheet-light.png` });
+  await captureVerifyScreenshot(page, 'ota-web-ui-920/ota-detail-sheet-light.png');
 
   // Capture dark mode screenshot of campaign detail sheet cleanly via Escape -> theme toggle -> reopen.
   await page.keyboard.press('Escape');
@@ -142,7 +140,7 @@ test('integrations OTA console supports 1440px light/dark views, multipart packa
       detailSheet.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)).then(() => getComputedStyle(el).opacity)),
     )
     .toBe('1');
-  await page.screenshot({ path: `${SCREENSHOT_DIR}/ota-detail-sheet-dark.png` });
+  await captureVerifyScreenshot(page, 'ota-web-ui-920/ota-detail-sheet-dark.png');
   await page.keyboard.press('Escape');
   await expect(detailSheet).toBeHidden();
   await switchTheme(page, '浅色');

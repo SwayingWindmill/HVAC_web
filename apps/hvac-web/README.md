@@ -35,7 +35,7 @@ npm run ui:shadcn -- info --json
 npm run ui:shadcn -- add <注册表里的组件>
 ```
 
-shadcn CLI 不装进依赖，`scripts/shadcn-cli.mjs` 用 `npx` 运行固定版本（`SHADCN_CLI_VERSION`）。shadcn 的基础样式是这个版本 `dist/tailwind.css` 的副本，放在 `src/styles/shadcn-tailwind.css`；升级 CLI 时把这个文件换成新版本的，`npm run design:check` 会检查两者版本一致。
+shadcn CLI 不装进依赖，`scripts/shadcn-cli.ts` 用 `npx` 运行固定版本（`SHADCN_CLI_VERSION`）。shadcn 的基础样式是这个版本 `dist/tailwind.css` 的副本，放在 `src/styles/shadcn-tailwind.css`；升级 CLI 时把这个文件换成新版本的，`npm run design:check` 会检查两者版本一致。
 
 前端工具链只能用 Linux/WSL 的 Node 运行。workspace 的脚本用当前的 Node 直接启动 Vite、TanStack Router CLI 和 TypeScript，免得 Windows 和 WSL 共用一份代码时，旧的 `.bin` 脚本把构建切到另一个系统。
 

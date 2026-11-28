@@ -10,7 +10,7 @@ const removableRootPatterns = [
   /^CodeHVAC_webouttoolsgo.*\.tar\.gz$/,
 ];
 
-async function exists(target) {
+async function exists(target: string): Promise<boolean> {
   try {
     await stat(target);
     return true;
@@ -19,14 +19,14 @@ async function exists(target) {
   }
 }
 
-async function remove(target, label = path.relative(root, target)) {
+async function remove(target: string, label = path.relative(root, target)): Promise<boolean> {
   if (!(await exists(target))) return false;
   await rm(target, { recursive: true, force: true });
   console.log(`[repo:clean:local] removed ${label}`);
   return true;
 }
 
-async function removeIfEmpty(relativePath) {
+async function removeIfEmpty(relativePath: string): Promise<boolean> {
   const target = path.join(root, relativePath);
   if (!(await exists(target))) return false;
   const entries = await readdir(target);
@@ -36,7 +36,7 @@ async function removeIfEmpty(relativePath) {
   return true;
 }
 
-async function treeHasFiles(target) {
+async function treeHasFiles(target: string): Promise<boolean> {
   for (const entry of await readdir(target, { withFileTypes: true })) {
     if (entry.isFile() || entry.isSymbolicLink()) return true;
     if (entry.isDirectory() && await treeHasFiles(path.join(target, entry.name))) return true;
@@ -44,7 +44,7 @@ async function treeHasFiles(target) {
   return false;
 }
 
-async function removeEmptyHiddenAdapterDirs() {
+async function removeEmptyHiddenAdapterDirs(): Promise<number> {
   const protectedNames = new Set([
     '.agents', '.ai-bridge', '.codegraph', '.codex', '.github', '.impeccable',
     '.ruff_cache', '.scratch', '.workbuddy', '.worktrees',
@@ -61,7 +61,7 @@ async function removeEmptyHiddenAdapterDirs() {
   return count;
 }
 
-async function removeEmptyDirectoriesRecursively(relativePath) {
+async function removeEmptyDirectoriesRecursively(relativePath: string): Promise<number> {
   const target = path.join(root, relativePath);
   if (!(await exists(target))) return 0;
   let count = 0;

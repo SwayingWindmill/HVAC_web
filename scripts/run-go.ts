@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+
+import { readGoWorkspace } from './lib/go-workspace.ts';
 
 const root = resolve(process.cwd());
 const goBinary = process.env.GO_BINARY ?? 'go';
@@ -12,7 +14,7 @@ const modulePattern = /^\.\/((?:cmd|libs|modules|services|tools)\/[^/]+)\/\.\.\.
 const categoryPattern = /^\.\/(cmd|libs|modules|services|tools)\/\.\.\.$/;
 
 if (args.length === 0) {
-  console.error('usage: node scripts/run-go.mjs <go arguments...>');
+  console.error('usage: node --experimental-strip-types scripts/run-go.ts <go arguments...>');
   process.exit(2);
 }
 
@@ -21,18 +23,16 @@ await Promise.all([
   mkdir(goCacheDir, { recursive: true }),
 ]);
 
-const workspace = await readFile(join(root, 'go.work'), 'utf8');
-const configuredModules = [...workspace.matchAll(/^\s*\.\/((?:cmd|libs|modules|services|tools)\/[^\s)]+)\s*$/gm)]
-  .map((match) => match[1]);
+const configuredModules = readGoWorkspace(root).modules.filter((entry) => entry !== '.');
 
-async function runGo(commandArgs, cwd) {
+async function runGo(commandArgs: string[], cwd: string): Promise<number> {
   const child = spawn(goBinary, commandArgs, {
     cwd,
     stdio: 'inherit',
     shell: false,
     env: { ...process.env, GOCACHE: goCacheDir },
   });
-  const [code, signal] = await once(child, 'exit');
+  const [code, signal] = await once(child, 'exit') as [number | null, NodeJS.Signals | null];
   if (signal) {
     console.error(`go terminated by ${signal}`);
     return 1;
@@ -40,10 +40,12 @@ async function runGo(commandArgs, cwd) {
   return code ?? 1;
 }
 
-const baseArgs = [];
-const rootPackages = [];
-const workspaceModules = [];
-const addUnique = (list, item) => { if (!list.includes(item)) list.push(item); };
+const baseArgs: string[] = [];
+const rootPackages: string[] = [];
+const workspaceModules: string[] = [];
+const addUnique = (list: string[], item: string): void => {
+  if (!list.includes(item)) list.push(item);
+};
 for (const argument of args) {
   const moduleMatch = modulePattern.exec(argument);
   if (moduleMatch) {

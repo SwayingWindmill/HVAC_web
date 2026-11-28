@@ -10,7 +10,7 @@
 
 | 问题 | 做法 |
 | --- | --- |
-| 能查哪些名字 | `scripts/generate-semantic-catalog.mjs` 读 `semantic/cube/model` 的视图和 cube 定义，生成成员清单：每个视图的度量、可分组维度和中文标题、说明。Go 侧嵌入 `libs/analyticsmodel/semantic_catalog.json`，助手侧生成 `semantic-catalog.gen.ts`。门禁 `npm run semantic:catalog:check` 保证清单和模型一致 |
+| 能查哪些名字 | `scripts/generate-semantic-catalog.ts` 读 `semantic/cube/model` 的视图和 cube 定义，生成成员清单：每个视图的度量、可分组维度和中文标题、说明。Go 侧嵌入 `libs/analyticsmodel/semantic_catalog.json`，助手侧生成 `semantic-catalog.gen.ts`。门禁 `npm run semantic:catalog:check` 保证清单和模型一致 |
 | 不在清单里的 | `site_id`（站点由会话授权决定）、时间维度 `period_end`（由粒度和时间范围表达）、新鲜度度量 `max_data_watermark` / `max_dataset_revision`（每个结果的元数据里已有）、内部 cube 及其成员 |
 | 授权 | 沿用 `analytics.energy-series.read`：网关照旧向 IAM 判定站点权限，签一张只对这次查询摘要有效、由助手出示的授权；查询服务校验摘要 |
 | 一次能查多少 | 一个视图；不分组时，站点能耗（`site_energy`）和估算电费（`site_energy_cost`）的度量可以一起要，工具分两个视图各查一次、按时间段合成一张表（#593）；1–4 个度量；0–2 个维度；粒度 hour / day / month；站点时区；时间范围按站点本地时间。时间段数不超过 744（31 天按小时），结果不超过 2000 行 |
