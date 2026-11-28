@@ -771,6 +771,12 @@ test('classifier preserves deployment secret check on .gitignore, spatial model 
   assert.equal(edgeTunnel.unknown, false);
   assert.equal(edgeTunnel.broad, false);
 
+  const mpcParity = runClassification(['contracts/http/testdata/coupled-mpc-parity.v1.json']);
+  assert.deepEqual(mpcParity.contractProfiles, ['core']);
+  assert.deepEqual(mpcParity.unitProfiles, ['analytics']);
+  assert.equal(mpcParity.unknown, false);
+  assert.equal(mpcParity.broad, false);
+
   assert.deepEqual(findGoWorkspaceModuleListViolations(['.', 'cmd/wecom-alert-adapter']), []);
   assert.equal(findGoWorkspaceModuleListViolations(['.', 'cmd/wecom-alert-adapter', 'libs/rogue']).length, 1);
 });

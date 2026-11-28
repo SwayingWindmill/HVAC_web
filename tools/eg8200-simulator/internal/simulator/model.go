@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/measurement"
 )
 
 const (
@@ -14,7 +16,7 @@ const (
 )
 
 const (
-	waterHeatCapacityKWPerM3HDeltaC = 1.163
+	waterHeatCapacityKWPerM3HDeltaC = measurement.WaterFactorKW
 	pumpNominalFrequencyHz          = 50.0
 	pumpRampHzPerSecond             = 5.0 // a VFD ACC/DEC ramp of 10 s from 0 to 50 Hz
 	coolingTowerFanTimeConstant     = 30 * time.Second

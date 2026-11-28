@@ -13,6 +13,8 @@ const (
 	// WaterFactorKW is kW per (m³/h · K), the factor the gateway already uses:
 	// 1000 kg/m³ × 4.1868 kJ/(kg·K) / 3600 s/h = 1.163.
 	WaterFactorKW = 1.163
+	// WaterHeatCapacityKWPerM3HC is the canonical alias for WaterFactorKW across physics solvers and simulators.
+	WaterHeatCapacityKWPerM3HC = WaterFactorKW
 
 	// DefaultTemperatureAccuracyK is a PT1000 near IEC 60751 Class AA
 	// (±(0.10 + 0.0017|t|) °C, ±0.10 °C at 0 °C, about ±0.12 °C at 10 °C).

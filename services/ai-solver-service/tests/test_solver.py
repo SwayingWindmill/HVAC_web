@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+import re
 import threading
 import unittest
 import urllib.error
 import urllib.request
 
-from ai_solver.model import SolverInfeasibleError, SolverInputError, parse_solver_request
+from ai_solver.model import CoupledPlantSpec, SolverInfeasibleError, SolverInputError, parse_solver_request
 from ai_solver.server import create_server
 from ai_solver.solver import (
     HVACPhysicsSolver,
     MonotonicChillerModel,
     SOLVER_VERSION,
+    _WATER_CAP_KW_PER_M3H_C,
     estimate_wet_bulb_c,
+    evaluate_optimal_operating_point,
 )
 
 
@@ -279,6 +283,88 @@ class CoupledMPCTests(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+    def test_coupled_mpc_golden_parity_and_contract_schema(self) -> None:
+        repo_root = Path(__file__).resolve().parents[3]
+        fixture = json.loads((repo_root / "contracts/http/testdata/coupled-mpc-parity.v1.json").read_text(encoding="utf-8"))
+        schema = json.loads((repo_root / "contracts/http/ai-solver-service.v1.schema.json").read_text(encoding="utf-8"))
+        uuid_re = re.compile(schema["definitions"]["UUID"]["pattern"])
+        req_required = set(schema["definitions"]["SolveRequest"]["required"])
+        resp_required = set(schema["definitions"]["SolveResponse"]["required"])
+        risk_levels = set(schema["definitions"]["SolveResponse"]["properties"]["risk"]["properties"]["level"]["enum"])
+
+        self.assertAlmostEqual(_WATER_CAP_KW_PER_M3H_C, fixture["waterHeatCapacityKwPerM3hC"], delta=1e-9)
+
+        for tc in fixture["chillerPoints"]:
+            m_cfg = tc["model"]
+            model = MonotonicChillerModel(
+                base_cop=m_cfg["baseCop"],
+                tchw_slope_cop_per_c=m_cfg["tchwSlopeCopPerC"],
+                tcw_slope_cop_per_c=m_cfg["tcwSlopeCopPerC"],
+                condenser_quad_loss_per_c2=m_cfg["condenserQuadLossPerC2"],
+                plr_const_e0=m_cfg["plrConstE0"],
+                cop_scale=m_cfg["copScale"],
+            )
+            lift = model.lift_cop(tc["tChwC"], tc["cwEnteringC"], tc["cwLeavingC"])
+            p_kw, cop = model.power_kw(tc["loadKw"], tc["ratedCapKw"], tc["tChwC"], tc["cwEnteringC"], tc["cwLeavingC"])
+            self.assertAlmostEqual(lift, tc["expected"]["liftCop"], delta=1e-6, msg=tc["name"])
+            self.assertAlmostEqual(p_kw, tc["expected"]["powerKw"], delta=1e-6, msg=tc["name"])
+            self.assertAlmostEqual(cop, tc["expected"]["cop"], delta=1e-6, msg=tc["name"])
+
+        spec = CoupledPlantSpec()
+        for tc in fixture["operatingPoints"]:
+            op = evaluate_optimal_operating_point(
+                tc["loadKw"],
+                tc["zoneTempC"],
+                tc["tChwC"],
+                tc["dryBulbC"],
+                tc["wetBulbC"],
+                tc["rhPct"],
+                MonotonicChillerModel(cop_scale=tc["copScale"]),
+                spec,
+            )
+            exp = tc["expected"]
+            self.assertEqual(op.feasible, exp["feasible"], tc["name"])
+            self.assertEqual(op.target_chillers, exp["targetChillers"], tc["name"])
+            for got_val, want_val, field in [
+                (op.supply_temp_c, exp["supplyTempC"], "supplyTempC"),
+                (op.chwp_freq_hz, exp["chwpFreqHz"], "chwpFreqHz"),
+                (op.cwp_freq_hz, exp["cwpFreqHz"], "cwpFreqHz"),
+                (op.tower_fan_pct, exp["towerFanPct"], "towerFanPct"),
+                (op.total_power_kw, exp["totalPowerKw"], "totalPowerKw"),
+                (op.chiller_power_kw, exp["chillerPowerKw"], "chillerPowerKw"),
+                (op.chwp_power_kw, exp["chwpPowerKw"], "chwpPowerKw"),
+                (op.cwp_power_kw, exp["cwpPowerKw"], "cwpPowerKw"),
+                (op.tower_power_kw, exp["towerPowerKw"], "towerPowerKw"),
+                (op.predicted_cop, exp["predictedCop"], "predictedCop"),
+                (op.coil_capacity_kw, exp["coilCapacityKw"], "coilCapacityKw"),
+                (op.delivered_load_kw, exp["deliveredLoadKw"], "deliveredLoadKw"),
+            ]:
+                self.assertAlmostEqual(got_val, want_val, delta=1e-6, msg=f"{tc['name']}.{field}")
+
+        for tc in fixture["mpcCases"]:
+            req_json = tc["request"]
+            self.assertTrue(req_required.issubset(req_json.keys()), tc["name"])
+            for uuid_key in ("tenantId", "siteId", "optimizationRunId"):
+                self.assertRegex(req_json[uuid_key], uuid_re)
+            resp = HVACPhysicsSolver().solve(parse_solver_request(req_json)).to_dict()
+            self.assertTrue(resp_required.issubset(resp.keys()), tc["name"])
+            self.assertIn(resp["risk"]["level"], risk_levels)
+            exp = tc["expected"]
+            for field in ("supplyTempC", "projectedZoneTempC", "dailyEnergyKWh", "dailyCost"):
+                self.assertAlmostEqual(resp["candidate"][field], exp["candidate"][field], delta=1e-6)
+            for field in ("energySavingKWhPerDay", "costSavingPerDay"):
+                self.assertAlmostEqual(resp["expectedImpact"][field], exp["expectedImpact"][field], delta=1e-6)
+            self.assertEqual(resp["risk"]["level"], exp["risk"]["level"])
+            self.assertAlmostEqual(resp["risk"]["comfortMarginC"], exp["risk"]["comfortMarginC"], delta=1e-6)
+            self.assertEqual(resp["verificationPlan"]["targetRunningChillers"], exp["targetRunningChillers"])
+            self.assertAlmostEqual(resp["verificationPlan"]["predictedCop"], exp["predictedCop"], delta=1e-6)
+            self.assertEqual(len(resp["verificationPlan"]["mpcSlots"]), len(exp["mpcSlots"]))
+            for idx, (got_sl, want_sl) in enumerate(zip(resp["verificationPlan"]["mpcSlots"], exp["mpcSlots"])):
+                self.assertEqual(got_sl["targetChillers"], want_sl["targetChillers"], idx)
+                self.assertEqual(got_sl["operatingMode"], want_sl["operatingMode"], idx)
+                for field in ("supplyTempC", "chwpFreqHz", "cwpFreqHz", "towerFanPct", "projectedZoneTempC", "predictedPowerKw", "predictedCop", "slotCostCny"):
+                    self.assertAlmostEqual(got_sl[field], want_sl[field], delta=1e-6, msg=f"{tc['name']}.slot[{idx}].{field}")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,11 @@
 // and the low-delta-T power gate must not treat it as known.
 package nameplate
 
-import "math"
+import (
+	"math"
+
+	"github.com/quanlaihe/hvac-web/libs/measurement"
+)
 
 const (
 	KindWetBulbDryBulb     = "WET_BULB_DRY_BULB"
@@ -55,7 +59,7 @@ const (
 
 	// WaterHeatFactorKW is kW per (m³/h · K) for water, ρ·cp/3600 ≈ 1.163.
 	// Songyaxuan's gateway uses the same factor for cooling load.
-	WaterHeatFactorKW = 1.163
+	WaterHeatFactorKW = measurement.WaterFactorKW
 
 	BasisPower   = "POWER"
 	BasisCurrent = "CURRENT"

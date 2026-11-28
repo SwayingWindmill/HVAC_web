@@ -279,7 +279,8 @@ for (const file of files) {
     add(contractProfiles, ['core']);
     if (file.includes('operations-agent') || file.includes('operations-investigation')) {
       selectOperationsAgent(file, 'Operations Investigation contract changed', { integration: false });
-    } else if (file.includes('telemetry') || file.includes('s2-')) selectTelemetry(file, 'telemetry contract changed');
+    } else if (file.includes('coupled-mpc') || file.includes('ai-solver')) selectAnalytics(file, 'AI solver or optimization parity contract changed', { integration: false });
+    else if (file.includes('telemetry') || file.includes('s2-')) selectTelemetry(file, 'telemetry contract changed');
     else if (file.includes('command') || file.includes('s3-')) selectCommand(file, 'command contract changed');
     else if (file.includes('alarm') || file.includes('s4-')) selectAlarm(file, 'Alarm contract changed');
     else if (file.includes('work-order') || file.includes('workorder') || file.includes('s5-')) selectWorkOrder(file, 'Work Order contract changed');
