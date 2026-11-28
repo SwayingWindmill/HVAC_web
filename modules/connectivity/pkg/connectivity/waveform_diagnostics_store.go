@@ -380,7 +380,7 @@ func (store *Store) CreateGatewayWaveformRule(ctx context.Context, claims regist
 		return WaveformRuleRecord{}, err
 	}
 	now := store.clock().UTC()
-	ruleID, err := newUUIDv7(now)
+	ruleID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return WaveformRuleRecord{}, err
 	}
@@ -603,7 +603,7 @@ func (store *Store) CreateManualWaveformCapture(ctx context.Context, claims regi
 		return WaveformCaptureRecord{}, fmt.Errorf("%w: triggerReason too long", ErrWaveformInvalid)
 	}
 	now := store.clock().UTC()
-	captureID, err := newUUIDv7(now)
+	captureID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return WaveformCaptureRecord{}, err
 	}
@@ -695,7 +695,7 @@ func (store *Store) RecordGatewayHostMetrics(ctx context.Context, tenantID, site
 	if m.CollectedAtMs <= 0 {
 		collectedAt = now
 	}
-	id, err := newUUIDv7(now)
+	id, err := uuidv7.NewAt(now)
 	if err != nil {
 		return err
 	}
@@ -775,7 +775,7 @@ func (store *Store) RecordDiagnosticsAudit(ctx context.Context, tenantID, siteID
 		return nil
 	}
 	now := store.clock().UTC()
-	id, err := newUUIDv7(now)
+	id, err := uuidv7.NewAt(now)
 	if err != nil {
 		return err
 	}

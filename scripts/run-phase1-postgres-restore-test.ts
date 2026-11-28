@@ -1,8 +1,8 @@
-import { spawnSync } from 'node:child_process';
-import { once } from 'node:events';
+import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
+
+import { findAvailablePort } from './lib/postgres-compose-harness.ts';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/telemetry/compose.yaml');
@@ -10,23 +10,13 @@ const projectName = `hvac-phase1-restore-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
 const reportPath = resolve(root, process.env.PHASE1_RESTORE_REPORT_PATH ?? 'out/phase1-acceptance/restore-report.json');
 
-function run(command, args, options = {}) {
+function run(command: string, args: string[], options: SpawnSyncOptions = {}): string {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
   if (result.error || result.status !== 0) {
-    const detail = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || String(result.status);
+    const detail = result.error?.message || String(result.stderr ?? '').trim() || String(result.stdout ?? '').trim() || String(result.status);
     throw new Error(`${command} ${args.join(' ')} failed: ${detail}`);
   }
   return String(result.stdout ?? '').trim();
-}
-
-async function findAvailablePort() {
-  const server = createTCPServer();
-  server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
-  await once(server, 'listening');
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('restore test port allocator failed');
-  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
-  return address.port;
 }
 
 const dockerPath = 'docker';
@@ -34,12 +24,12 @@ run(dockerPath, ['version']);
 const postgresImage = 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412';
 const imageProbe = spawnSync(dockerPath, ['image', 'inspect', postgresImage], { cwd: root, stdio: 'ignore', windowsHide: true });
 if (imageProbe.status !== 0) run(dockerPath, ['pull', postgresImage]);
-const port = await findAvailablePort();
+const port = await findAvailablePort('restore test');
 const env = { ...process.env, S2_POSTGRES_HOST_PORT: String(port) };
-const compose = (args) => run(dockerPath, ['compose', '-p', projectName, '-f', composePath, ...args], { env });
-const psql = (database, sql) => run(dockerPath, ['exec', containerName, 'psql', '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', '-Atqc', sql]);
+const compose = (args: string[]): string => run(dockerPath, ['compose', '-p', projectName, '-f', composePath, ...args], { env });
+const psql = (database: string, sql: string): string => run(dockerPath, ['exec', containerName, 'psql', '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', '-Atqc', sql]);
 
-async function waitForDatabase(database) {
+async function waitForDatabase(database: string): Promise<void> {
   let stableStart = '';
   let stableChecks = 0;
   for (let attempt = 0; attempt < 300; attempt += 1) {
@@ -70,7 +60,7 @@ async function waitForDatabase(database) {
   throw new Error(`database ${database} did not become schema-ready on a stable postmaster`);
 }
 
-function databaseSnapshot(database) {
+function databaseSnapshot(database: string) {
   const tables = psql(database, `
     SELECT c.relname
     FROM pg_class c
@@ -96,7 +86,16 @@ function databaseSnapshot(database) {
   return { tables, counts, rls, fixture };
 }
 
-const report = {
+const report: {
+  schemaVersion: number;
+  capability: string;
+  status: string;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+  isolatedEnvironment: boolean;
+  assertions: Record<string, unknown>;
+} = {
   schemaVersion: 1,
   capability: 'phase1-postgres-backup-restore',
   status: 'failed',

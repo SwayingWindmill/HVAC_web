@@ -55,8 +55,8 @@ for (const gate of matrix.gates) {
     const script = gate.command.slice('npm run '.length).trim().split(/\s+/)[0];
     assert(pkg.scripts?.[script], `gate ${gate.id} references missing npm script ${script}`);
   } else if (gate.command.startsWith('node ')) {
-    const scriptPath = gate.command.trim().split(/\s+/)[1];
-    assert(scriptPath?.startsWith('scripts/'), `gate ${gate.id} node command must target scripts/`);
+    const scriptPath = gate.command.trim().split(/\s+/).slice(1).find((token) => !token.startsWith('-'));
+    assert(scriptPath && scriptPath.startsWith('scripts/'), `gate ${gate.id} node command must target scripts/`);
     await access(resolve(root, scriptPath));
   } else {
     throw new Error(`gate ${gate.id} uses unsupported command form`);
@@ -94,7 +94,7 @@ assert(matrix.requirements.some((item) => item.id === 'REQ-METRIC-001'), 'Energy
 assert(matrix.requirements.some((item) => item.id === 'REQ-HW-001' && item.class === 'DEFERRED_HARDWARE'), 'Real meter must not be silently treated as tested');
 assert(matrix.requirements.some((item) => item.id === 'REQ-FORMAL-001' && item.class === 'DEFERRED_FORMAL'), 'Formal endurance must not be claimed by preflight');
 await access(resolve(root, 'modules/energy/internal/energy/testdata/phase1-golden.v1.json'));
-await access(resolve(root, 'scripts/run-phase1-postgres-restore-test.mjs'));
+await access(resolve(root, 'scripts/run-phase1-postgres-restore-test.ts'));
 await access(resolve(root, 'docs/operations/phase1-simulator-acceptance.md'));
 
 const mappedGateIds = new Set(matrix.requirements.flatMap((item) => item.gateIds));

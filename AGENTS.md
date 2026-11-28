@@ -23,8 +23,8 @@
 ```bash
 # 秒级单文件 / 局部验证（WSL 执行）
 go test -run <TestName> ./modules/<域>/...                                 # 根 Go 模块（含 cmd/modules/services/libs/tools）
-node scripts/run-go.mjs test -run <TestName> ./cmd/wecom-alert-adapter/...  # go.work 唯一独立子模块
-node --experimental-strip-types --test scripts/test-<名称>.ts                # Web 模型/壳层/治理脚本单测（也支持 .mjs）
+node --experimental-strip-types scripts/run-go.ts test -run <TestName> ./cmd/wecom-alert-adapter/...  # go.work 唯一独立子模块
+node --experimental-strip-types --test scripts/test-<名称>.ts                # Web 模型/壳层/治理脚本单测
 npm run web:e2e -- e2e/<名称>.spec.ts                                       # 录制网关单 Spec（并行/worktree 加 CI=1 PLAYWRIGHT_PORT=5194）
 npm -w @hvac/miniprogram run test                                           # 小程序双类型检查 + 共享同步校验 + 全套单测
 npm --prefix services/operations-agent-service run check                    # AI 助手契约 + 类型 + 模块边界 + 全套单测
@@ -45,7 +45,7 @@ npm run operations-agent:eval -- --only=<题号>                              # 
 
 ## 架构不变量与生成物红线
 
-- **Go 模块与分层**：`go.work` 仅保留 `.` 与 `cmd/wecom-alert-adapter`（禁新建并行子模块）；`repo:check` 校验 `go1.27.4` `gofmt`；`ownership:check` 守住单写者表归属（`contracts/ownership/data-ownership.v1.json`）、Go 纵向分层（`libs` 不上引、`modules`/`services` 不引 `cmd`/`tools`、`cmd/edge-gateway` 非测试与 `tools/*` 不引 `modules`/`services`）及规范 `libs/uuidv7`。
+- **Go 模块与分层**：`go.work` 仅保留 `.` 与 `cmd/wecom-alert-adapter`（禁新建并行子模块）；`repo:check` 校验 `go1.27.4` `gofmt`；`ownership:check` 守住单写者表归属（`contracts/ownership/data-ownership.v1.json`）、Go 纵向分层（`libs` 不上引、`modules`/`services` 不引 `cmd`/`tools`、`cmd/edge-gateway` 非测试与 `tools/*` 不引 `modules`/`services`）及规范 `libs/uuidv7`（禁自建 `newUUIDv7` 包装；架构收敛与棘轮门禁见 [ADR 0034](docs/adr/0034-canonical-architecture-and-ratchet-guardrails.md)）。
 - **网关路由白名单**：网关仅放行 `contracts/ownership/route-ownership.v1.json` 登记的路由；未进 OpenAPI 契约的新增路由必须手工补登，集成测试不会替你拦截。
 - **迁移双向冻结与 ClickHouse**：PostgreSQL（`migration-list.tsv`）与 ClickHouse（`clickhouse-migration-list.tsv`）已登记 SQL 一字节不可改，改表结构只能新增业务主题命名迁移（PG 登记进 `manifest.v1.json` 后跑 `npm run migrations:sync`）；ClickHouse 查询须匹配最小权限角色并遵守 `clickhouse:sql:check`。
 - **不可手改的生成物与同步镜像（改源头后执行对应命令）**：

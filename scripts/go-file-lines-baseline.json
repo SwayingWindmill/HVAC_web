@@ -88,7 +88,7 @@
     "modules/telemetry/pkg/telemetry/latest_cache.go": 840,
     "modules/telemetry/pkg/telemetry/realtime.go": 840,
     "modules/telemetry/pkg/telemetry/server.go": 956,
-    "modules/telemetry/pkg/telemetry/store.go": 865,
+    "modules/telemetry/pkg/telemetry/store.go": 861,
     "services/notification-service/pkg/notificationservice/alarm_delivery.go": 979,
     "services/optimization-service/cmd/optimization-service/main.go": 834,
     "services/optimization-service/internal/optimization/auto_control.go": 1558,

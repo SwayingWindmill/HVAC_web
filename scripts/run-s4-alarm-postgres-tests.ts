@@ -157,7 +157,7 @@ try {
     ...process.env,
     S4_ALARM_TEST_DATABASE_URL: `postgres://s4_alarm_service:s4-alarm-service-local-only@127.0.0.1:${postgresHostPort}/hvac_s4?sslmode=disable`,
   };
-  run(process.execPath, ['scripts/run-go.mjs', 'test', '-count=1', './modules/alarm/...'], { env: testEnvironment, stdio: 'inherit' });
+  run(process.execPath, ['--experimental-strip-types', 'scripts/run-go.ts', 'test', '-count=1', './modules/alarm/...'], { env: testEnvironment, stdio: 'inherit' });
   report.assertions.goIntegrationTests = true;
   const freshEvidenceDeleteDenied = psql(`
     SET ROLE s4_alarm_migrator;

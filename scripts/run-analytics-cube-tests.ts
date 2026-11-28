@@ -1,10 +1,9 @@
 import { createHmac, randomBytes } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
-import { once } from 'node:events';
+import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
-import { pullDockerImageWithRetry, runDockerCompose } from './lib/docker-cli.mjs';
+import { pullDockerImageWithRetry, runDockerCompose } from './lib/docker-cli.ts';
+import { findAvailablePort } from './lib/postgres-compose-harness.ts';
 
 const root = resolve(process.cwd());
 const s2ComposePath = resolve(root, 'infra/telemetry/compose.yaml');
@@ -12,22 +11,16 @@ const cubeComposePath = resolve(root, 'semantic/cube/compose.yaml');
 const s2ProjectName = `hvac-analytics-cube-source-${process.pid}`;
 const cubeProjectName = `hvac-analytics-cube-${process.pid}`;
 const reportPath = resolve(root, process.env.ANALYTICS_CUBE_REPORT_PATH ?? 'out/analytics-history/cube-integration.json');
-const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
+const pause = (milliseconds: number): Promise<void> => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const cubeImage = 'cubejs/cube:v1.6.51@sha256:bc8c3f27aa588e0bf9c9937ca5bbb37192bc14d78bd18241299c94b9d2ca20e5';
 const cubeKey = randomBytes(32).toString('base64url');
 const tenantId = '018f4f00-0100-7000-8000-000000000001';
 const siteId = '018f4f00-1000-7000-8000-000000000001';
-async function findAvailablePort() {
-  const server = createTCPServer();
-  server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
-  await once(server, 'listening');
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('analytics Cube port allocator failed');
-  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
-  return address.port;
-}
 
-const [clickHouseHostPort, cubeHostPort] = await Promise.all([findAvailablePort(), findAvailablePort()]);
+const [clickHouseHostPort, cubeHostPort] = await Promise.all([
+  findAvailablePort('analytics ClickHouse HTTP'),
+  findAvailablePort('analytics Cube HTTP'),
+]);
 const composeEnvironment = {
   ...process.env,
   S2_CLICKHOUSE_HTTP_HOST_PORT: String(clickHouseHostPort),
@@ -42,36 +35,36 @@ const composeEnvironment = {
 const clickHouseURL = `http://127.0.0.1:${clickHouseHostPort}`;
 const cubeURL = `http://127.0.0.1:${cubeHostPort}`;
 
-function run(command, args, options = {}) {
+function run(command: string, args: string[], options: SpawnSyncOptions = {}): string {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
   if (result.error || result.status !== 0) {
-    const detail = result.error?.message || result.stderr?.trim() || result.stdout?.trim() || String(result.status);
+    const detail = result.error?.message || String(result.stderr ?? '').trim() || String(result.stdout ?? '').trim() || String(result.status);
     throw new Error(`${command} ${args.join(' ')} failed: ${detail}`);
   }
   return String(result.stdout ?? '').trim();
 }
 
-function compose(composePath, projectName, args) {
+function compose(composePath: string, projectName: string, args: string[]): string {
   return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
-const s2Compose = (args) => compose(s2ComposePath, s2ProjectName, args);
-const cubeCompose = (args) => compose(cubeComposePath, cubeProjectName, args);
+const s2Compose = (args: string[]): string => compose(s2ComposePath, s2ProjectName, args);
+const cubeCompose = (args: string[]): string => compose(cubeComposePath, cubeProjectName, args);
 
-function container(service) {
+function container(service: string): string {
   return s2Compose(['ps', '-q', service]);
 }
 
-function connectCubeToClickHouse() {
+function connectCubeToClickHouse(): void {
   const clickHouseContainer = container('clickhouse');
   const cubeContainer = cubeCompose(['ps', '-q', 'cube']);
-  const networks = JSON.parse(run('docker', ['inspect', '--format', '{{json .NetworkSettings.Networks}}', clickHouseContainer]));
+  const networks = JSON.parse(run('docker', ['inspect', '--format', '{{json .NetworkSettings.Networks}}', clickHouseContainer])) as Record<string, unknown>;
   const sourceNetwork = Object.keys(networks)[0];
   if (!sourceNetwork) throw new Error('analytics ClickHouse source network was not found');
   run('docker', ['network', 'connect', sourceNetwork, cubeContainer]);
 }
 
-function clickHouse(sql) {
+function clickHouse(sql: string): string {
   return run('docker', ['exec', container('clickhouse'), 'clickhouse-client', '--user', 'telemetry_history', '--query', sql]);
 }
 
@@ -104,9 +97,9 @@ async function waitForClickHouseHTTP() {
   throw new Error(`analytics ClickHouse HTTP endpoint did not become ready: ${lastError}`);
 }
 
-const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url');
 
-function cubeToken(overrides = {}) {
+function cubeToken(overrides: Record<string, unknown> = {}): string {
   const now = Math.floor(Date.now() / 1000);
   const header = encode({ alg: 'HS256', typ: 'JWT' });
   const payload = encode({
@@ -126,8 +119,21 @@ function cubeToken(overrides = {}) {
   return `${unsigned}.${signature}`;
 }
 
+interface CubeQueryResponse {
+  data?: Array<Record<string, unknown>>;
+  error?: string;
+}
+
+interface CubeMetaResponse {
+  cubes?: Array<{
+    name: string;
+    measures: Array<{ name: string; title?: string; description?: string }>;
+    dimensions: Array<{ name: string; title?: string; description?: string }>;
+  }>;
+}
+
 // The Query Service reads the public views only: site_energy is the Site's total, equipment_energy its sub-meters.
-function energyQuery({ timezone = 'UTC', dateRange = ['2026-07-29T12:00:00.000Z', '2026-07-29T14:00:00.000Z'], view = 'site_energy' } = {}) {
+function energyQuery({ timezone = 'UTC', dateRange = ['2026-07-29T12:00:00.000Z', '2026-07-29T14:00:00.000Z'], view = 'site_energy' }: { timezone?: string; dateRange?: [string, string]; view?: string } = {}): Record<string, unknown> {
   return {
     measures: [
       `${view}.energy_valid_kwh`,
@@ -152,38 +158,38 @@ function energyQuery({ timezone = 'UTC', dateRange = ['2026-07-29T12:00:00.000Z'
   };
 }
 
-async function cubeMeta(token) {
+async function cubeMeta(token: string): Promise<CubeMetaResponse> {
   const response = await fetch(`${cubeURL}/cubejs-api/v1/meta`, { headers: { Accept: 'application/json', Authorization: token } });
   if (!response.ok) throw new Error(`Cube meta returned ${response.status}: ${await response.text()}`);
-  return response.json();
+  return await response.json() as CubeMetaResponse;
 }
 
 // The error Cube answers a query with, or null when it returns data.
-async function cubeRefusal(token, query) {
+async function cubeRefusal(token: string, query: Record<string, unknown>): Promise<string | null> {
   const response = await fetch(`${cubeURL}/cubejs-api/v1/load`, {
     method: 'POST',
     headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
     body: JSON.stringify({ query }),
   });
-  const decoded = await response.json();
+  const decoded = await response.json() as { error?: string };
   return decoded.error ?? null;
 }
 
-async function queryCube(token, query = energyQuery(), cache = undefined) {
+async function queryCube(token: string, query: Record<string, unknown> = energyQuery(), cache?: string): Promise<CubeQueryResponse> {
   const response = await fetch(`${cubeURL}/cubejs-api/v1/load`, {
     method: 'POST',
     headers: { Accept: 'application/json', Authorization: token, 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, cache }),
   });
   const text = await response.text();
-  let decoded;
-  try { decoded = JSON.parse(text); } catch { decoded = { error: text }; }
+  let decoded: CubeQueryResponse;
+  try { decoded = JSON.parse(text) as CubeQueryResponse; } catch { decoded = { error: text }; }
   if (!response.ok || decoded.error) throw new Error(`Cube query returned ${response.status}: ${decoded.error ?? text}`);
   return decoded;
 }
 
-async function waitForCube() {
-  let lastError;
+async function waitForCube(): Promise<CubeQueryResponse> {
+  let lastError: unknown;
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try { return await queryCube(cubeToken()); } catch (error) { lastError = error; }
     await pause(500);
@@ -198,7 +204,16 @@ async function waitForCube() {
   throw new Error(`Cube semantic model did not become queryable: ${lastError}\n${logs}`);
 }
 
-const report = {
+const report: {
+  schemaVersion: number;
+  capability: string;
+  status: string;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+  cubeImage: string;
+  assertions: Record<string, unknown>;
+} = {
   schemaVersion: 1,
   capability: 'analytics-cube-energy-query',
   status: 'failed',
@@ -214,7 +229,8 @@ try {
   await waitForClickHouse();
   await waitForClickHouseHTTP();
   report.assertions.sourceProjection = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=modules/energy',
     'test', '-count=1', '-run', 'TestCanonicalCounterDeltaProjectsEnergyFactsIdempotently', '-v', './internal/clickhouse/...',
   ], {
@@ -270,7 +286,7 @@ try {
   const meta = await cubeMeta(cubeToken());
   const published = (meta.cubes ?? []).map((cube) => cube.name).sort();
   if (published.join(',') !== 'equipment_energy,site_energy,site_energy_cost,site_energy_missing,site_meter_balance,thermal_cop_asof') throw new Error(`Cube publishes ${published.join(',')}`);
-  for (const view of meta.cubes) {
+  for (const view of meta.cubes ?? []) {
     for (const member of [...view.measures, ...view.dimensions]) {
       if (!/[\u4e00-\u9fff]/u.test(member.title ?? '') || !/[\u4e00-\u9fff]/u.test(member.description ?? '')) {
         throw new Error(`${member.name} lacks a Chinese title or description`);
@@ -294,7 +310,8 @@ try {
   // The Query Service prices the Site's electricity through site_energy_cost (#575) and synthesizes
   // sub-meter totals / missing-meter markers / cross-gap totals (#798).
   report.assertions.energyCost = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=modules/telemetry',
     'test', '-count=1', '-run', 'TestCubePricesTheSiteElectricityAtItsPriceWindows|TestCubeSynthesizesSiteTotalMarksMissingSubmetersAndSeparatesCrossGap', '-v', './internal/cube/...',
   ], {
@@ -336,7 +353,8 @@ try {
 
   // The Operations Agent's semantic query (#573): several measures of one view, cut to the queried Site.
   report.assertions.semanticQuery = run(process.execPath, [
-    'scripts/run-isolated-go.mjs',
+    '--experimental-strip-types',
+    'scripts/run-isolated-go.ts',
     '--module=modules/telemetry',
     'test', '-count=1', '-run', 'TestCubeAnswersAMultiMeasureSemanticQueryForTheQueriedSite', '-v', './internal/cube/...',
   ], {
@@ -347,7 +365,13 @@ try {
   const otherSite = { siteId: '018f4f00-1000-7000-8000-000000000099', siteIds: ['018f4f00-1000-7000-8000-000000000099'] };
   const otherTenant = { tenantId: '018f4f00-0100-7000-8000-000000000099' };
   const denied = await queryCube(cubeToken(otherSite));
-  for (const [view, context] of [['site_energy', otherSite], ['site_energy', otherTenant], ['equipment_energy', otherSite], ['equipment_energy', otherTenant]]) {
+  const leakedCases: Array<[string, Record<string, unknown>]> = [
+    ['site_energy', otherSite],
+    ['site_energy', otherTenant],
+    ['equipment_energy', otherSite],
+    ['equipment_energy', otherTenant],
+  ];
+  for (const [view, context] of leakedCases) {
     const leaked = (await queryCube(cubeToken(context), { ...energyQuery({ view }), filters: [] })).data ?? [];
     if (leaked.length !== 0) throw new Error(`${view} leaked rows outside the caller's scope ${JSON.stringify(context)}`);
   }
@@ -360,8 +384,8 @@ try {
   if ((denied.data ?? []).length !== 0) throw new Error('Cube row-level policy leaked another Site');
   // site_energy and equipment_energy read whole hours from the hourly rollup and single facts only for
   // an hour the range cuts into (015-energy-hourly-rollup.sql); either way they must equal the facts.
-  const factTotals = (from, to, scope = 'SITE') => clickHouse(`SELECT concat(toString(round(sumIf(energy_kwh, quality = 'VALID'), 6)), '/', toString(countIf(quality = 'VALID')), '/', toString(countIf(quality = 'SUSPECT'))) FROM analytics.energy_interval_facts_visible WHERE site_id = '${siteId}' AND accounting_scope = '${scope}' AND energy_type = 'electricity' AND addMilliseconds(period_end, -1) >= parseDateTime64BestEffort('${from}', 3) AND addMilliseconds(period_end, -1) <= parseDateTime64BestEffort('${to}', 3)`);
-  const cubeTotals = async (from, to, view = 'site_energy') => {
+  const factTotals = (from: string, to: string, scope = 'SITE'): string => clickHouse(`SELECT concat(toString(round(sumIf(energy_kwh, quality = 'VALID'), 6)), '/', toString(countIf(quality = 'VALID')), '/', toString(countIf(quality = 'SUSPECT'))) FROM analytics.energy_interval_facts_visible WHERE site_id = '${siteId}' AND accounting_scope = '${scope}' AND energy_type = 'electricity' AND addMilliseconds(period_end, -1) >= parseDateTime64BestEffort('${from}', 3) AND addMilliseconds(period_end, -1) <= parseDateTime64BestEffort('${to}', 3)`);
+  const cubeTotals = async (from: string, to: string, view = 'site_energy'): Promise<string> => {
     const [row = {}] = (await queryCube(cubeToken(), {
       measures: [`${view}.energy_valid_kwh`, `${view}.valid_count`, `${view}.suspect_count`],
       filters: [{ member: `${view}.site_id`, operator: 'equals', values: [siteId] }, { member: `${view}.energy_type`, operator: 'equals', values: ['electricity'] }],
@@ -374,12 +398,12 @@ try {
     }, 'no-cache')).data ?? [];
     return `${Math.round(Number(row[`${view}.energy_valid_kwh`] ?? 0) * 1e6) / 1e6}/${Number(row[`${view}.valid_count`])}/${Number(row[`${view}.suspect_count`])}`;
   };
-  const ranges = [
+  const ranges: Array<[string, string]> = [
     ['2026-07-29T12:00:00.000Z', '2026-07-29T13:59:59.999Z'],
     ['2026-07-29T12:30:00.000Z', '2026-07-29T13:29:59.999Z'],
     ['2026-07-29T12:58:00.000Z', '2026-07-29T13:05:00.000Z'],
   ];
-  const checkRollup = async (stage) => {
+  const checkRollup = async (stage: string): Promise<void> => {
     for (const [from, to] of ranges) {
       for (const [view, scope] of [['site_energy', 'SITE'], ['equipment_energy', 'BRANCH']]) {
         const expected = factTotals(from, to, scope);

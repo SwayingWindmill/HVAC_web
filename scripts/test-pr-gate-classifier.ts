@@ -20,7 +20,7 @@ import {
   maximumHandoffBytes,
   splitArgsByLength,
 } from './check-repository-governance.ts';
-import { goExecutableName } from './lib/go-workspace.mjs';
+import { goExecutableName } from './lib/go-workspace.ts';
 
 interface ClassificationReport {
   changedFiles: string[];
@@ -254,10 +254,10 @@ test('unknown paths and automation scripts fail closed without database fan-out'
 test('integration plans resolve through stable domain profiles', () => {
   const plan = runPlan('integration', ['telemetry', 'command']);
   assert.deepEqual(plan.commands, [
-    'node scripts/run-s2-telemetry-postgres-tests.mjs',
-    'node scripts/run-s2-telemetry-ingest-postgres-tests.mjs',
-    'node scripts/run-s2-realtime-postgres-tests.mjs',
-    'node scripts/run-s2-telemetry-history-tests.mjs',
+    'node --experimental-strip-types scripts/run-s2-telemetry-postgres-tests.ts',
+    'node --experimental-strip-types scripts/run-s2-telemetry-ingest-postgres-tests.ts',
+    'node --experimental-strip-types scripts/run-s2-realtime-postgres-tests.ts',
+    'node --experimental-strip-types scripts/run-s2-telemetry-history-tests.ts',
     'npm run mqtt:crl:integration',
     'node --experimental-strip-types scripts/run-s3-command-postgres-tests.ts',
   ]);
@@ -279,7 +279,7 @@ test('PR workflow exposes only the stable required checks', async () => {
 });
 
 test('Go code, Go dependencies, lint rules and the Go check scripts select the go unit profile', () => {
-  for (const file of ['.golangci.yml', 'go.mod', 'go.sum', 'go.work', 'cmd/wecom-alert-adapter/go.mod', 'cmd/energy-api/main.go', 'scripts/run-go.mjs', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs']) {
+  for (const file of ['.golangci.yml', 'go.mod', 'go.sum', 'go.work', 'cmd/wecom-alert-adapter/go.mod', 'cmd/energy-api/main.go', 'scripts/run-go.ts', 'scripts/run-go-lint.ts', 'scripts/run-go-vulnerability-scan.ts']) {
     const classification = runClassification([file]);
     assert.ok(classification.unitProfiles.includes('go'), file);
     assert.equal(classification.unknown, false, file);
@@ -506,7 +506,7 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
   assert.equal(onboardingControl.broad, false);
 
   for (const connFile of [
-    'scripts/run-mqtt-broker-acl-tests.mjs',
+    'scripts/run-mqtt-broker-acl-tests.ts',
     'scripts/run-mqtt-broker-crl-kick-tests.ts',
   ]) {
     const concClassification = runClassification([connFile]);

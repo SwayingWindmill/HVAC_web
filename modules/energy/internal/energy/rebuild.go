@@ -70,14 +70,6 @@ func (event RebuildEvent) ValidateForPersistence() error {
 	return event.validate()
 }
 
-func newUUIDv7(now time.Time) (string, error) {
-	id, err := uuidv7.NewAt(now)
-	if err != nil {
-		return "", fmt.Errorf("generate rebuild UUID: %w", err)
-	}
-	return id, nil
-}
-
 var errFactUnchanged = errors.New("counter candidate already matches latest fact state")
 
 func correctionRevision(delta CounterDelta, binding BindingResolution) (uint64, bool, error) {
@@ -189,9 +181,9 @@ func (p *Projector) persistFacts(ctx context.Context, facts []EnergyIntervalFact
 	sort.Strings(scopes)
 	for _, scope := range scopes {
 		group := corrections[scope]
-		runID, err := newUUIDv7(p.now())
+		runID, err := uuidv7.NewAt(p.now())
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("generate rebuild UUID: %w", err)
 		}
 		for index := range group {
 			group[index].RebuildRunID = &runID
@@ -236,9 +228,9 @@ func (p *Projector) persistFacts(ctx context.Context, facts []EnergyIntervalFact
 }
 
 func (p *Projector) appendRebuildEvent(ctx context.Context, base RebuildEvent, eventType, cursor string, facts []EnergyIntervalFact, failure error) error {
-	eventID, err := newUUIDv7(p.now())
+	eventID, err := uuidv7.NewAt(p.now())
 	if err != nil {
-		return err
+		return fmt.Errorf("generate rebuild UUID: %w", err)
 	}
 	base.EventID = eventID
 	base.EventType = eventType

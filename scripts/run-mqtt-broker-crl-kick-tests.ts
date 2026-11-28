@@ -6,7 +6,7 @@ import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import tls from 'node:tls';
-import { runDockerCompose } from './lib/docker-cli.mjs';
+import { runDockerCompose } from './lib/docker-cli.ts';
 
 const CONTROL_TOPIC = '$CONTROL/hvac-crl/v1';
 const ROOT = resolve('.');

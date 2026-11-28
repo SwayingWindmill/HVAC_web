@@ -207,7 +207,3 @@ func normalizeTimes(validFrom *time.Time, validTo **time.Time) {
 		*validTo = &value
 	}
 }
-
-func newUUIDv7(now time.Time) (string, error) {
-	return uuidv7.NewAt(now)
-}

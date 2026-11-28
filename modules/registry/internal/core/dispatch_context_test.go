@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
 type dispatchContextFakeStore struct {
@@ -91,7 +93,7 @@ func TestServerServesCommandDispatchContextOnlyToCommandService(t *testing.T) {
 			}},
 		},
 	}
-	harness := newCoreHarness(t, now, store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, now, store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 
 	queryURL := CommandDispatchContextPath +
 		"?tenantId=" + testTenantA +

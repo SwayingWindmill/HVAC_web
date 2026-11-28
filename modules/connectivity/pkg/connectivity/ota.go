@@ -844,7 +844,7 @@ func (store *Store) CreateOTAPackage(ctx context.Context, claims registryauth.Gr
 	pkgID := normalized.PackageID
 	if pkgID == "" {
 		var uuidErr error
-		pkgID, uuidErr = newUUIDv7(now)
+		pkgID, uuidErr = uuidv7.NewAt(now)
 		if uuidErr != nil {
 			return OTAPackage{}, fmt.Errorf("generate OTA package UUIDv7: %w", uuidErr)
 		}
@@ -1149,7 +1149,7 @@ ORDER BY gateway_id ASC
 	}
 
 	now := store.clock().UTC()
-	campaignID, err := newUUIDv7(now)
+	campaignID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return OTACampaignDetail{}, nil, fmt.Errorf("generate OTA campaign UUIDv7: %w", err)
 	}
@@ -1173,7 +1173,7 @@ INSERT INTO connectivity.ota_campaigns (
 	tasks := make([]OTADeviceTask, 0, len(targets))
 	var canaryTasks []OTADeviceTask
 	for i, target := range targets {
-		taskID, idErr := newUUIDv7(now.Add(time.Duration(i) * time.Millisecond))
+		taskID, idErr := uuidv7.NewAt(now.Add(time.Duration(i) * time.Millisecond))
 		if idErr != nil {
 			return OTACampaignDetail{}, nil, fmt.Errorf("generate OTA task UUIDv7: %w", idErr)
 		}

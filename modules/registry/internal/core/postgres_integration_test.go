@@ -192,7 +192,7 @@ func TestPostgresStoreResolvesEffectivePrimaryElectricityCounterBinding(t *testi
 		t.Fatalf("listed Meter Bindings missing sub-meter = %#v", listed)
 	}
 
-	harness := newCoreHarness(t, time.Now().UTC(), store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, time.Now().UTC(), store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	httpResp := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites/"+testSiteA1+"/meter-bindings", claims, nil)
 	if httpResp.Code != http.StatusOK {
 		t.Fatalf("HTTP site meter-bindings status = %d; body=%s", httpResp.Code, httpResp.Body.String())
@@ -238,7 +238,7 @@ func TestPostgresStoreGetSiteTotalElectricitySourcesResolvesOrderedSubMetersAndE
 
 	httpClaims := integrationClaims(registryauth.ActionMeterBindingResolve)
 	httpClaims.AllowedSiteIDs = []string{testSiteA1}
-	harness := newCoreHarness(t, time.Now().UTC(), store, StaticGrantStatusProvider{PolicyRevision: testPolicy})
+	harness := newCoreHarness(t, time.Now().UTC(), store, registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy})
 	httpResp := harness.serve(t, http.MethodGet, RegistryPathPrefix+"sites/"+testSiteA1+"/total-electricity-sources", httpClaims, nil)
 	if httpResp.Code != http.StatusOK {
 		t.Fatalf("HTTP status = %d; body=%s", httpResp.Code, httpResp.Body.String())
@@ -275,11 +275,11 @@ func TestPostgresBackedServerRejectsWrongActionStaleAndRevokedGrants(t *testing.
 	tests := []struct {
 		name   string
 		claims registryauth.GrantClaims
-		status GrantStatusProvider
+		status registryauth.GrantStatusProvider
 	}{
-		{"wrong action", integrationClaims(registryauth.ActionDeviceRead), StaticGrantStatusProvider{PolicyRevision: testPolicy}},
-		{"stale policy", integrationClaims(registryauth.ActionSiteList), StaticGrantStatusProvider{PolicyRevision: "registry-read:2"}},
-		{"revoked", integrationClaims(registryauth.ActionSiteList), StaticGrantStatusProvider{PolicyRevision: testPolicy, RevokedTokenIDs: map[string]struct{}{"grant-1": {}}}},
+		{"wrong action", integrationClaims(registryauth.ActionDeviceRead), registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy}},
+		{"stale policy", integrationClaims(registryauth.ActionSiteList), registryauth.StaticGrantStatusProvider{PolicyRevision: "registry-read:2"}},
+		{"revoked", integrationClaims(registryauth.ActionSiteList), registryauth.StaticGrantStatusProvider{PolicyRevision: testPolicy, RevokedTokenIDs: map[string]struct{}{"grant-1": {}}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

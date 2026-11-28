@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 // insertSecurityAudit records an event about an existing account. username must be the
@@ -27,7 +28,7 @@ func insertSecurityAuditForUnknownSubject(ctx context.Context, tx pgx.Tx, eventT
 }
 
 func insertSecurityAuditWithRef(ctx context.Context, tx pgx.Tx, eventType, userID, subjectRef, outcome, reasonCode string, now time.Time, details map[string]any) error {
-	eventID, err := newUUIDv7(now)
+	eventID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return err
 	}

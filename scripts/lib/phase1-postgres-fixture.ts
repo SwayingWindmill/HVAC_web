@@ -5,9 +5,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { findAvailablePort } from './postgres-compose-harness.ts';
 
 const root = resolve(process.cwd());
 const postgresImage = 'postgres:16.4-bookworm@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412';
@@ -19,15 +19,6 @@ function run(command: string, args: string[]): string {
     throw new Error(`${command} ${args[0]} failed: ${result.error?.message ?? result.stderr?.trim() ?? result.status}`);
   }
   return String(result.stdout ?? '').trim();
-}
-
-async function freePort(): Promise<number> {
-  const server = createServer();
-  server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
-  await once(server, 'listening');
-  const { port } = server.address() as { port: number };
-  await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
-  return port;
 }
 
 export interface Phase1PostgresGoTests {
@@ -52,7 +43,7 @@ export async function runGoTestsOnPhase1Postgres({ name, databases, logins, pack
     run('docker', ['cp', resolve(root, path), `${container}:/tmp/migration.sql`]);
     run('docker', ['exec', container, 'psql', '-U', 'postgres', '-d', database, '-v', 'ON_ERROR_STOP=1', '-q', '-f', '/tmp/migration.sql']);
   };
-  const port = await freePort();
+  const port = await findAvailablePort('phase1 postgres fixture');
   try {
     run('docker', ['run', '-d', '--name', container, '-p', `127.0.0.1:${port}:5432`, '-e', `POSTGRES_PASSWORD=${superuserPassword}`, postgresImage]);
     // The image initializes on a server listening on no address, then restarts; wait for the restarted one.

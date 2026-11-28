@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 
 const root = resolve(process.cwd());
 const matrixPath = resolve(root, 'deploy/acceptance/phase1-simulator-acceptance.v1.json');
@@ -8,7 +8,52 @@ const outputDir = resolve(root, process.env.PHASE1_ACCEPTANCE_OUTPUT_DIR ?? 'out
 const reportPath = resolve(outputDir, 'acceptance-report.json');
 const summaryPath = resolve(outputDir, 'acceptance-summary.md');
 const gateEvidenceDir = resolve(outputDir, 'gates');
-const matrix = JSON.parse(await readFile(matrixPath, 'utf8'));
+interface GateDefinition {
+  id: string;
+  category: string;
+  command: string;
+  formalMeasurement?: unknown;
+  evidence?: string[];
+}
+
+interface RequirementDefinition {
+  id: string;
+  class: 'SOFTWARE_REQUIRED' | 'DEFERRED_HARDWARE' | 'DEFERRED_FORMAL';
+  title: string;
+  gateIds: string[];
+}
+
+interface AcceptanceMatrix {
+  program: string;
+  sourceDesign: string;
+  profiles?: Record<string, unknown>;
+  hardGates: unknown;
+  gates: GateDefinition[];
+  requirements: RequirementDefinition[];
+}
+
+interface EvidenceItem {
+  path: string;
+  present: boolean;
+  status: string;
+  error?: string;
+}
+
+interface GateResult {
+  id: string;
+  category: string;
+  command: string;
+  formalMeasurement: unknown;
+  status: 'PASS' | 'FAIL';
+  exitCode: number;
+  durationMs: number;
+  stdoutTail: string;
+  stderrTail: string;
+  spawnError: string;
+  evidence: EvidenceItem[];
+}
+
+const matrix = JSON.parse(await readFile(matrixPath, 'utf8')) as AcceptanceMatrix;
 const profile = process.argv.find((value) => value.startsWith('--profile='))?.slice('--profile='.length) ?? 'simulator';
 const selectedGate = process.argv.find((value) => value.startsWith('--gate='))?.slice('--gate='.length) ?? '';
 
@@ -16,10 +61,10 @@ if (!matrix.profiles?.[profile]) throw new Error(`unsupported acceptance profile
 const gateMap = new Map(matrix.gates.map((gate) => [gate.id, gate]));
 if (selectedGate && !gateMap.has(selectedGate)) throw new Error(`unknown acceptance gate: ${selectedGate}`);
 
-function execute(command) {
+function execute(command: string) {
   const tokens = command.trim().split(/\s+/);
-  let executable;
-  let args;
+  let executable: string;
+  let args: string[];
   if (tokens[0] === 'npm' && tokens[1] === 'run' && tokens.length === 3) {
     if (process.env.npm_execpath) {
       executable = process.execPath;
@@ -53,15 +98,15 @@ function execute(command) {
   };
 }
 
-async function inspectEvidence(paths) {
-  const results = [];
+async function inspectEvidence(paths?: string[]): Promise<EvidenceItem[]> {
+  const results: EvidenceItem[] = [];
   for (const path of paths ?? []) {
     const absolute = resolve(root, path);
     try {
       await access(absolute);
       let status = 'present';
       if (path.endsWith('.json')) {
-        const parsed = JSON.parse(await readFile(absolute, 'utf8'));
+        const parsed = JSON.parse(await readFile(absolute, 'utf8')) as { status?: unknown };
         if (typeof parsed.status === 'string') status = parsed.status;
       }
       results.push({ path, present: true, status });
@@ -74,15 +119,15 @@ async function inspectEvidence(paths) {
 
 await mkdir(outputDir, { recursive: true });
 await mkdir(gateEvidenceDir, { recursive: true });
-const gateResults = [];
-const gatesToRun = selectedGate ? [gateMap.get(selectedGate)] : matrix.gates;
+const gateResults: GateResult[] = [];
+const gatesToRun: GateDefinition[] = selectedGate ? [gateMap.get(selectedGate)!] : matrix.gates;
 for (const gate of gatesToRun) {
   process.stdout.write(`\n[phase1-acceptance] ${gate.id}: ${gate.command}\n`);
   const execution = execute(gate.command);
   const evidence = await inspectEvidence(gate.evidence);
   const evidenceOK = evidence.every((item) => item.present && !['failed', 'error'].includes(String(item.status).toLowerCase()));
   const passed = execution.exitCode === 0 && !execution.spawnError && evidenceOK;
-  const gateResult = {
+  const gateResult: GateResult = {
     id: gate.id,
     category: gate.category,
     command: gate.command,
@@ -107,7 +152,7 @@ const requirementResults = matrix.requirements.map((requirement) => {
   if (selectedGate && !requirement.gateIds.includes(selectedGate)) {
     return { ...requirement, status: 'NOT_RUN', blocking: false };
   }
-  const gates = requirement.gateIds.map((id) => resultByGate.get(id)).filter(Boolean);
+  const gates = requirement.gateIds.map((id) => resultByGate.get(id)).filter((gate): gate is GateResult => Boolean(gate));
   const complete = gates.length === requirement.gateIds.length;
   const passed = complete && gates.every((gate) => gate.status === 'PASS');
   return {

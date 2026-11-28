@@ -1,63 +1,8 @@
-import { existsSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { SITE_ID, principal } from './gateway';
-import { expect, test } from './test';
+import { captureVerifyScreenshot, expect, test } from './test';
 
 const GATEWAY_ID = '018f3e00-4000-7000-8000-000000000100';
 const INITIAL_CERT_ID = '0193f100-0000-7000-8000-000000000001';
-const ROOT_REPO_VERIFY_DIR = '/mnt/e/Code/HVAC_web/.scratch/verify/connectivity-p1-gateway-diagnostics';
-const SCREENSHOT_DIR = existsSync('/mnt/e/Code/HVAC_web/.git')
-  ? ROOT_REPO_VERIFY_DIR
-  : join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '.scratch', 'verify', 'connectivity-p1-gateway-diagnostics');
-const SHADOW_SHOT_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  '..',
-  '.scratch',
-  'verify',
-  'p1-web-governance',
-);
-const P2_AUTONOMY_SHOT_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  '..',
-  '.scratch',
-  'verify',
-  'connectivity-p2-edge-autonomy',
-);
-
-function screenshotPath(fileName: string): string {
-  mkdirSync(SCREENSHOT_DIR, { recursive: true });
-  return join(SCREENSHOT_DIR, fileName);
-}
-
-function shadowShot(fileName: string): string {
-  mkdirSync(SHADOW_SHOT_DIR, { recursive: true });
-  return join(SHADOW_SHOT_DIR, fileName);
-}
-
-const ISSUE_959_SHOT_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  '..',
-  '.scratch',
-  'verify',
-  'issue-959-web',
-);
-
-function p2AutonomyShot(fileName: string): string {
-  mkdirSync(P2_AUTONOMY_SHOT_DIR, { recursive: true });
-  return join(P2_AUTONOMY_SHOT_DIR, fileName);
-}
-
-function issue959Shot(fileName: string): string {
-  mkdirSync(ISSUE_959_SHOT_DIR, { recursive: true });
-  return join(ISSUE_959_SHOT_DIR, fileName);
-}
 
 function grantDeviceWritePrincipal() {
   return {
@@ -311,7 +256,7 @@ test('gateway diagnostics support packet capture lifecycle, direction filtering,
 
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await captureSection.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: screenshotPath('gateway-diagnostics-light.png') });
+  await captureVerifyScreenshot(page, 'connectivity-p1-gateway-diagnostics/gateway-diagnostics-light.png');
 
   const filterGroup = captureSection.getByRole('radiogroup', { name: '报文方向筛选' });
   await filterGroup.getByRole('radio', { name: '下行', exact: true }).click();
@@ -350,7 +295,7 @@ test('gateway diagnostics support packet capture lifecycle, direction filtering,
   ).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await quarantineSection.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: screenshotPath('gateway-diagnostics-dark.png') });
+  await captureVerifyScreenshot(page, 'connectivity-p1-gateway-diagnostics/gateway-diagnostics-dark.png');
 
   const captureWrites = gateway.writes.filter((entry) => entry.path.startsWith(`/api/v1/gateways/${GATEWAY_ID}/packet-capture/`));
   expect(captureWrites).toEqual([
@@ -404,7 +349,7 @@ test('gateway config shadow initializes mappings, recovers from 409 conflicts, a
   await expect(shadowSection).toContainText('v1');
   await expect(shadowSection).toContainText('点位映射 1 条');
   await expect(shadowSection).toContainText('采集周期 1 条');
-  await page.screenshot({ path: shadowShot('p1-shadow-light.png') });
+  await captureVerifyScreenshot(page, 'p1-web-governance/p1-shadow-light.png');
 
   // Simulate concurrent revision advance to verify 409 conflict & reload button inside editor.
   await shadowSection.getByRole('button', { name: '编辑配置影子' }).click();
@@ -470,13 +415,14 @@ test('gateway config shadow initializes mappings, recovers from 409 conflicts, a
   await page.getByRole('button', { name: 'EG8200-COMMERCIAL-001' }).click();
   await expect(sheet.getByRole('region', { name: '配置影子' })).toContainText('配置存在漂移');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: shadowShot('p1-shadow-dark.png') });
+  await captureVerifyScreenshot(page, 'p1-web-governance/p1-shadow-dark.png');
 });
 
 test('gateway config shadow edits Modbus driver table and autonomy policy, renders RATE_LIMITED quarantine, and supports partial clearing across themes at 1440px', async ({
   page,
   gateway,
 }) => {
+  test.slow();
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   page.on('console', (message) => {
@@ -610,7 +556,7 @@ test('gateway config shadow edits Modbus driver table and autonomy policy, rende
   expect(await regTableRegion.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   await expect(page.getByText(/配置影子已保存/)).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: p2AutonomyShot('shadow-driver-autonomy-light.png') });
+  await captureVerifyScreenshot(page, 'connectivity-p2-edge-autonomy/shadow-driver-autonomy-light.png');
 
   gateway.reportGatewayShadow(GATEWAY_ID, {
     reportedRevision: 1,
@@ -638,7 +584,7 @@ test('gateway config shadow edits Modbus driver table and autonomy policy, rende
   await darkShadow.scrollIntoViewIfNeeded();
   await expect(page.getByText(/配置影子已保存/)).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: p2AutonomyShot('shadow-driver-autonomy-dark.png') });
+  await captureVerifyScreenshot(page, 'connectivity-p2-edge-autonomy/shadow-driver-autonomy-dark.png');
 
   await darkShadow.getByRole('button', { name: '编辑配置影子' }).click();
   const editModal = page.getByRole('dialog', { name: '编辑网关配置影子' });
@@ -688,6 +634,7 @@ test('gateway config shadow supports BACnet/IP and OPC-UA multi-protocol driver 
   page,
   gateway,
 }) => {
+  test.slow();
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
   page.on('console', (message) => {
@@ -807,7 +754,7 @@ test('gateway config shadow supports BACnet/IP and OPC-UA multi-protocol driver 
   });
   await shadowSection.getByRole('button', { name: '刷新影子' }).click();
   await expect(shadowSection).toContainText('云边已一致');
-  await page.screenshot({ path: issue959Shot('bacnet-opcua-synced-light.png') });
+  await captureVerifyScreenshot(page, 'issue-959-web/bacnet-opcua-synced-light.png');
 
   // Drift transition: edge reports mismatched OPC-UA NodeId -> DRIFTED.
   const driftedDrivers = structuredClone(writtenDrivers);
@@ -837,7 +784,7 @@ test('gateway config shadow supports BACnet/IP and OPC-UA multi-protocol driver 
   await expect(darkShadow).toContainText('配置存在漂移');
   await darkShadow.scrollIntoViewIfNeeded();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: issue959Shot('bacnet-opcua-drifted-dark.png') });
+  await captureVerifyScreenshot(page, 'issue-959-web/bacnet-opcua-drifted-dark.png');
 
   expect(consoleErrors).toEqual([]);
   expect(pageErrors).toEqual([]);

@@ -45,7 +45,7 @@ type SemanticView struct {
 }
 
 // SemanticCatalog is the whitelist of the Operations Agent's semantic query (#573), generated from
-// the Cube views by scripts/generate-semantic-catalog.mjs. Members it does not list cannot be asked
+// the Cube views by scripts/generate-semantic-catalog.ts. Members it does not list cannot be asked
 // for: the Site comes from the grant and time from the granularity.
 type SemanticCatalog struct {
 	SchemaVersion int            `json:"schemaVersion"`

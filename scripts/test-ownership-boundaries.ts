@@ -460,11 +460,14 @@ test('inspectOwnershipBoundaries rejects hand-rolled UUIDv7 0x70 bit-twiddling o
       'utf8',
     );
     writeGoFile(rootDir, 'libs/uuidv7/uuidv7.go', 'package uuidv7\nfunc ok(b []byte) { b[6] = (b[6] & 0x0f) | 0x70 }\n');
-    writeGoFile(rootDir, 'modules/iam/internal/iam/bad_uuid.go', 'package iam\nfunc bad(b []byte) { b[6] = (b[6] & 0x0f) | 0x70 }\n');
+    writeGoFile(rootDir, 'modules/iam/internal/iam/bad_uuid.go', 'package iam\nfunc bad(b []byte) { b[6] = (b[6] & 0x0f) | 0x70 }\nfunc newUUIDv7() {}\n');
     const result = inspectOwnershipBoundaries(rootDir);
     assert.deepEqual(
       result.violations.map((v) => ({ rule: v.rule, file: v.file, symbol: v.symbol })),
-      [{ rule: 'raw-uuidv7', file: 'modules/iam/internal/iam/bad_uuid.go', symbol: '0x70' }],
+      [
+        { rule: 'raw-uuidv7', file: 'modules/iam/internal/iam/bad_uuid.go', symbol: '0x70' },
+        { rule: 'raw-uuidv7', file: 'modules/iam/internal/iam/bad_uuid.go', symbol: 'newUUIDv7' },
+      ],
     );
   });
 });

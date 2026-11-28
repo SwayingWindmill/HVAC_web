@@ -110,7 +110,7 @@ func (service *CredentialService) IssueFactoryReset(
 	defer tx.Rollback(ctx)
 
 	now := service.store.clock().UTC()
-	resetID, err := newUUIDv7(now)
+	resetID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return GatewayFactoryResetRecord{}, err
 	}
@@ -255,7 +255,7 @@ func (service *CredentialService) DecommissionTransferredGateway(
 	var resetRecordPtr *GatewayFactoryResetRecord
 	if wipeRequired {
 		now := service.store.clock().UTC()
-		resetID, err := newUUIDv7(now)
+		resetID, err := uuidv7.NewAt(now)
 		if err != nil {
 			return DecommissionTransferResult{}, err
 		}

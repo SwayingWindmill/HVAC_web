@@ -1,10 +1,9 @@
-import { spawnSync } from 'node:child_process';
-import { once } from 'node:events';
+import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
-import { createServer as createTCPServer } from 'node:net';
 import { dirname, resolve } from 'node:path';
 
-import { runDockerCompose } from './lib/docker-cli.mjs';
+import { runDockerCompose } from './lib/docker-cli.ts';
+import { findAvailablePort } from './lib/postgres-compose-harness.ts';
 
 const root = resolve(process.cwd(), process.cwd().endsWith('operations-agent-service') ? '../..' : '.');
 const composePath = resolve(root, 'infra/operations-agent/compose.yaml');
@@ -15,29 +14,16 @@ const reportPath = resolve(
   process.env.OPERATIONS_AGENT_POSTGRES_REPORT_PATH
     ?? 'out/operations-agent/postgres-persistence.json',
 );
-const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
+const pause = (milliseconds: number): Promise<void> => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 const npmCliPath = process.env.npm_execpath;
-async function findAvailablePort() {
-  const server = createTCPServer();
-  server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
-  await once(server, 'listening');
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    throw new Error('Operations Agent PostgreSQL port allocator did not expose a TCP address.');
-  }
-  await new Promise((resolveClose, rejectClose) => server.close((error) => (
-    error ? rejectClose(error) : resolveClose()
-  )));
-  return address.port;
-}
 
-const postgresHostPort = await findAvailablePort();
+const postgresHostPort = await findAvailablePort('Operations Agent PostgreSQL');
 const composeEnvironment = {
   ...process.env,
   OPERATIONS_AGENT_POSTGRES_HOST_PORT: String(postgresHostPort),
 };
 
-function run(command, args, options = {}) {
+function run(command: string, args: string[], options: SpawnSyncOptions = {}): string {
   const result = spawnSync(command, args, {
     cwd: root,
     encoding: 'utf8',
@@ -46,17 +32,17 @@ function run(command, args, options = {}) {
   });
   if (result.error || result.status !== 0) {
     throw new Error(
-      `${command} ${args.join(' ')} failed: ${result.error?.message ?? result.stderr?.trim() ?? result.status}`,
+      `${command} ${args.join(' ')} failed: ${result.error?.message ?? String(result.stderr ?? '').trim() ?? result.status}`,
     );
   }
   return String(result.stdout ?? '').trim();
 }
 
-function compose(args) {
+function compose(args: string[]): string {
   return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
-function adminPsql(sql) {
+function adminPsql(sql: string): string {
   return run('docker', [
     'exec',
     containerName,
@@ -72,7 +58,7 @@ function adminPsql(sql) {
   ]);
 }
 
-function applyMigration(role, password, path) {
+function applyMigration(role: string, password: string, path: string): void {
   run('docker', [
     'exec',
     '-e',
@@ -92,7 +78,7 @@ function applyMigration(role, password, path) {
   ]);
 }
 
-async function waitForPostgres() {
+async function waitForPostgres(): Promise<void> {
   for (let attempt = 0; attempt < 240; attempt += 1) {
     try {
       const state = adminPsql(
@@ -112,7 +98,16 @@ async function waitForPostgres() {
 
 const operationsUrl = `postgres://operations_agent_operations_runtime:operations-runtime-local-only@127.0.0.1:${postgresHostPort}/hvac_operations_agent?sslmode=disable`;
 
-const report = {
+const report: {
+  schemaVersion: number;
+  component: string;
+  status: string;
+  startedAt: string;
+  completedAt?: string;
+  error?: string;
+  postgresImage: string;
+  assertions: Record<string, unknown>;
+} = {
   schemaVersion: 1,
   component: 'operations-agent-service',
   status: 'failed',

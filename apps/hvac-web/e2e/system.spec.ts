@@ -1,23 +1,5 @@
-import { mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { SITE_ID, principal } from './gateway';
-import { expect, test } from './test';
-
-const P1_SCREENSHOT_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  '..',
-  '.scratch',
-  'verify',
-  'p1-web-governance',
-);
-
-function p1Shot(fileName: string): string {
-  mkdirSync(P1_SCREENSHOT_DIR, { recursive: true });
-  return join(P1_SCREENSHOT_DIR, fileName);
-}
+import { captureVerifyScreenshot, expect, test } from './test';
 
 function grantRegistryAdminPrincipal() {
   return {
@@ -257,7 +239,7 @@ test('模板版本 persists template catalog, structured DEVICE activation build
   expect(
     gateway.writes.find((write) => write.method === 'POST' && write.path === '/api/v1/templates/assignments')?.csrfToken,
   ).toBe('e2e-csrf-token');
-  await page.screenshot({ path: p1Shot('p1-templates-light.png') });
+  await captureVerifyScreenshot(page, 'p1-web-governance/p1-templates-light.png');
 
   // Reload page to verify persistent catalog and persistent site assignment history.
   await page.reload();
@@ -270,7 +252,7 @@ test('模板版本 persists template catalog, structured DEVICE activation build
     .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
     .toBe('dark');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: p1Shot('p1-templates-dark.png') });
+  await captureVerifyScreenshot(page, 'p1-web-governance/p1-templates-dark.png');
 });
 
 test('资源与绑定 supports tag CRUD, spatial subtree filter, tag filter, and cross-site search at 1440px', async ({
@@ -333,7 +315,7 @@ test('资源与绑定 supports tag CRUD, spatial subtree filter, tag filter, and
   await page.getByRole('button', { name: '筛选标签' }).click();
   await expect(deviceTable).toContainText('CHILLER-01');
   await expect(deviceTable).not.toContainText('WEATHER-STATION');
-  await page.screenshot({ path: p1Shot('p1-registry-tags-light.png') });
+  await captureVerifyScreenshot(page, 'p1-web-governance/p1-registry-tags-light.png');
 
   // Reset, filter by parent space subtree, then switch to cross-site scope.
   await page.getByRole('button', { name: '重置筛选' }).click();
@@ -351,7 +333,7 @@ test('资源与绑定 supports tag CRUD, spatial subtree filter, tag filter, and
     .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
     .toBe('dark');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: p1Shot('p1-registry-tags-dark.png') });
+  await captureVerifyScreenshot(page, 'p1-web-governance/p1-registry-tags-dark.png');
 });
 
 test('logical device hardware replacement preserves device identity and telemetry points at 1440px', async ({
@@ -399,7 +381,7 @@ test('logical device hardware replacement preserves device identity and telemetr
   await chillerRow.getByRole('button', { name: '查看点位' }).click();
   await expect(page.getByRole('table', { name: 'CHILLER-01 通信端点点位登记' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: p1Shot('p1-hardware-replace-light.png') });
+  await captureVerifyScreenshot(page, 'p1-web-governance/p1-hardware-replace-light.png');
 
   // Reload to confirm the updated external hardware identifier persists on the same device.
   await page.reload();
@@ -411,7 +393,7 @@ test('logical device hardware replacement preserves device identity and telemetr
     .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
     .toBe('dark');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: p1Shot('p1-hardware-replace-dark.png') });
+  await captureVerifyScreenshot(page, 'p1-web-governance/p1-hardware-replace-dark.png');
 });
 
 test('sidebar platform links omit the site query param and drop site scope cleanly', async ({ page }) => {

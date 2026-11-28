@@ -139,7 +139,7 @@ func TestPrepareReconciliationRequestNormalizesNilAndEmptyCollections(t *testing
 }
 
 func TestNewUUIDv7ProducesValidIdentifier(t *testing.T) {
-	value, err := newUUIDv7(time.Date(2026, 7, 22, 1, 2, 3, 0, time.UTC))
+	value, err := uuidv7.NewAt(time.Date(2026, 7, 22, 1, 2, 3, 0, time.UTC))
 	if err != nil {
 		t.Fatal(err)
 	}

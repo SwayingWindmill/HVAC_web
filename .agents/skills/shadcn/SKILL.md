@@ -7,7 +7,7 @@ description: Manages shadcn components and projects — adding, searching, fixin
 
 A framework for building ui, components and design systems. Components are added as source code to the user's project via the CLI.
 
-> **IMPORTANT:** In `HVAC_web`, always run shadcn CLI commands from the repo root inside WSL (`wsl -e bash -lc ...`) via the project wrapper `npm run ui:shadcn -- <cmd>` (defined in `scripts/shadcn-cli.mjs`, targeting `apps/hvac-web/components.json`) instead of bare `npx shadcn@latest` or `bunx`. Outside `HVAC_web`, use the project's package runner (`npx shadcn@latest`, `pnpm dlx shadcn@latest`, or `bunx --bun shadcn@latest`) based on `packageManager`.
+> **IMPORTANT:** In `HVAC_web`, always run shadcn CLI commands from the repo root inside WSL (`wsl -e bash -lc ...`) via the project wrapper `npm run ui:shadcn -- <cmd>` (defined in `scripts/shadcn-cli.ts`, targeting `apps/hvac-web/components.json`) instead of bare `npx shadcn@latest` or `bunx`. Outside `HVAC_web`, use the project's package runner (`npx shadcn@latest`, `pnpm dlx shadcn@latest`, or `bunx --bun shadcn@latest`) based on `packageManager`.
 
 ## Current Project Context
 

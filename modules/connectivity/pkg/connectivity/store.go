@@ -16,7 +16,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/schemagate"
-	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 var (
@@ -494,10 +493,6 @@ func sameEdgeExecution(left, right *commandmodel.EdgeExecutionEvidence) bool {
 	leftJSON, leftErr := json.Marshal(left)
 	rightJSON, rightErr := json.Marshal(right)
 	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
-}
-
-func newUUIDv7(now time.Time) (string, error) {
-	return uuidv7.NewAt(now)
 }
 
 func (store *Store) clock() time.Time {

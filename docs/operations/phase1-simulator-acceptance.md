@@ -38,7 +38,7 @@ npm run acceptance:phase1
 开发时只跑一项检查：
 
 ```bash
-node scripts/run-phase1-simulator-acceptance.mjs --profile=simulator --gate=GATE-MQTT-E2E
+node --experimental-strip-types scripts/run-phase1-simulator-acceptance.ts --profile=simulator --gate=GATE-MQTT-E2E
 ```
 
 只跑一项时结果标为 `partial`，不能当作模拟器验收的证据。

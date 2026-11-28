@@ -1,11 +1,11 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type SpawnSyncOptions } from 'node:child_process';
 import { once } from 'node:events';
-import { createServer as createTCPServer } from 'node:net';
 import { mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { runDockerCompose } from './lib/docker-cli.mjs';
+import { runDockerCompose } from './lib/docker-cli.ts';
+import { findAvailablePort } from './lib/postgres-compose-harness.ts';
 
 const root = resolve(process.cwd());
 const composePath = resolve(root, 'infra/durability/compose.yaml');
@@ -13,21 +13,12 @@ const projectName = `hvac-s0-pg-test-${process.pid}`;
 const containerName = `${projectName}-postgres-1`;
 const goBinary = process.env.GO_BINARY ?? 'go';
 const goCacheDir = process.env.GOCACHE || join(tmpdir(), 'hvac-go-build-cache');
-const pause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
-async function findAvailablePort(requestedPort = 0) {
-  const server = createTCPServer();
-  server.listen({ host: '127.0.0.1', port: Number(requestedPort) || 0, exclusive: true });
-  await once(server, 'listening');
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('PostgreSQL test port allocator did not expose a TCP address');
-  await new Promise((resolveClose, rejectClose) => server.close((error) => error ? rejectClose(error) : resolveClose()));
-  return address.port;
-}
+const pause = (milliseconds: number): Promise<void> => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
-const postgresHostPort = await findAvailablePort(process.env.S0_POSTGRES_HOST_PORT ?? 0);
+const postgresHostPort = await findAvailablePort('S0 durable PostgreSQL', Number(process.env.S0_POSTGRES_HOST_PORT ?? 0) || 0);
 const composeEnvironment = { ...process.env, S0_POSTGRES_HOST_PORT: String(postgresHostPort) };
 
-function run(command, args, options = {}) {
+function run(command: string, args: string[], options: SpawnSyncOptions = {}): string {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
   if (result.error || result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} failed: ${result.error?.message ?? result.stderr ?? result.status}`);
@@ -35,7 +26,7 @@ function run(command, args, options = {}) {
   return String(result.stdout ?? '').trim();
 }
 
-function compose(args) {
+function compose(args: string[]): string {
   return runDockerCompose(run, ['-p', projectName, '-f', composePath, ...args], { env: composeEnvironment });
 }
 
@@ -88,7 +79,7 @@ async function runGoTests() {
       S0_AUDIT_QUERY_DATABASE_URL: `postgres://audit_query_runtime:audit-query-local-only@127.0.0.1:${postgresHostPort}/hvac_s0?sslmode=disable`,
     },
   });
-  const [code, signal] = await once(child, 'exit');
+  const [code, signal] = await once(child, 'exit') as [number | null, NodeJS.Signals | null];
   if (signal || code !== 0) throw new Error(`durable PostgreSQL tests failed: ${signal ?? code}`);
 }
 

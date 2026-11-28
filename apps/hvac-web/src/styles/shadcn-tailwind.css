@@ -3,7 +3,7 @@
  * https://github.com/shadcn-ui/ui). This file used to be imported as
  * "shadcn/tailwind.css", which kept the whole shadcn CLI and its dependencies in
  * node_modules just to ship these styles. The CLI now runs through npx (see
- * scripts/shadcn-cli.mjs). When SHADCN_CLI_VERSION there changes, replace this file
+ * scripts/shadcn-cli.ts). When SHADCN_CLI_VERSION there changes, replace this file
  * with the new version's dist/tailwind.css.
  */
 @theme inline {

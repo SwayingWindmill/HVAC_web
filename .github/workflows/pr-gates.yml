@@ -131,7 +131,7 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: ~/.cache/hvac-go-tools
-          key: hvac-go-tools-${{ runner.os }}-${{ hashFiles('go.work', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs') }}
+          key: hvac-go-tools-${{ runner.os }}-${{ hashFiles('go.work', 'scripts/run-go-lint.ts', 'scripts/run-go-vulnerability-scan.ts') }}
       - run: npm ci
       - run: node --experimental-strip-types scripts/run-pr-gate.ts --gate=unit --profiles="go"
 

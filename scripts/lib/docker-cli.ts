@@ -1,6 +1,6 @@
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from 'node:child_process';
 
-const boundedInteger = (name, value, minimum, maximum) => {
+const boundedInteger = (name: string, value: unknown, minimum: number, maximum: number): number => {
   const parsed = Number.parseInt(String(value), 10);
   if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
     throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
@@ -8,19 +8,42 @@ const boundedInteger = (name, value, minimum, maximum) => {
   return parsed;
 };
 
-const boundedDetail = (value) => String(value ?? '').trim().slice(0, 2000);
-const defaultPause = (milliseconds) => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
+const boundedDetail = (value: unknown): string => String(value ?? '').trim().slice(0, 2000);
+const defaultPause = (milliseconds: number): Promise<void> => new Promise((resolvePause) => setTimeout(resolvePause, milliseconds));
 
-export function dockerComposeInvocation(args) {
+export function dockerComposeInvocation(args: string[]): { command: string; args: string[] } {
   return { command: 'docker', args: ['compose', ...args] };
 }
 
-export function runDockerCompose(run, args, options) {
+export function runDockerCompose<TResult, TOptions = Record<string, unknown>>(
+  run: (command: string, args: string[], options?: TOptions) => TResult,
+  args: string[],
+  options?: TOptions,
+): TResult {
   const invocation = dockerComposeInvocation(args);
   return run(invocation.command, invocation.args, options);
 }
 
-export async function pullDockerImageWithRetry(image, options = {}) {
+export interface PullDockerImageOptions {
+  attempts?: number;
+  retryBaseMs?: number;
+  timeoutMs?: number;
+  spawn?: (
+    command: string,
+    args: readonly string[],
+    options: SpawnSyncOptionsWithStringEncoding,
+  ) => Partial<SpawnSyncReturns<string>>;
+  pause?: (milliseconds: number) => Promise<void>;
+  warn?: (message: string) => void;
+  dockerBinary?: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}
+
+export async function pullDockerImageWithRetry(
+  image: string,
+  options: PullDockerImageOptions = {},
+): Promise<Partial<SpawnSyncReturns<string>>> {
   if (typeof image !== 'string' || !image.trim()) throw new Error('docker image reference is required');
   if (!/@sha256:[0-9a-f]{64}$/.test(image)) throw new Error('docker image reference must use an immutable sha256 digest');
 

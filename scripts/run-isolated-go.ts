@@ -10,7 +10,7 @@ const modulePath = moduleArgument?.slice('--module='.length);
 const args = process.argv.slice(2).filter((value) => !value.startsWith('--module='));
 
 if (!modulePath || args.length === 0) {
-  console.error('usage: node scripts/run-isolated-go.mjs --module=<path> <go arguments...>');
+  console.error('usage: node --experimental-strip-types scripts/run-isolated-go.ts --module=<path> <go arguments...>');
   process.exit(2);
 }
 

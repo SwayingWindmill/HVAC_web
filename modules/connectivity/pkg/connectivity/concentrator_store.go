@@ -30,7 +30,7 @@ func (store *Store) Clock() time.Time {
 }
 
 func NewUUIDv7At(now time.Time) (string, error) {
-	return newUUIDv7(now)
+	return uuidv7.NewAt(now)
 }
 
 // ResolveGatewayScopeForOperator validates tenant/site access and non-revoked
@@ -122,7 +122,7 @@ func (store *Store) RecordConcentratorAudit(ctx context.Context, tenantID, gatew
 		entry.OccurredAt = entry.OccurredAt.UTC()
 	}
 	if entry.ID == "" {
-		id, err := newUUIDv7(entry.OccurredAt)
+		id, err := uuidv7.NewAt(entry.OccurredAt)
 		if err != nil {
 			return ConcentratorAuditEntry{}, err
 		}

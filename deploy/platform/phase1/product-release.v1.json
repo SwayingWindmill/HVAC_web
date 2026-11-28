@@ -63,9 +63,9 @@
     "notification:check"
   ],
   "rollbackEvidence": [
-    "scripts/run-phase1-postgres-restore-test.mjs",
-    "scripts/run-s1-registry-postgres-tests.mjs",
-    "scripts/run-s2-telemetry-postgres-tests.mjs"
+    "scripts/run-phase1-postgres-restore-test.ts",
+    "scripts/run-s1-registry-postgres-tests.ts",
+    "scripts/run-s2-telemetry-postgres-tests.ts"
   ],
   "migrationState": {
     "states": [

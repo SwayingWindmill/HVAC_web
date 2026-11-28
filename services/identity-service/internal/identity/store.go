@@ -211,7 +211,7 @@ func (store *Store) CreateUser(ctx context.Context, input CreateUserInput) (Crea
 		return CreatedUser{}, err
 	}
 	now := resolveIdentityTime(input.Now)
-	userID, err := newUUIDv7(now)
+	userID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return CreatedUser{}, err
 	}
@@ -464,10 +464,6 @@ func subtleStringCompare(left, right string) bool {
 	leftDigest := sha256.Sum256([]byte(left))
 	rightDigest := sha256.Sum256([]byte(right))
 	return subtle.ConstantTimeCompare(leftDigest[:], rightDigest[:]) == 1
-}
-
-func newUUIDv7(now time.Time) (string, error) {
-	return uuidv7.NewAt(now)
 }
 
 // readPasswordHash reads an account's stored password hash. Call it after the account row is

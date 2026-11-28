@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 // ErrAdminSelfLockout refuses a change that would leave the acting administrator without
@@ -174,7 +175,7 @@ func applyMemberCreate(ctx context.Context, tx pgx.Tx, tenantID string, request 
 	err := tx.QueryRow(ctx, `SELECT principal_id::text, principal_status, principal_revision FROM iam.resolve_principal_identity($1, $2)`, subjectIssuer, subject).Scan(&principalID, &status, &revision)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		if principalID, err = newUUIDv7(now); err != nil {
+		if principalID, err = uuidv7.NewAt(now); err != nil {
 			return "", 0, err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO iam.principals (id, external_issuer, external_subject, display_name, email, status, revision, created_at, updated_at) VALUES ($1::uuid, $2, $3, $4, $5, 'ACTIVE', 1, $6, $6)`,

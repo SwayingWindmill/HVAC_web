@@ -1,24 +1,7 @@
-import { mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { SITE_ID, principal } from './gateway';
-import { expect, test } from './test';
+import { captureVerifyScreenshot, expect, test } from './test';
 
 const GATEWAY_ID = '018f3e00-4000-7000-8000-000000000100';
-const SCREENSHOT_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '..',
-  '..',
-  '..',
-  '.scratch',
-  'verify',
-  'pr4',
-);
-
-function screenshotPath(fileName: string): string {
-  mkdirSync(SCREENSHOT_DIR, { recursive: true });
-  return join(SCREENSHOT_DIR, fileName);
-}
 
 function grantDeviceWritePrincipal() {
   return {
@@ -46,7 +29,7 @@ test('Lane 1 & 2: default gateways tab regression and light theme concentrators 
     () => document.documentElement.scrollWidth > window.innerWidth,
   );
   expect(gatewaysOverflow).toBe(false);
-  await page.screenshot({ path: screenshotPath('lane1-gateways-light.png') });
+  await captureVerifyScreenshot(page, 'pr4/lane1-gateways-light.png');
 
   await page.getByRole('tab', { name: '无线集中器' }).click();
   await expect(page).toHaveURL(/view=concentrators/);
@@ -74,7 +57,7 @@ test('Lane 1 & 2: default gateways tab regression and light theme concentrators 
     () => document.documentElement.scrollWidth > window.innerWidth,
   );
   expect(concentratorsOverflow).toBe(false);
-  await page.screenshot({ path: screenshotPath('lane2-concentrators-light.png') });
+  await captureVerifyScreenshot(page, 'pr4/lane2-concentrators-light.png');
 });
 
 test('Lane 3: dark theme maintains color-scheme sync and crisp contrast on 无线集中器', async ({
@@ -98,7 +81,7 @@ test('Lane 3: dark theme maintains color-scheme sync and crisp contrast on 无�
     () => document.documentElement.scrollWidth > window.innerWidth,
   );
   expect(overflow).toBe(false);
-  await page.screenshot({ path: screenshotPath('lane3-concentrators-dark.png') });
+  await captureVerifyScreenshot(page, 'pr4/lane3-concentrators-dark.png');
 });
 
 test('Lane 4: channel low-battery filter, IME-safe Enter search, and detail drawer', async ({
@@ -137,7 +120,7 @@ test('Lane 4: channel low-battery filter, IME-safe Enter search, and detail draw
   await expect(drawer).toContainText('2410 mV');
   await expect(drawer).toContainText('55 (0x00000037)');
   await expect(drawer).toContainText('0x000A');
-  await page.screenshot({ path: screenshotPath('lane4-channel-filter.png') });
+  await captureVerifyScreenshot(page, 'pr4/lane4-channel-filter.png');
 });
 
 test('Lane 5: protected RS485 UIDs {2,3,4,5,10,31} block reads and param edits inline', async ({
@@ -173,7 +156,7 @@ test('Lane 5: protected RS485 UIDs {2,3,4,5,10,31} block reads and param edits i
   ).toBeVisible();
   await expect(page.getByRole('button', { name: '预览参数变更' })).toBeDisabled();
   expect(gateway.writes.filter((entry) => entry.path.includes('/concentrators/'))).toEqual([]);
-  await page.screenshot({ path: screenshotPath('lane5-protected-uid.png') });
+  await captureVerifyScreenshot(page, 'pr4/lane5-protected-uid.png');
 });
 
 test('Lane 6: parameter edit -> diff dialog -> CSRF-verified Flash commit and audit refresh', async ({
@@ -204,7 +187,7 @@ test('Lane 6: parameter edit -> diff dialog -> CSRF-verified Flash commit and au
 
   await dialog.getByLabel('变更原因（必填）').fill('松雅轩现场提高 LoRa 发射功率至 22 dBm');
   await expect(submitBtn).toBeEnabled();
-  await page.screenshot({ path: screenshotPath('lane6-params-diff.png') });
+  await captureVerifyScreenshot(page, 'pr4/lane6-params-diff.png');
   await submitBtn.click();
 
   await expect(dialog).toHaveCount(0);
@@ -246,7 +229,7 @@ test('Lane 7 & 8: 200-slot EID duplicate guard, batch fill, diff dialog commit, 
   await expect(conflictAlert).toBeVisible();
   await expect(page.getByRole('button', { name: /预览映射变更/ })).toBeDisabled();
   await conflictAlert.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: screenshotPath('lane7-eid-conflict.png') });
+  await captureVerifyScreenshot(page, 'pr4/lane7-eid-conflict.png');
 
   // Lane 8: Batch range fill resolves duplicate cleanly and commits 3 slots (24..26 -> 101..103)
   await page.getByLabel('起始槽位 (1–200)').fill('24');
@@ -287,7 +270,7 @@ test('Lane 7 & 8: 200-slot EID duplicate guard, batch fill, diff dialog commit, 
   const domRowsAfter = await page.locator('table[aria-label="200 槽 EID 映射"] tbody tr').count();
   expect(domRowsAfter).toBeLessThanOrEqual(50);
 
-  await page.screenshot({ path: screenshotPath('lane8-eid-commit.png') });
+  await captureVerifyScreenshot(page, 'pr4/lane8-eid-commit.png');
 });
 
 test('Lane 9 & 10: read-only / no-read operator guard and full-page visual audit baseline', async ({
@@ -327,7 +310,7 @@ test('Lane 9 & 10: read-only / no-read operator guard and full-page visual audit
   await expect(page.getByRole('button', { name: '预览参数变更' })).toBeDisabled();
   expect(gateway.writes.filter((entry) => entry.path.includes('/concentrators/'))).toEqual([]);
 
-  await page.screenshot({ path: screenshotPath('lane9-readonly.png') });
+  await captureVerifyScreenshot(page, 'pr4/lane9-readonly.png');
 
   // Lane 10: Capture full-page visual audit in writable mode for comprehensive visual inspection
   gateway.principalOverride = grantDeviceWritePrincipal();
@@ -337,15 +320,13 @@ test('Lane 9 & 10: read-only / no-read operator guard and full-page visual audit
     () => document.documentElement.scrollWidth > window.innerWidth,
   );
   expect(fullOverflow).toBe(false);
-  await page.screenshot({ path: screenshotPath('lane10-visual-audit.png'), fullPage: true });
+  await captureVerifyScreenshot(page, 'pr4/lane10-visual-audit.png', { fullPage: true });
 });
 
 test('Lane 11: offline gateway stages concentrator params into config shadow when stageIfOffline is checked', async ({
   page,
   gateway,
 }) => {
-  const p1Dir = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '.scratch', 'verify', 'p1-web-governance');
-  mkdirSync(p1Dir, { recursive: true });
   await page.setViewportSize({ width: 1440, height: 900 });
   gateway.principalOverride = grantDeviceWritePrincipal();
   gateway.setGatewayOffline(GATEWAY_ID, true);
@@ -368,7 +349,7 @@ test('Lane 11: offline gateway stages concentrator params into config shadow whe
   await expect(dialog).toHaveCount(0);
 
   await expect(page.getByRole('table', { name: '近期集中器变更记录' })).toContainText('已暂存待同步');
-  await page.screenshot({ path: join(p1Dir, 'p1-concentrator-staged-light.png') });
+  await captureVerifyScreenshot(page, 'p1-web-governance/p1-concentrator-staged-light.png');
 
   await page.getByRole('radiogroup', { name: '外观' }).getByRole('radio', { name: '深色' }).click();
   await expect
@@ -380,5 +361,5 @@ test('Lane 11: offline gateway stages concentrator params into config shadow whe
   await expect(sheet.getByRole('region', { name: '配置影子' })).toContainText('待同步下发');
   await expect(sheet.getByRole('region', { name: '配置影子' })).toContainText('UID 1 · 参数');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-  await page.screenshot({ path: join(p1Dir, 'p1-concentrator-staged-shadow-dark.png') });
+  await captureVerifyScreenshot(page, 'p1-web-governance/p1-concentrator-staged-shadow-dark.png');
 });

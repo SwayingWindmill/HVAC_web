@@ -1,14 +1,38 @@
 // End-to-end MQTT uplink gate across Mosquitto, Registry, and Connectivity.
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcessByStdio, type SpawnSyncOptions } from 'node:child_process';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { once } from 'node:events';
 import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { createServer as createTCPServer } from 'node:net';
-import { createServer as createHTTPSServer, request as httpsRequest } from 'node:https';
+import { createServer as createHTTPSServer, request as httpsRequest, type Server as HTTPSServer } from 'node:https';
 import { dirname, join, resolve } from 'node:path';
+import type { Readable } from 'node:stream';
+import type { TLSSocket } from 'node:tls';
 
-import { runDockerCompose } from './lib/docker-cli.mjs';
+import { runDockerCompose } from './lib/docker-cli.ts';
+import { findAvailablePort } from './lib/postgres-compose-harness.ts';
+
+interface PlantPoint {
+  deviceId: string;
+  pointCode: string;
+  telemetryKey: string;
+  name: string;
+  pointType: string;
+  valueType: string;
+  unit?: string;
+}
+
+interface E2EObservation {
+  sourceId?: string;
+  telemetryKey?: string;
+  externalId?: string;
+  edgeReplay?: boolean;
+  device?: { deviceId?: string; tenantId?: string; siteId?: string };
+  point?: { pointId?: string };
+  sourcePosition?: { eventId?: unknown; partition?: unknown; offset?: unknown };
+}
+
+type ManagedChild = ChildProcessByStdio<null, Readable, Readable> & { output: string };
 
 const root = resolve(process.cwd());
 const outputDir = resolve(root, process.env.MQTT_E2E_REPORT_DIR ?? 'out/mqtt-e2e');
@@ -24,80 +48,83 @@ const registryContainer = `${registryProject}-postgres-1`;
 const tenantId = '0193f000-0000-7000-8000-000000000001';
 const siteId = '0193f000-1000-7000-8000-000000000001';
 const gatewayId = '018f3e00-4000-7000-8000-000000000100';
-const deviceIdFor = (index) => `0193f000-2000-7000-8000-${String(index + 1).padStart(12, '0')}`;
+const deviceIdFor = (index: number): string => `0193f000-2000-7000-8000-${String(index + 1).padStart(12, '0')}`;
 const plantConfigPath = resolve(root, 'tools/eg8200-simulator/configs/central-plant.local.json');
-const plantConfig = JSON.parse(await readFile(plantConfigPath, 'utf8'));
+const plantConfig = JSON.parse(await readFile(plantConfigPath, 'utf8')) as { points: PlantPoint[] };
 const plantDevices = [...new Set(plantConfig.points.map((point) => point.deviceId))].sort();
 const registeredPoints = plantConfig.points.filter((point) => point.pointType !== 'COMMAND');
 const expectedPointCount = plantConfig.points.length;
 const uuidV7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const connectivityPassword = randomBytes(24).toString('hex');
-const children = new Set();
-let telemetryServer;
-let enrollmentServer;
+const children = new Set<ManagedChild>();
+let telemetryServer: HTTPSServer | undefined;
+let enrollmentServer: HTTPSServer | undefined;
 
-const report = { schemaVersion: 1, capability: 'mqtt-uplink-e2e', status: 'failed', startedAt: new Date().toISOString(), assertions: {} };
+const report: {
+  schemaVersion: number;
+  capability: string;
+  status: string;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+  connectivityOutput?: string[];
+  brokerLogs?: string;
+  assertions: Record<string, unknown>;
+} = { schemaVersion: 1, capability: 'mqtt-uplink-e2e', status: 'failed', startedAt: new Date().toISOString(), assertions: {} };
 
-function run(command, args, options = {}) {
+function run(command: string, args: string[], options: SpawnSyncOptions = {}): string {
   const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', windowsHide: true, ...options });
   if (result.error || result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} failed: ${result.error?.message || result.stderr?.trim() || result.stdout?.trim() || result.status}`);
+    throw new Error(`${command} ${args.join(' ')} failed: ${result.error?.message || String(result.stderr ?? '').trim() || String(result.stdout ?? '').trim() || result.status}`);
   }
   return String(result.stdout ?? '').trim();
 }
 
-function start(command, args, env = {}) {
-  const child = spawn(command, args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, ...env } });
-  child.output = '';
-  child.stdout.on('data', (chunk) => { child.output += chunk.toString(); });
-  child.stderr.on('data', (chunk) => { child.output += chunk.toString(); });
+function start(command: string, args: string[], env: NodeJS.ProcessEnv = {}): ManagedChild {
+  const child = Object.assign(
+    spawn(command, args, { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, ...env } }),
+    { output: '' },
+  );
+  child.stdout.on('data', (chunk: Buffer) => { child.output += chunk.toString(); });
+  child.stderr.on('data', (chunk: Buffer) => { child.output += chunk.toString(); });
   children.add(child);
   child.once('exit', () => children.delete(child));
   return child;
 }
 
-async function stopChild(child) {
+async function stopChild(child: ManagedChild | undefined): Promise<void> {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   child.kill('SIGTERM');
-  await Promise.race([once(child, 'exit'), new Promise((resolveWait) => setTimeout(resolveWait, 5000))]);
+  await Promise.race([once(child, 'exit'), new Promise<void>((resolveWait) => setTimeout(resolveWait, 5000))]);
   if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
 }
 
-async function findAvailablePort() {
-  const server = createTCPServer();
-  server.listen({ host: '127.0.0.1', port: 0, exclusive: true });
-  await once(server, 'listening');
-  const { port } = server.address();
-  await new Promise((resolveClose) => server.close(resolveClose));
-  return port;
-}
-
-async function waitFor(predicate, timeoutMs, description) {
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeoutMs: number, description: string): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await predicate()) return;
-    await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+    await new Promise<void>((resolveWait) => setTimeout(resolveWait, 200));
   }
   throw new Error(`timed out waiting for ${description}`);
 }
 
-async function httpStatus(url) {
+async function httpStatus(url: string): Promise<number> {
   try { return (await fetch(url)).status; } catch { return 0; }
 }
 
-async function metric(url, name) {
+async function metric(url: string, name: string): Promise<number> {
   const body = await (await fetch(url)).text();
-  const matches = (line) => line.startsWith(`${name} `) || (!name.includes('{') && line.startsWith(`${name}{`));
+  const matches = (line: string) => line.startsWith(`${name} `) || (!name.includes('{') && line.startsWith(`${name}{`));
   return body.split('\n').filter(matches).reduce((sum, line) => sum + Number(line.split(' ').at(-1)), 0);
 }
 
-function psql(sql) {
+function psql(sql: string): string {
   return run('docker', ['exec', '-i', registryContainer, 'psql', '-U', 'postgres', '-d', 'hvac_s1', '-v', 'ON_ERROR_STOP=1', '-Atq'], { input: sql });
 }
 
-const quote = (value) => `'${String(value).replaceAll("'", "''")}'`;
+const quote = (value: unknown): string => `'${String(value).replaceAll("'", "''")}'`;
 
-function registrySeed() {
+function registrySeed(): string {
   const devices = plantDevices.map((name, index) => `(${quote(deviceIdFor(index))}, ${quote(tenantId)}, ${quote(siteId)}, ${quote(`e2e-${index}`)}, ${quote(name)}, 'CONTROLLER', 'ACTIVE', 1, now(), now())`);
   const sourceKeys = plantDevices.map((name, index) => `(${quote(`0193f000-3000-7000-8000-${String(index + 1).padStart(12, '0')}`)}, ${quote(tenantId)}, ${quote(siteId)}, ${quote(gatewayId)}, ${quote(name)}, ${quote(deviceIdFor(index))}, 'ACTIVE', 1, now(), now())`);
   const points = registeredPoints.map((point, index) => {
@@ -126,9 +153,9 @@ try {
   const pkiGenerator = join(binDir, 'generate-central-plant-pki');
   const connectivityBinary = join(binDir, 'connectivity');
   const publisherBinary = join(binDir, 'eg8200-mqtt-publisher');
-  run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', pkiGenerator, './tools/s0-auth-fixture/cmd/generate-central-plant-pki']);
-  run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', connectivityBinary, './cmd/connectivity']);
-  run(process.execPath, ['scripts/run-go.mjs', 'build', '-o', publisherBinary, './tools/eg8200-simulator/cmd/eg8200-mqtt-publisher']);
+  run(process.execPath, ['--experimental-strip-types', 'scripts/run-go.ts', 'build', '-o', pkiGenerator, './tools/s0-auth-fixture/cmd/generate-central-plant-pki']);
+  run(process.execPath, ['--experimental-strip-types', 'scripts/run-go.ts', 'build', '-o', connectivityBinary, './cmd/connectivity']);
+  run(process.execPath, ['--experimental-strip-types', 'scripts/run-go.ts', 'build', '-o', publisherBinary, './tools/eg8200-simulator/cmd/eg8200-mqtt-publisher']);
   run(pkiGenerator, [pkiDir]);
   const gatewayCADir = join(outputDir, 'gateway-ca');
   await mkdir(gatewayCADir);
@@ -138,7 +165,9 @@ try {
   await chmod(pkiDir, 0o755);
   await chmod(join(pkiDir, 'mqtt-broker-key.pem'), 0o644);
 
-  const [mqttPort, postgresPort, telemetryPort, connectivityPort, publisherPort, credentialPort, enrollmentPort] = await Promise.all(Array.from({ length: 7 }, findAvailablePort));
+  const [mqttPort, postgresPort, telemetryPort, connectivityPort, publisherPort, credentialPort, enrollmentPort] = await Promise.all(
+    Array.from({ length: 7 }, (_, index) => findAvailablePort(`MQTT E2E ${index}`)),
+  );
   const brokerEnv = { ...process.env, MQTT_PKI_DIR: pkiDir, MQTT_HOST_PORT: String(mqttPort) };
   const registryEnv = { ...process.env, S1_POSTGRES_HOST_PORT: String(postgresPort) };
   runDockerCompose(run, ['-p', registryProject, '-f', registryCompose, 'up', '-d', '--wait', 'postgres'], { env: registryEnv });
@@ -150,10 +179,10 @@ try {
   psql(registrySeed());
   runDockerCompose(run, ['-p', brokerProject, '-f', brokerCompose, 'up', '-d', '--build', '--wait', 'mqtt-broker'], { env: brokerEnv });
 
-  const observations = [];
+  const observations: E2EObservation[] = [];
   let sourceIdentityVerified = false;
   let failNext = true;
-  let slowBatchGate = null;
+  let slowBatchGate: Promise<void> | null = null;
   telemetryServer = createHTTPSServer({
     key: await readFile(join(pkiDir, 'telemetry-key.pem')), cert: await readFile(join(pkiDir, 'telemetry-cert.pem')),
     ca: await readFile(join(pkiDir, 'ca.pem')), minVersion: 'TLSv1.3', requestCert: true, rejectUnauthorized: true,
@@ -167,11 +196,11 @@ try {
       response.writeHead(404).end();
       return;
     }
-    const peer = request.socket.getPeerCertificate();
+    const peer = (request.socket as TLSSocket).getPeerCertificate();
     sourceIdentityVerified = String(peer?.subjectaltname ?? '').includes('URI:spiffe://hvac.local/mqtt-telemetry-adapter');
-    const chunks = [];
-    for await (const chunk of request) chunks.push(chunk);
-    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(chunk as Buffer);
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { observations?: E2EObservation[] };
     const batch = Array.isArray(body?.observations) ? body.observations : null;
     if (!batch || batch.length === 0 || batch.length > 512) {
       response.writeHead(400, { 'content-type': 'application/json' }).end('{"error":"invalid observation batch"}');
@@ -219,7 +248,7 @@ try {
     const upstream = httpsRequest({ host: '127.0.0.1', port: credentialPort, servername: 'connectivity', path: request.url, method: request.method,
       ca: readFileSync(join(gatewayCADir, 'ca.crt')), cert: readFileSync(join(pkiDir, 'gateway-cert.pem')), key: readFileSync(join(pkiDir, 'gateway-key.pem')),
       headers: { 'Content-Type': 'application/json' },
-    }, (result) => { response.writeHead(result.statusCode, { 'Content-Type': 'application/json' }); result.pipe(response); });
+    }, (result) => { response.writeHead(result.statusCode ?? 500, { 'Content-Type': 'application/json' }); result.pipe(response); });
     upstream.on('error', () => response.writeHead(502).end());
     request.pipe(upstream);
   });
@@ -258,8 +287,8 @@ try {
   }
 
   // Backlog: a slow Telemetry fills the Gateway queue; nothing is dropped once it recovers.
-  let releaseSlowTelemetry = null;
-  slowBatchGate = new Promise((resolveGate) => { releaseSlowTelemetry = resolveGate; });
+  let releaseSlowTelemetry!: () => void;
+  slowBatchGate = new Promise<void>((resolveGate) => { releaseSlowTelemetry = resolveGate; });
   let peakQueueDepth = 0;
   try {
     await waitFor(async () => {
@@ -268,7 +297,7 @@ try {
     }, 60000, 'a full Gateway queue while Telemetry is slow');
   } finally {
     slowBatchGate = null;
-    releaseSlowTelemetry?.();
+    releaseSlowTelemetry();
   }
   const publishedMessages = async () => metric(publisherMetrics, 'hvac_edge_mqtt_publishes_total{outcome="queued"}');
   const processedMessages = async () => metric(connectivityMetrics, 'hvac_mqtt_messages_processed_total{outcome="success"}');
@@ -283,7 +312,8 @@ try {
   let offlineQueueBytes = 0;
   await waitFor(async () => (offlineQueueBytes = await metric(publisherMetrics, 'hvac_edge_mqtt_queue_bytes')) > 0, 15000, 'Edge queue growth during broker outage');
   const sequencePath = join(queueDir, 'measurement-sequences.v1.json');
-  const maxSequenceBeforeRestart = Math.max(...Object.values(JSON.parse(await readFile(sequencePath, 'utf8')).sequences).map(Number));
+  const parsedSequences = JSON.parse(await readFile(sequencePath, 'utf8')) as { sequences: Record<string, unknown> };
+  const maxSequenceBeforeRestart = Math.max(...Object.values(parsedSequences.sequences).map(Number));
   await stopChild(publisher);
   runDockerCompose(run, ['-p', brokerProject, '-f', brokerCompose, 'start', 'mqtt-broker'], { env: brokerEnv });
   await waitFor(async () => await httpStatus(connectivityReady) === 200, 30000, 'Connectivity reconnect');
@@ -309,7 +339,10 @@ try {
   const withoutCommands = start(connectivityBinary, ['-diagnostics-addr', `127.0.0.1:${connectivityPort}`], {
     ...connectivityEnv, COMMAND_RUNTIME_IN_PROCESS_ENABLED: 'true',
   });
-  const [exitCode] = await Promise.race([once(withoutCommands, 'exit'), new Promise((resolveWait) => setTimeout(() => resolveWait([null]), 30000))]);
+  const [exitCode] = await Promise.race([
+    once(withoutCommands, 'exit') as Promise<[number | null, NodeJS.Signals | null]>,
+    new Promise<[null]>((resolveWait) => setTimeout(() => resolveWait([null]), 30000)),
+  ]);
   if (exitCode !== 1 || !withoutCommands.output.includes('connectivity_command_runtime_unavailable')) {
     throw new Error(`Connectivity did not exit when its command runtime could not start: exit=${exitCode}`);
   }
@@ -334,8 +367,14 @@ try {
   throw error;
 } finally {
   for (const child of [...children]) await stopChild(child);
-  if (telemetryServer) await new Promise((resolveClose) => telemetryServer.close(resolveClose));
-  if (enrollmentServer) await new Promise((resolveClose) => enrollmentServer.close(resolveClose));
+  if (telemetryServer) {
+    const server = telemetryServer;
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+  }
+  if (enrollmentServer) {
+    const server = enrollmentServer;
+    await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+  }
   try { runDockerCompose(run, ['-p', brokerProject, '-f', brokerCompose, 'down', '--volumes', '--remove-orphans'], { env: { ...process.env, MQTT_PKI_DIR: pkiDir } }); } catch {}
   try { runDockerCompose(run, ['-p', registryProject, '-f', registryCompose, 'down', '--volumes', '--remove-orphans'], { env: process.env }); } catch {}
   report.finishedAt = new Date().toISOString();

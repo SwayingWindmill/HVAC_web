@@ -13,6 +13,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/packettap"
 )
 
@@ -243,7 +244,7 @@ func serveWaveformDiagnosticsRoutes(
 			return true
 		}
 		maxBytes, sinceMinutes := edgecontrol.ClampLogPullBounds(input.MaxBytes, input.SinceMinutes)
-		reqID, _ := newUUIDv7(time.Now().UTC())
+		reqID, _ := uuidv7.NewAt(time.Now().UTC())
 		if reqID == "" {
 			reqID = "0194f000-8800-7000-8000-000000000001"
 		}
@@ -384,7 +385,7 @@ func pushWaveformRulesSync(
 	if err != nil {
 		return
 	}
-	reqID, _ := newUUIDv7(time.Now().UTC())
+	reqID, _ := uuidv7.NewAt(time.Now().UTC())
 	if reqID == "" {
 		reqID = "0194f000-8800-7000-8000-000000000002"
 	}

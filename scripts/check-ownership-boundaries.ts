@@ -881,9 +881,10 @@ export const checkUntypedMapsInFile = (filePath: string, content: string): Bound
 };
 
 const rawUUIDv7Pattern = /\|\s*0x70\b|\b0x70\s*\|/gu;
+const localUUIDv7WrapperPattern = /\bfunc\s+newUUIDv7\s*\(/gu;
 
 /**
- * Prevents hand-rolled UUIDv7 bit-twiddling (`0x70`) outside the canonical `libs/uuidv7` package.
+ * Prevents hand-rolled UUIDv7 bit-twiddling (`0x70`) and local `newUUIDv7` forwarding wrappers outside `libs/uuidv7`.
  */
 export const checkRawUUIDv7BitTwiddlingInFile = (filePath: string, content: string): BoundaryViolation[] => {
   const normalizedPath = normalizePath(filePath);
@@ -905,6 +906,20 @@ export const checkRawUUIDv7BitTwiddlingInFile = (filePath: string, content: stri
       message: `${normalizedPath}:${line}: forbidden hand-rolled UUIDv7 bit-twiddling (0x70); import github.com/quanlaihe/hvac-web/libs/uuidv7 instead.`,
     });
     match = rawUUIDv7Pattern.exec(lexed.codeWithoutCommentsOrStrings);
+  }
+
+  localUUIDv7WrapperPattern.lastIndex = 0;
+  let wrapperMatch: RegExpExecArray | null = localUUIDv7WrapperPattern.exec(lexed.codeWithoutCommentsOrStrings);
+  while (wrapperMatch !== null) {
+    const line = lineForOffset(lineOffsets, wrapperMatch.index);
+    violations.push({
+      rule: 'raw-uuidv7',
+      file: normalizedPath,
+      line,
+      symbol: 'newUUIDv7',
+      message: `${normalizedPath}:${line}: forbidden local newUUIDv7 wrapper; call uuidv7.New / uuidv7.NewAt from github.com/quanlaihe/hvac-web/libs/uuidv7 directly.`,
+    });
+    wrapperMatch = localUUIDv7WrapperPattern.exec(lexed.codeWithoutCommentsOrStrings);
   }
 
   return violations;

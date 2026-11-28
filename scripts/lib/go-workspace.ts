@@ -3,8 +3,23 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+export interface GoWorkspace {
+  goVersion: string;
+  modules: string[];
+}
+
+export interface InstallGoToolOptions {
+  root: string;
+  goBinary: string;
+  goCacheDir: string;
+  goVersion: string;
+  name: string;
+  packagePath: string;
+  version: string;
+}
+
 // The Go version and module directories ('.' or "cmd/energy-api") listed in go.work.
-export function readGoWorkspace(root) {
+export function readGoWorkspace(root: string): GoWorkspace {
   const workspace = readFileSync(join(root, 'go.work'), 'utf8');
   const goVersion = /^go (\S+)$/m.exec(workspace)?.[1];
   if (!goVersion) throw new Error('go.work has no go directive');
@@ -13,14 +28,14 @@ export function readGoWorkspace(root) {
   return { goVersion, modules };
 }
 
-export function goExecutableName(name, platform = process.platform) {
+export function goExecutableName(name: string, platform: string = process.platform): string {
   return platform === 'win32' && !name.endsWith('.exe') ? `${name}.exe` : name;
 }
 
 // Installs a pinned Go tool once per (version, Go version) and returns its path. The tool is built with the
 // workspace's Go: golangci-lint and govulncheck cannot load code that targets a newer Go than they were built with.
 // GOFLAGS is cleared so a gate's -race does not build a race-instrumented tool.
-export function installGoTool({ root, goBinary, goCacheDir, goVersion, name, packagePath, version }) {
+export function installGoTool({ root, goBinary, goCacheDir, goVersion, name, packagePath, version }: InstallGoToolOptions): string {
   const toolRoot = process.env.HVAC_GO_TOOLS_DIR || join(tmpdir(), 'hvac-go-tools');
   const toolDir = join(toolRoot, `${name}-${version}-go${goVersion}`);
   const binary = join(toolDir, goExecutableName(name));

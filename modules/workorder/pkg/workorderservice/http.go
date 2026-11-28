@@ -12,6 +12,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
 
@@ -117,7 +118,7 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 		config.Now = time.Now
 	}
 	if config.NewWorkOrderID == nil {
-		config.NewWorkOrderID = newUUIDv7
+		config.NewWorkOrderID = uuidv7.NewAt
 	}
 	if strings.TrimSpace(config.GatewaySPIFFEID) == "" {
 		config.GatewaySPIFFEID = DefaultGatewaySPIFFEID
