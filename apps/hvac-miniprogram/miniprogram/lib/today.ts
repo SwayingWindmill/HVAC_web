@@ -278,6 +278,20 @@ export function todayStart(days: readonly DayPoint[], now: Date): string | null 
   return ended === undefined ? null : ended.periodEnd;
 }
 
+/**
+ * Resolves the Site's local midnight directly from siteDayBounds when fixed offset or phone Intl
+ * supports the zone, falling back to recentDays only when Intl lacks data for a DST zone.
+ */
+export async function resolveSiteTodayStart(
+  client: Pick<Gateway, 'post'>,
+  site: SiteScope,
+  now: Date,
+): Promise<string | null> {
+  const bounds = siteDayBounds(now, site.timezone);
+  if (bounds !== null) return bounds.todayStart;
+  return todayStart(await fetchRecentDays(client, site, now), now);
+}
+
 /** Today from the Site's midnight to now, and yesterday from the midnight before to the same time of day. */
 export function sameHoursWindows(
   start: string,
@@ -303,17 +317,72 @@ export function hasRecentHourlyReading(hours: readonly DayPoint[], bounds: DayBo
   });
 }
 
+/** Physical bounds for plant COP (cooling / electricity), aligned with web consumption/model.ts. */
+export const MIN_VALID_PLANT_COP = 1;
+export const MAX_VALID_PLANT_COP = 12;
+export const MIN_COP_ELECTRICITY_KWH = 1;
+export const MIN_COP_COOLING_KWH = 1;
+
+export type CopUnavailableReason = 'no-data' | 'standby' | 'out-of-range';
+
+export interface CopEvaluation {
+  readonly cop: number | null;
+  readonly unavailableReason: CopUnavailableReason | null;
+}
+
+/**
+ * Evaluates energy-weighted plant COP (`coolingKWh / electricityKWh`), guarding against missing
+ * inputs, standby leakage (< 1 kWh), and physical bounds outliers ([1, 12]).
+ */
+export function evaluatePlantCop(
+  coolingKWh: number | null | undefined,
+  electricityKWh: number | null | undefined,
+): CopEvaluation {
+  if (
+    coolingKWh === null || coolingKWh === undefined
+    || electricityKWh === null || electricityKWh === undefined
+    || !Number.isFinite(coolingKWh)
+    || !Number.isFinite(electricityKWh)
+  ) {
+    return { cop: null, unavailableReason: 'no-data' };
+  }
+  if (coolingKWh < 0 || electricityKWh < 0) {
+    return { cop: null, unavailableReason: 'out-of-range' };
+  }
+  if (electricityKWh === 0) {
+    return { cop: null, unavailableReason: coolingKWh > 0 ? 'out-of-range' : 'no-data' };
+  }
+  if (coolingKWh === 0 || coolingKWh < MIN_COP_COOLING_KWH) {
+    return { cop: null, unavailableReason: 'standby' };
+  }
+  if (electricityKWh < MIN_COP_ELECTRICITY_KWH) {
+    return { cop: null, unavailableReason: 'out-of-range' };
+  }
+  const value = coolingKWh / electricityKWh;
+  if (!Number.isFinite(value)) {
+    return { cop: null, unavailableReason: 'out-of-range' };
+  }
+  if (value < MIN_VALID_PLANT_COP) {
+    return { cop: null, unavailableReason: 'standby' };
+  }
+  if (value > MAX_VALID_PLANT_COP) {
+    return { cop: null, unavailableReason: 'out-of-range' };
+  }
+  return { cop: value, unavailableReason: null };
+}
+
 const sumOf = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);
 
 export function summarize(electricity: readonly HourPoint[], cooling: readonly DayPoint[]): EnergySummary {
   const coolingAt = new Map(cooling.map((point) => [Date.parse(point.periodStart), point.energyKWh]));
   const both = electricity.filter((point) => point.energyKWh > 0 && coolingAt.has(Date.parse(point.periodStart)));
   const priced = electricity.filter((point) => point.cost !== undefined && point.energyKWh > point.cost.unpricedKWh);
+  const pairedCooling = sumOf(both.map((point) => coolingAt.get(Date.parse(point.periodStart)) ?? 0));
+  const pairedElectricity = sumOf(both.map((point) => point.energyKWh));
   return {
     electricityKWh: electricity.length === 0 ? null : sumOf(electricity.map((point) => point.energyKWh)),
     coolingKWh: cooling.length === 0 ? null : sumOf(cooling.map((point) => point.energyKWh)),
-    cop: both.length === 0 ? null
-      : sumOf(both.map((point) => coolingAt.get(Date.parse(point.periodStart)) ?? 0)) / sumOf(both.map((point) => point.energyKWh)),
+    cop: both.length === 0 ? null : evaluatePlantCop(pairedCooling, pairedElectricity).cop,
     costCNY: priced.length === 0 ? null : sumOf(priced.map((point) => point.cost?.amountCNY ?? 0)),
   };
 }

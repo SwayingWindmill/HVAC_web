@@ -17,6 +17,7 @@ import {
   WATER_LOOP_LABELS,
   WATER_LOOP_ORDER,
   type AggregatedPlantUnitMeta,
+  type ConnectionState,
   type HydraulicAssetMeta,
   type PlantCategory,
   type RunState,
@@ -33,6 +34,7 @@ export {
   EQUIPMENT_CATEGORIES,
   WATER_LOOP_LABELS,
   WATER_LOOP_ORDER,
+  type ConnectionState,
   type PlantCategory,
   type RunState,
   type WaterLoopKind,
@@ -104,7 +106,7 @@ export interface SnapshotsResponse {
   readonly items: readonly { readonly deviceId: string; readonly status: string; readonly snapshot?: Snapshot }[];
 }
 
-export type Connection = 'ONLINE' | 'OFFLINE' | 'UNKNOWN';
+export type Connection = ConnectionState;
 
 export interface PlantReading {
   readonly sourceKey: string;
@@ -289,7 +291,7 @@ function toDevice(
     assetType: asset?.assetType ?? null,
     waterLoop: meta?.waterLoop ?? null,
     branchCode: meta?.branchCode ?? null,
-    connection: presence === 'ONLINE' || presence === 'OFFLINE' ? presence : 'UNKNOWN',
+    connection: presence === 'ONLINE' || presence === 'SLEEPING' || presence === 'OFFLINE' ? presence : 'UNKNOWN',
     runState: parseRunState(runValue),
     faultCode: typeof faultValue === 'string' && faultValue.trim() ? faultValue.trim() : null,
     latestSampleAt: latest(readings.map((reading) => reading.sampledAt)),
@@ -348,7 +350,7 @@ function toPlantUnit(meta: AggregatedPlantUnitMeta<PlantDevice, PlantReading>): 
     members,
     deviceIds,
     offlineMemberCount,
-    connection: connection === 'ONLINE' || connection === 'OFFLINE' ? connection : 'UNKNOWN',
+    connection: connection === 'ONLINE' || connection === 'SLEEPING' || connection === 'OFFLINE' ? connection : 'UNKNOWN',
     runState,
     faultCode,
     latestSampleAt,
@@ -499,8 +501,9 @@ export async function fetchPlantDevice(
   deviceId: string,
   fresh = false,
   now: Date = new Date(),
+  preloadedModel?: AssetModel,
 ): Promise<PlantUnit | null> {
-  const model = await readAssetModel(client, siteId, fresh);
+  const model = preloadedModel ?? await readAssetModel(client, siteId, fresh);
   const device = model.devices.find((candidate) => candidate.id === deviceId);
   if (device === undefined || device.deviceType === 'GATEWAY') return null;
 

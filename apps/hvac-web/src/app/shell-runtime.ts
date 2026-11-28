@@ -1,21 +1,10 @@
-import type {
-  CurrentPrincipalResponse,
-  PlatformGatewayClient,
-  PlatformStatusResponse,
-  ProblemDetails,
-  Site,
-} from '@/api/generated/platformGateway.gen';
-import {
-  classifyBootstrapProblem,
-  isAlreadyInvalidLogout,
-  normalizeReturnTo,
-} from './shell-policy';
+import type { CurrentPrincipalResponse } from '@/api/generated/platformGateway.gen';
+import { normalizeReturnTo } from './shell-policy';
 import {
   createProtectedScopeCoordinator,
   type ProtectedScopePurgeOutcome,
   type ProtectedScopeRequestToken,
   type ProtectedScopeResource,
-  type ProtectedScopeSnapshot,
 } from './protected-scope';
 import {
   assertRealtimeStatusForSite,
@@ -23,266 +12,58 @@ import {
   createIdleRealtimeStatus,
   createRealtimeStatus,
   type RealtimeSubscriptionState,
-  type RealtimeStatusSnapshot,
   type RealtimeStatusUpdate,
 } from './realtime-status';
-import { isUUIDv7 } from './router-paths';
+import {
+  buildInitialReadySnapshot,
+  canSwitchTenantState,
+  clearTenantSwitchSearchParams,
+  createBrowserShellEnvironment,
+  createSessionTimers,
+  createTenantSiteMemory,
+  fetchAuthorizedSites,
+  hasValidSessionTiming,
+  isLoggedOutLanding,
+  isSignInLanding,
+  mapAuthorizedSitesError,
+  mapBootstrapError,
+  mapLogoutError,
+  mapPlatformAvailabilityError,
+  mapPolicyPurgeFailure,
+  mapTenantSwitchError,
+  platformStateFromStatus,
+  resolveLogoutRedirectUrl,
+  resolveSiteNavigationPreflight,
+} from './shell-runtime-helpers';
+import type {
+  LogoutOutcome,
+  ShellRuntime,
+  ShellRuntimeClient,
+  ShellRuntimeEnvironment,
+  ShellSiteTransitionView,
+  ShellSnapshot,
+  SiteNavigationOutcome,
+  SwitchTenantOptions,
+  TenantSwitchOutcome,
+} from './shell-runtime-types';
 
-export type ShellState = 'BOOTSTRAPPING' | 'LOGIN_REQUIRED' | 'UNAVAILABLE' | 'READY';
-export type LogoutOutcome = 'completed' | 'failed';
+export type {
+  LogoutOutcome,
+  ShellFailureView,
+  ShellLogoutView,
+  ShellPlatformView,
+  ShellRuntime,
+  ShellRuntimeEnvironment,
+  ShellSiteTransitionView,
+  ShellSitesView,
+  ShellSnapshot,
+  ShellState,
+  SiteNavigationOutcome,
+  SwitchTenantOptions,
+  TenantSwitchOutcome,
+} from './shell-runtime-types';
 
-export interface ShellFailureView {
-  code: string;
-  detail: string;
-  traceId?: string;
-  retryable: boolean;
-}
-
-export interface ShellLogoutView {
-  status: 'idle' | 'submitting' | 'failed';
-  code?: string;
-  detail?: string;
-  traceId?: string;
-  retryable?: boolean;
-}
-
-export interface ShellPlatformView {
-  state: 'checking' | 'available' | 'degraded' | 'unavailable';
-  status?: PlatformStatusResponse;
-  failure?: ShellFailureView;
-}
-
-export interface ShellSitesView {
-  state: 'checking' | 'available' | 'forbidden' | 'unavailable';
-  items?: readonly Readonly<Site>[];
-  failure?: ShellFailureView;
-}
-
-export type SiteNavigationOutcome =
-  | 'navigated'
-  | 'failed'
-  | 'busy'
-  | 'interrupted';
-
-export interface ShellSiteTransitionView {
-  status: 'purging' | 'failed';
-  target: string;
-  failure?: ShellFailureView;
-}
-
-export interface ShellSnapshot {
-  state: ShellState;
-  principal?: CurrentPrincipalResponse;
-  platform?: ShellPlatformView;
-  sites?: ShellSitesView;
-  protectedScope?: ProtectedScopeSnapshot;
-  lastSiteId?: string;
-  siteTransition?: ShellSiteTransitionView;
-  realtime?: RealtimeStatusSnapshot;
-  loginUrl?: string;
-  reason?: string;
-  failure?: ShellFailureView;
-  logout?: ShellLogoutView;
-}
-
-function clearTenantSwitchSearchParams(target: string, origin: string): string {
-  const url = new URL(target, origin);
-  url.searchParams.delete('site');
-  url.searchParams.delete('inspect');
-  return `${url.pathname}${url.search}${url.hash}`;
-}
-
-export type TenantSwitchOutcome =
-  | { state: 'switched'; target: string }
-  | { state: 'unchanged' }
-  | { state: 'rejected'; code: string; message: string }
-  | { state: 'ignored'; reason: string };
-
-export interface SwitchTenantOptions {
-  readonly currentHref?: string;
-  readonly onSwitched?: () => void;
-}
-
-export interface ShellRuntime {
-  current(): ShellSnapshot;
-  subscribe(listener: (snapshot: ShellSnapshot) => void): () => void;
-  bootstrap(currentUrl: string): Promise<void>;
-  retry(): Promise<void>;
-  beginLogin(): void;
-  activateSiteScope(siteId: string): void;
-  registerProtectedResource(resource: ProtectedScopeResource): () => void;
-  protectedRequestToken(): ProtectedScopeRequestToken;
-  /** Records one open subscription's state; the header shows the most severe one. */
-  publishRealtimeStatus(update: RealtimeStatusUpdate): void;
-  /** Forgets a subscription that closed; with none left the header shows idle. */
-  releaseRealtimeStatus(source: string): void;
-  requestSiteNavigation(target: string): Promise<SiteNavigationOutcome>;
-  handlePolicyRevision(policyRevision: string): Promise<'unchanged' | 'reloaded' | 'failed'>;
-  switchTenant(tenantId: string, options?: SwitchTenantOptions): Promise<TenantSwitchOutcome>;
-  logout(): Promise<LogoutOutcome>;
-  clearLogoutError(): void;
-  purge(reason: string, beginLogin?: boolean): void;
-  dispose(): void;
-}
-
-export interface ShellRuntimeEnvironment {
-  origin: string;
-  now(): number;
-  navigate(target: string): void | Promise<unknown>;
-  postNavigate(target: string): void;
-  setTimer(handler: () => void, delayMs: number): unknown;
-  clearTimer(handle: unknown): void;
-  listenForUserActivity?(handler: () => void): () => void;
-}
-
-const LAST_SITE_STORAGE_PREFIX = 'hvac:last-site:';
-
-function readStoredSiteId(tenantId: string): string | undefined {
-  if (!tenantId || typeof sessionStorage === 'undefined') return undefined;
-  try {
-    const raw = sessionStorage.getItem(`${LAST_SITE_STORAGE_PREFIX}${tenantId}`);
-    const trimmed = raw?.trim();
-    return trimmed ? trimmed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function writeStoredSiteId(tenantId: string, siteId?: string): void {
-  if (!tenantId || typeof sessionStorage === 'undefined') return;
-  const key = `${LAST_SITE_STORAGE_PREFIX}${tenantId}`;
-  try {
-    if (siteId) {
-      sessionStorage.setItem(key, siteId);
-    } else {
-      sessionStorage.removeItem(key);
-    }
-  } catch {
-    // Ignore storage quota or restricted context errors.
-  }
-}
-
-type ShellRuntimeClient = Pick<
-  PlatformGatewayClient,
-  'getCurrentPrincipal' | 'getPlatformStatus' | 'listSites' | 'loginUrl' | 'logout'
-> & {
-  readonly switchActiveTenant?: PlatformGatewayClient['switchActiveTenant'];
-};
-
-const MAX_TIMER_DELAY_MS = 2_147_000_000;
-const USER_ACTIVITY_SYNC_INTERVAL_MS = 60_000;
-const IDLE_RETRY_DELAY_MS = 60_000;
-const SITE_PAGE_LIMIT = 100;
-const MAX_SITE_PAGES = 100;
-
-class SiteDiscoveryValidationError extends Error {}
-
-type ShellProblem = Pick<ProblemDetails, 'status' | 'code'> & Partial<Pick<ProblemDetails, 'detail' | 'traceId' | 'retryable'>>;
-
-function problemFrom(error: unknown): ShellProblem | undefined {
-  if (!error || typeof error !== 'object' || !('problem' in error)) return undefined;
-  const candidate = error.problem;
-  if (!candidate || typeof candidate !== 'object') return undefined;
-  if (!('status' in candidate) || typeof candidate.status !== 'number') return undefined;
-  if (!('code' in candidate) || typeof candidate.code !== 'string') return undefined;
-  return {
-    status: candidate.status,
-    code: candidate.code,
-    detail: 'detail' in candidate && typeof candidate.detail === 'string' ? candidate.detail : undefined,
-    traceId: 'traceId' in candidate && typeof candidate.traceId === 'string' ? candidate.traceId : undefined,
-    retryable: 'retryable' in candidate && typeof candidate.retryable === 'boolean' ? candidate.retryable : undefined,
-  };
-}
-
-function failureFrom(problem: ShellProblem | undefined, fallbackCode: string, fallbackDetail: string): ShellFailureView {
-  const detail = problem?.detail && /[\u4e00-\u9fff]/.test(problem.detail) ? problem.detail : fallbackDetail;
-  return { code: problem?.code ?? fallbackCode, detail, traceId: problem?.traceId, retryable: problem?.retryable ?? true };
-}
-
-function isLoggedOutLanding(candidate: string, origin: string): boolean {
-  try {
-    const base = new URL(origin);
-    const target = new URL(candidate, base);
-    return target.origin === base.origin
-      && target.pathname === '/'
-      && target.searchParams.get('logged_out') === '1';
-  } catch {
-    return false;
-  }
-}
-
-function isSignInLanding(candidate: string, origin: string): boolean {
-  try {
-    const base = new URL(origin);
-    const target = new URL(candidate, base);
-    return target.origin === base.origin && target.pathname === '/sign-in';
-  } catch {
-    return false;
-  }
-}
-
-export function createBrowserShellEnvironment(
-  overrides: Partial<ShellRuntimeEnvironment> = {},
-): ShellRuntimeEnvironment {
-  const environment: ShellRuntimeEnvironment = {
-    origin: window.location.origin,
-    now: () => Date.now(),
-    navigate: (target) => window.location.assign(target),
-    postNavigate: (target) => {
-      const form = document.createElement('form');
-      form.method = 'POST';
-      form.action = target;
-      form.style.display = 'none';
-      document.body.appendChild(form);
-      form.submit();
-    },
-    setTimer: (handler, delayMs) => window.setTimeout(handler, delayMs),
-    clearTimer: (handle) => {
-      if (typeof handle === 'number') window.clearTimeout(handle);
-    },
-    listenForUserActivity: (handler) => {
-      let lastSignalAt = 0;
-      const listener = () => {
-        const now = Date.now();
-        if (now - lastSignalAt < 1_000) return;
-        lastSignalAt = now;
-        handler();
-      };
-      window.addEventListener('pointerdown', listener, { passive: true });
-      window.addEventListener('pointermove', listener, { passive: true });
-      window.addEventListener('keydown', listener);
-      window.addEventListener('wheel', listener, { passive: true });
-      return () => {
-        window.removeEventListener('pointerdown', listener);
-        window.removeEventListener('pointermove', listener);
-        window.removeEventListener('keydown', listener);
-        window.removeEventListener('wheel', listener);
-      };
-    },
-  };
-  return { ...environment, ...overrides };
-}
-
-function normalizeSiteNavigationTarget(
-  target: string,
-  origin: string,
-): { target: string; siteId?: string } | undefined {
-  try {
-    const resolved = new URL(target, origin);
-    if (resolved.origin !== origin || resolved.username || resolved.password) {
-      return undefined;
-    }
-    const pathname = resolved.pathname.length > 1 && resolved.pathname.endsWith('/')
-      ? resolved.pathname.slice(0, -1)
-      : resolved.pathname;
-    const normalizedTarget = `${pathname}${resolved.search}${resolved.hash}`;
-    const siteParam = resolved.searchParams.get('site');
-    if (siteParam === null) return { target: normalizedTarget };
-    return isUUIDv7(siteParam) ? { target: normalizedTarget, siteId: siteParam } : undefined;
-  } catch {
-    return undefined;
-  }
-}
+export { createBrowserShellEnvironment };
 
 class BrowserShellRuntime implements ShellRuntime {
   private readonly protectedScope = createProtectedScopeCoordinator();
@@ -293,24 +74,35 @@ class BrowserShellRuntime implements ShellRuntime {
   };
   private readonly listeners = new Set<(snapshot: ShellSnapshot) => void>();
   private readonly realtimeSources = new Map<string, RealtimeSubscriptionState>();
-  private readonly lastSiteByTenant = new Map<string, string>();
+  private readonly siteMemory = createTenantSiteMemory();
+  private readonly timers: ReturnType<typeof createSessionTimers>;
   private protectedPrincipal?: CurrentPrincipalResponse;
   private currentUrl = '/';
   private returnTo = '/';
   private bootstrapController?: AbortController;
-  private expiryTimer?: unknown;
-  private idleTimer?: unknown;
-  private stopUserActivity?: () => void;
-  private idleTimeoutMs = 0;
-  private lastActivitySyncAt = 0;
-  private activitySyncInFlight = false;
   private sequence = 0;
   private disposed = false;
 
+  private readonly client: ShellRuntimeClient;
+  private readonly environment: ShellRuntimeEnvironment;
+
   constructor(
-    private readonly client: ShellRuntimeClient,
-    private readonly environment: ShellRuntimeEnvironment,
-  ) {}
+    client: ShellRuntimeClient,
+    environment: ShellRuntimeEnvironment,
+  ) {
+    this.client = client;
+    this.environment = environment;
+    this.timers = createSessionTimers({
+      client,
+      environment,
+      getSequence: () => this.sequence,
+      isReady: (sequence) => this.isCurrent(sequence) && this.snapshot.state === 'READY' && Boolean(this.protectedPrincipal),
+      isCurrent: (sequence) => this.isCurrent(sequence),
+      onPrincipalRefreshed: (principal) => { this.protectedPrincipal = principal; },
+      onExpire: (reason, beginLogin) => this.purge(reason, beginLogin),
+      onIdleExpire: () => this.enterLoginRequired('SESSION_IDLE_EXPIRED', true),
+    });
+  }
 
   current(): ShellSnapshot {
     return this.snapshot;
@@ -336,24 +128,16 @@ class BrowserShellRuntime implements ShellRuntime {
       const response = await this.client.getCurrentPrincipal({ signal: controller.signal });
       if (!this.isCurrent(sequence) || controller.signal.aborted) return;
 
-      const expiresAt = Date.parse(response.data.session.expiresAt);
-      const idleTimeoutMs = response.data.session.idleTimeoutMs;
-      if (!Number.isFinite(expiresAt) || expiresAt <= this.environment.now() || !Number.isFinite(idleTimeoutMs) || idleTimeoutMs <= 0) {
+      if (!hasValidSessionTiming(response.data, this.environment.now())) {
         this.enterLoginRequired('SESSION_INVALID', !signInLanding);
         return;
       }
 
       this.protectedPrincipal = response.data;
       const canListSites = response.data.authorization.capabilities.includes('site.list');
-      this.publish({
-        state: 'READY',
-        principal: response.data,
-        platform: { state: 'checking' },
-        sites: { state: canListSites ? 'checking' : 'forbidden' },
-        logout: { status: 'idle' },
-      });
-      this.scheduleExpiration(expiresAt);
-      this.configureIdleTracking(idleTimeoutMs);
+      this.publish(buildInitialReadySnapshot(response.data, createIdleRealtimeStatus(), canListSites));
+      this.timers.scheduleExpiration(Date.parse(response.data.session.expiresAt));
+      this.timers.configureIdleTracking(response.data.session.idleTimeoutMs);
       const bootstrapTasks = [this.loadPlatformAvailability(sequence, response.data, controller)];
       if (canListSites) bootstrapTasks.push(this.loadAuthorizedSites(sequence, response.data, controller));
       await Promise.all(bootstrapTasks);
@@ -363,22 +147,12 @@ class BrowserShellRuntime implements ShellRuntime {
     } catch (error: unknown) {
       if (!this.isCurrent(sequence) || controller.signal.aborted) return;
       this.bootstrapController = undefined;
-      const problem = problemFrom(error);
-      if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
-        this.enterLoginRequired(
-          loggedOutLanding ? 'LOGOUT_COMPLETED' : problem.code,
-          !loggedOutLanding && !signInLanding,
-        );
+      const mapped = mapBootstrapError(error, loggedOutLanding, signInLanding);
+      if (mapped.action === 'login') {
+        this.enterLoginRequired(mapped.reason, mapped.navigate);
         return;
       }
-      this.publish({
-        state: 'UNAVAILABLE',
-        failure: failureFrom(
-          problem,
-          'PRINCIPAL_BOOTSTRAP_FAILED',
-          '无法确认登录身份和会话。',
-        ),
-      });
+      this.publish({ state: 'UNAVAILABLE', failure: mapped.failure });
     }
   }
 
@@ -395,7 +169,7 @@ class BrowserShellRuntime implements ShellRuntime {
     if (this.snapshot.state !== 'READY' || !this.protectedPrincipal) return;
     this.protectedScope.activate(siteId);
     this.realtimeSources.clear();
-    this.rememberSiteForTenant(this.protectedPrincipal.context.tenantId, siteId);
+    this.siteMemory.remember(this.protectedPrincipal.context.tenantId, siteId);
     this.publish({
       ...this.snapshot,
       realtime: createRealtimeStatus({ state: 'idle', siteId }),
@@ -441,25 +215,23 @@ class BrowserShellRuntime implements ShellRuntime {
   }
 
   async requestSiteNavigation(target: string): Promise<SiteNavigationOutcome> {
-    if (this.snapshot.state !== 'READY' || !this.protectedPrincipal) return 'interrupted';
-    if (this.snapshot.siteTransition?.status === 'purging') return 'busy';
-    const normalized = normalizeSiteNavigationTarget(target, this.environment.origin);
-    if (!normalized) return 'failed';
-    if (
-      normalized.siteId
-      && !this.snapshot.sites?.items?.some((site) => site.id === normalized.siteId)
-    ) {
-      return 'failed';
+    const preflight = resolveSiteNavigationPreflight({
+      state: this.snapshot.state,
+      hasPrincipal: Boolean(this.protectedPrincipal),
+      transitionStatus: this.snapshot.siteTransition?.status,
+      target,
+      origin: this.environment.origin,
+      sites: this.snapshot.sites?.items,
+      activeSiteId: this.protectedScope.current().siteId,
+    });
+    if (preflight.action === 'done') {
+      if (preflight.outcome === 'navigated' && preflight.normalizedTarget) {
+        this.currentUrl = preflight.normalizedTarget;
+        this.environment.navigate(preflight.normalizedTarget);
+      }
+      return preflight.outcome;
     }
-
-    const activeSiteId = this.protectedScope.current().siteId;
-    if (!activeSiteId || normalized.siteId === activeSiteId) {
-      this.currentUrl = normalized.target;
-      this.environment.navigate(normalized.target);
-      return 'navigated';
-    }
-
-    return this.performSiteNavigation(normalized.target);
+    return this.performSiteNavigation(preflight.normalizedTarget);
   }
 
   async handlePolicyRevision(policyRevision: string): Promise<'unchanged' | 'reloaded' | 'failed'> {
@@ -474,17 +246,7 @@ class BrowserShellRuntime implements ShellRuntime {
     const outcome = await purgePromise;
     if (!this.isCurrent(sequence) || this.protectedPrincipal !== principal) return 'failed';
     if (outcome.status !== 'completed') {
-      const failure = outcome.status === 'failed'
-        ? outcome.failure
-        : {
-          code: 'PROTECTED_SCOPE_PURGE_FAILED' as const,
-          detail: '正在切换权限范围，请稍候。',
-          retryable: false as const,
-        };
-      this.publish({
-        state: 'UNAVAILABLE',
-        failure,
-      });
+      this.publish({ state: 'UNAVAILABLE', failure: mapPolicyPurgeFailure(outcome) });
       return 'failed';
     }
 
@@ -515,31 +277,24 @@ class BrowserShellRuntime implements ShellRuntime {
     try {
       const response = await this.client.logout(principal.session.csrfToken);
       if (!this.isCurrent(sequence) || this.protectedPrincipal !== principal) return 'completed';
-      if (!response.location) {
-        throw new Error('logout response did not include the identity provider redirect');
-      }
-      const providerLogoutURL = new URL(response.location, this.environment.origin);
-      if (providerLogoutURL.protocol !== 'https:' && providerLogoutURL.protocol !== 'http:') {
-        throw new Error('logout response used an unsupported redirect protocol');
-      }
+      const redirectUrl = resolveLogoutRedirectUrl(response.location, this.environment.origin);
       this.completeLogout('LOGOUT_COMPLETED');
-      this.environment.navigate(providerLogoutURL.toString());
+      this.environment.navigate(redirectUrl);
       return 'completed';
     } catch (error: unknown) {
       if (!this.isCurrent(sequence) || this.protectedPrincipal !== principal) return 'completed';
-      const problem = problemFrom(error);
-      if (problem && isAlreadyInvalidLogout(problem)) {
+      const mapped = mapLogoutError(error);
+      if (mapped.alreadyInvalid) {
         this.completeLogout('SESSION_ALREADY_INVALID');
         return 'completed';
       }
-      const failure = failureFrom(problem, 'LOGOUT_FAILED', '服务器还没确认退出登录，请重试。');
       this.publish({
         state: 'READY',
         principal,
         platform,
         sites,
         siteTransition: this.snapshot.siteTransition,
-        logout: { status: 'failed', code: failure.code, detail: failure.detail, traceId: failure.traceId, retryable: failure.retryable },
+        logout: mapped.view,
       });
       return 'failed';
     }
@@ -564,8 +319,7 @@ class BrowserShellRuntime implements ShellRuntime {
     this.sequence += 1;
     this.bootstrapController?.abort();
     this.bootstrapController = undefined;
-    this.clearExpiration();
-    this.clearIdleTracking();
+    this.timers.clearAll();
     this.protectedPrincipal = undefined;
     this.listeners.clear();
   }
@@ -648,49 +402,13 @@ class BrowserShellRuntime implements ShellRuntime {
     this.sequence += 1;
     this.bootstrapController?.abort();
     this.bootstrapController = undefined;
-    this.clearExpiration();
-    this.clearIdleTracking();
+    this.timers.clearAll();
     this.protectedPrincipal = undefined;
     return this.sequence;
   }
 
   private isCurrent(sequence: number): boolean {
     return !this.disposed && sequence === this.sequence;
-  }
-
-  private rememberSiteForTenant(tenantId: string, siteId: string): void {
-    const trimmed = siteId.trim();
-    if (!tenantId || !trimmed) return;
-    this.lastSiteByTenant.set(tenantId, trimmed);
-    writeStoredSiteId(tenantId, trimmed);
-  }
-
-  private resolveRememberedSiteId(
-    tenantId: string,
-    sites?: ReadonlyArray<{ readonly id: string }>,
-  ): string | undefined {
-    if (!tenantId) return undefined;
-    const candidate = this.lastSiteByTenant.get(tenantId) ?? readStoredSiteId(tenantId);
-    if (!candidate) return undefined;
-    if (sites && !sites.some((site) => site.id === candidate)) {
-      this.lastSiteByTenant.delete(tenantId);
-      writeStoredSiteId(tenantId, undefined);
-      return undefined;
-    }
-    this.lastSiteByTenant.set(tenantId, candidate);
-    return candidate;
-  }
-
-  private clearRememberedSiteForTenant(tenantId?: string): void {
-    if (tenantId) {
-      this.lastSiteByTenant.delete(tenantId);
-      writeStoredSiteId(tenantId, undefined);
-      return;
-    }
-    for (const key of this.lastSiteByTenant.keys()) {
-      writeStoredSiteId(key, undefined);
-    }
-    this.lastSiteByTenant.clear();
   }
 
   private publish(snapshot: ShellSnapshot): void {
@@ -701,7 +419,7 @@ class BrowserShellRuntime implements ShellRuntime {
     const lastSiteId = snapshot.state === 'READY' && tenantId
       ? (activeSiteId && (!visibleSites || visibleSites.some((site) => site.id === activeSiteId))
           ? activeSiteId
-          : this.resolveRememberedSiteId(tenantId, visibleSites))
+          : this.siteMemory.resolve(tenantId, visibleSites))
       : undefined;
     const published = snapshot.state === 'READY'
       ? {
@@ -717,13 +435,12 @@ class BrowserShellRuntime implements ShellRuntime {
 
   private enterLoginRequired(reason: string, navigate: boolean): void {
     if (this.protectedPrincipal) {
-      this.clearRememberedSiteForTenant(this.protectedPrincipal.context.tenantId);
+      this.siteMemory.clear(this.protectedPrincipal.context.tenantId);
     }
     void this.startProtectedPurge('SESSION_LOSS');
     this.bootstrapController?.abort();
     this.bootstrapController = undefined;
-    this.clearExpiration();
-    this.clearIdleTracking();
+    this.timers.clearAll();
     this.protectedPrincipal = undefined;
     const loginUrl = this.client.loginUrl({ returnTo: this.returnTo });
     this.publish({ state: 'LOGIN_REQUIRED', loginUrl, reason });
@@ -731,20 +448,16 @@ class BrowserShellRuntime implements ShellRuntime {
   }
 
   private completeLogout(reason: string): void {
-    this.clearRememberedSiteForTenant();
+    this.siteMemory.clear();
     void this.startProtectedPurge('LOGOUT');
     this.sequence += 1;
     this.enterLoginRequired(reason, false);
   }
 
   async switchTenant(tenantId: string, options: SwitchTenantOptions = {}): Promise<TenantSwitchOutcome> {
-    if (this.snapshot.state !== 'READY' || !this.protectedPrincipal) {
-      return { state: 'ignored', reason: 'UNAUTHENTICATED' };
-    }
-    const previousPrincipal = this.protectedPrincipal;
-    if (tenantId === previousPrincipal.context.tenantId) {
-      return { state: 'unchanged' };
-    }
+    const check = canSwitchTenantState(this.snapshot.state, this.protectedPrincipal, tenantId);
+    if (!check.proceed) return check.outcome;
+    const { previousPrincipal } = check;
     const switchActiveTenant = this.client.switchActiveTenant;
     if (!switchActiveTenant) {
       return { state: 'rejected', code: 'TENANT_SWITCH_UNSUPPORTED', message: '当前环境不支持切换组织。' };
@@ -770,17 +483,8 @@ class BrowserShellRuntime implements ShellRuntime {
       this.returnTo = target;
       this.realtimeSources.clear();
       const canListSites = nextPrincipal.authorization.capabilities.includes('site.list');
-      this.publish({
-        state: 'READY',
-        principal: nextPrincipal,
-        platform: { state: 'checking' },
-        sites: canListSites ? { state: 'checking' } : { state: 'forbidden' },
-        siteTransition: undefined,
-        realtime: createIdleRealtimeStatus(),
-        logout: { status: 'idle' },
-      });
-
-      this.configureIdleTracking(nextPrincipal.session.idleTimeoutMs);
+      this.publish(buildInitialReadySnapshot(nextPrincipal, createIdleRealtimeStatus(), canListSites));
+      this.timers.configureIdleTracking(nextPrincipal.session.idleTimeoutMs);
       const tasks: Promise<void>[] = [
         this.loadPlatformAvailability(sequence, nextPrincipal, controller),
       ];
@@ -793,16 +497,11 @@ class BrowserShellRuntime implements ShellRuntime {
       }
       return { state: 'switched', target };
     } catch (error: unknown) {
-      const problem = problemFrom(error);
-      if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
-        this.enterLoginRequired(problem.code, true);
-        return { state: 'rejected', code: problem.code, message: '登录状态已失效，请重新登录。' };
+      const mapped = mapTenantSwitchError(error);
+      if (mapped.loginRequiredCode) {
+        this.enterLoginRequired(mapped.loginRequiredCode, true);
       }
-      return {
-        state: 'rejected',
-        code: problem?.code ?? 'TENANT_SWITCH_FAILED',
-        message: '切换组织失败，请稍后重试。',
-      };
+      return mapped.outcome;
     }
   }
 
@@ -814,39 +513,15 @@ class BrowserShellRuntime implements ShellRuntime {
     try {
       const response = await this.client.getPlatformStatus({ signal: controller.signal });
       if (!this.isCurrent(sequence) || controller.signal.aborted || this.protectedPrincipal !== principal) return;
-      this.publish({
-        state: 'READY',
-        principal,
-        platform: {
-          state: response.data.status === 'degraded' ? 'degraded' : 'available',
-          status: response.data,
-        },
-        sites: this.snapshot.sites,
-        siteTransition: this.snapshot.siteTransition,
-        logout: this.snapshot.logout ?? { status: 'idle' },
-      });
+      this.publish({ ...this.snapshot, state: 'READY', principal, platform: { state: platformStateFromStatus(response.data.status), status: response.data } });
     } catch (error: unknown) {
       if (!this.isCurrent(sequence) || controller.signal.aborted || this.protectedPrincipal !== principal) return;
-      const problem = problemFrom(error);
-      if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
-        this.enterLoginRequired(problem.code, true);
+      const mapped = mapPlatformAvailabilityError(error);
+      if (mapped.loginRequiredCode) {
+        this.enterLoginRequired(mapped.loginRequiredCode, true);
         return;
       }
-      this.publish({
-        state: 'READY',
-        principal,
-        platform: {
-          state: 'unavailable',
-          failure: failureFrom(
-            problem,
-            'PLATFORM_STATUS_UNAVAILABLE',
-            '平台网关状态暂时不可用。',
-          ),
-        },
-        sites: this.snapshot.sites,
-        siteTransition: this.snapshot.siteTransition,
-        logout: this.snapshot.logout ?? { status: 'idle' },
-      });
+      this.publish({ ...this.snapshot, state: 'READY', principal, platform: mapped.platform });
     }
   }
 
@@ -856,186 +531,23 @@ class BrowserShellRuntime implements ShellRuntime {
     controller: AbortController,
   ): Promise<void> {
     try {
-      const sites: Readonly<Site>[] = [];
-      const seenSiteIDs = new Set<string>();
-      const seenCursors = new Set<string>();
-      let cursor: string | undefined;
-      let completed = false;
-
-      for (let page = 0; page < MAX_SITE_PAGES; page += 1) {
-        const params = cursor ? { limit: SITE_PAGE_LIMIT, cursor } : { limit: SITE_PAGE_LIMIT };
-        const response = await this.client.listSites(
-          params,
-          { signal: controller.signal },
-        );
-        if (!this.isCurrent(sequence) || controller.signal.aborted || this.protectedPrincipal !== principal) return;
-
-        for (const site of response.data.items) {
-          if (
-            !isUUIDv7(site.id)
-            || !isUUIDv7(site.tenantId)
-            || site.tenantId !== principal.context.tenantId
-            || seenSiteIDs.has(site.id)
-          ) {
-            throw new SiteDiscoveryValidationError('返回的授权站点列表格式无效。');
-          }
-          seenSiteIDs.add(site.id);
-          sites.push(Object.freeze({ ...site }));
-        }
-
-        if (!response.data.hasMore) {
-          if (response.data.nextCursor !== null) {
-            throw new SiteDiscoveryValidationError('站点列表最后一页仍带有下一页标记。');
-          }
-          completed = true;
-          break;
-        }
-
-        const nextCursor = response.data.nextCursor;
-        if (!nextCursor || seenCursors.has(nextCursor)) {
-          throw new SiteDiscoveryValidationError('返回的站点分页标记无效。');
-        }
-        seenCursors.add(nextCursor);
-        cursor = nextCursor;
-      }
-
-      if (!completed) {
-        throw new SiteDiscoveryValidationError('站点列表分页超过最大页数上限。');
-      }
-
-      this.publish({
-        state: 'READY',
-        principal,
-        platform: this.snapshot.platform,
-        sites: {
-          state: 'available',
-          items: Object.freeze([...sites]),
-        },
-        siteTransition: this.snapshot.siteTransition,
-        logout: this.snapshot.logout ?? { status: 'idle' },
-      });
+      const items = await fetchAuthorizedSites(
+        this.client,
+        principal.context.tenantId,
+        controller.signal,
+        () => !this.isCurrent(sequence) || controller.signal.aborted || this.protectedPrincipal !== principal,
+      );
+      if (!items) return;
+      this.publish({ ...this.snapshot, state: 'READY', principal, sites: { state: 'available', items } });
     } catch (error: unknown) {
       if (!this.isCurrent(sequence) || controller.signal.aborted || this.protectedPrincipal !== principal) return;
-      const problem = problemFrom(error);
-      if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
-        this.enterLoginRequired(problem.code, true);
+      const mapped = mapAuthorizedSitesError(error);
+      if (mapped.loginRequiredCode) {
+        this.enterLoginRequired(mapped.loginRequiredCode, true);
         return;
       }
-      const invalid = error instanceof SiteDiscoveryValidationError;
-      this.publish({
-        state: 'READY',
-        principal,
-        platform: this.snapshot.platform,
-        sites: {
-          state: 'unavailable',
-          failure: failureFrom(
-            problem,
-            invalid ? 'SITE_DISCOVERY_INVALID' : 'SITE_DISCOVERY_UNAVAILABLE',
-            invalid
-              ? '读到的站点列表格式不对。'
-              : '读不到你能看的站点。',
-          ),
-        },
-        siteTransition: this.snapshot.siteTransition,
-        logout: this.snapshot.logout ?? { status: 'idle' },
-      });
+      this.publish({ ...this.snapshot, state: 'READY', principal, sites: mapped.sites });
     }
-  }
-
-  private configureIdleTracking(idleTimeoutMs: number): void {
-    this.clearIdleTracking();
-    this.idleTimeoutMs = idleTimeoutMs;
-    this.lastActivitySyncAt = this.environment.now();
-    this.scheduleIdleCheck(idleTimeoutMs);
-    this.stopUserActivity = this.environment.listenForUserActivity?.(() => this.recordUserActivity());
-  }
-
-  private recordUserActivity(): void {
-    if (this.snapshot.state !== 'READY' || !this.protectedPrincipal || this.idleTimeoutMs <= 0) return;
-    this.scheduleIdleCheck(this.idleTimeoutMs);
-    const now = this.environment.now();
-    if (this.activitySyncInFlight || now - this.lastActivitySyncAt < USER_ACTIVITY_SYNC_INTERVAL_MS) return;
-    this.lastActivitySyncAt = now;
-    this.activitySyncInFlight = true;
-    const sequence = this.sequence;
-    void this.client.getCurrentPrincipal({ headers: { 'X-HVAC-User-Activity': '1' } })
-      .then((response) => {
-        if (!this.isCurrent(sequence) || this.snapshot.state !== 'READY') return;
-        this.protectedPrincipal = response.data;
-      })
-      .catch((error: unknown) => {
-        if (!this.isCurrent(sequence)) return;
-        const problem = problemFrom(error);
-        if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
-          this.enterLoginRequired('SESSION_IDLE_EXPIRED', true);
-        }
-      })
-      .finally(() => {
-        if (this.isCurrent(sequence)) this.activitySyncInFlight = false;
-      });
-  }
-
-  private scheduleIdleCheck(delayMs: number): void {
-    if (this.idleTimer !== undefined) this.environment.clearTimer(this.idleTimer);
-    this.idleTimer = this.environment.setTimer(() => {
-      this.idleTimer = undefined;
-      void this.verifyIdleSession();
-    }, Math.min(delayMs, MAX_TIMER_DELAY_MS));
-  }
-
-  private async verifyIdleSession(): Promise<void> {
-    if (this.snapshot.state !== 'READY' || !this.protectedPrincipal || this.idleTimeoutMs <= 0) return;
-    const sequence = this.sequence;
-    try {
-      const response = await this.client.getCurrentPrincipal();
-      if (!this.isCurrent(sequence) || this.snapshot.state !== 'READY') return;
-      this.protectedPrincipal = response.data;
-      this.scheduleIdleCheck(Math.min(this.idleTimeoutMs, IDLE_RETRY_DELAY_MS));
-    } catch (error: unknown) {
-      if (!this.isCurrent(sequence)) return;
-      const problem = problemFrom(error);
-      if (problem && classifyBootstrapProblem(problem) === 'LOGIN_REQUIRED') {
-        this.enterLoginRequired('SESSION_IDLE_EXPIRED', true);
-        return;
-      }
-      this.scheduleIdleCheck(Math.min(this.idleTimeoutMs, IDLE_RETRY_DELAY_MS));
-    }
-  }
-
-  private clearIdleTracking(): void {
-    if (this.idleTimer !== undefined) {
-      this.environment.clearTimer(this.idleTimer);
-      this.idleTimer = undefined;
-    }
-    this.stopUserActivity?.();
-    this.stopUserActivity = undefined;
-    this.idleTimeoutMs = 0;
-    this.lastActivitySyncAt = 0;
-    this.activitySyncInFlight = false;
-  }
-
-  private scheduleExpiration(expiresAt: number): void {
-    this.clearExpiration();
-    const remaining = expiresAt - this.environment.now();
-    if (remaining <= 0) {
-      this.purge('SESSION_EXPIRED', true);
-      return;
-    }
-    const delay = Math.min(remaining, MAX_TIMER_DELAY_MS);
-    this.expiryTimer = this.environment.setTimer(() => {
-      this.expiryTimer = undefined;
-      if (delay < remaining) {
-        this.scheduleExpiration(expiresAt);
-        return;
-      }
-      this.purge('SESSION_EXPIRED', true);
-    }, delay);
-  }
-
-  private clearExpiration(): void {
-    if (this.expiryTimer === undefined) return;
-    this.environment.clearTimer(this.expiryTimer);
-    this.expiryTimer = undefined;
   }
 }
 

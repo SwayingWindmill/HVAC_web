@@ -7,7 +7,6 @@ import {
   type AssetModelStorage,
   type RawSiteAssetModel,
 } from './asset-model-cache';
-import type { Gateway } from './gateway';
 import {
   buildPlant,
   clearAssetModelCache,
@@ -81,16 +80,9 @@ export async function loadPlant(site: Site, fresh = false): Promise<Plant> {
 }
 
 /** One device's current readings via the single-device observation-snapshot endpoint. */
-export function loadPlantDevice(site: Site, deviceId: string, fresh = false): Promise<PlantUnit | null> {
-  const assetModelPath = `/api/v1/sites/${site.id}/asset-model`;
-  const client: Pick<Gateway, 'get'> = {
-    get: <T>(path: string) => (
-      path === assetModelPath
-        ? (loadSiteAssetModel(site, fresh) as Promise<T>)
-        : gateway.get<T>(path)
-    ),
-  };
-  return fetchPlantDevice(client, site.id, deviceId, fresh);
+export async function loadPlantDevice(site: Site, deviceId: string, fresh = false): Promise<PlantUnit | null> {
+  const model = await loadSiteAssetModel(site, fresh);
+  return fetchPlantDevice(gateway, site.id, deviceId, fresh, new Date(), model);
 }
 
 /** The name operators know a device by, from the Site's registered equipment. */

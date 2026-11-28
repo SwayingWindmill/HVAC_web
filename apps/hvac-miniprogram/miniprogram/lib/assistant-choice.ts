@@ -2,6 +2,8 @@
 // one and goes back, the tab reads the choice when it shows. null is a new conversation;
 // undefined means nothing was chosen yet, and the tab opens the latest one still in progress.
 
+import { registerSignOutHandler } from './session-cleanup';
+
 let chosen: string | null | undefined;
 
 export const chosenConversation = () => chosen;
@@ -27,3 +29,5 @@ export function clearAssistantChoice(): void {
   chosen = undefined;
   pending = null;
 }
+
+registerSignOutHandler(clearAssistantChoice);

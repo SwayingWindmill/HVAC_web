@@ -2,16 +2,23 @@ import { activeAlarms, clearedAlarms } from '../../lib/alarm-api';
 import { presentFeed, type Alarm } from '../../lib/alarms';
 import { siteTodayStart } from '../../lib/energy';
 import { GatewayError, NETWORK_TEXT } from '../../lib/gateway';
-import { askWeChat, gateway, requireSession } from '../../lib/platform';
+import { askWeChat, gateway, registerSignOutHandler, requireSession } from '../../lib/platform';
 import { whileShown } from '../../lib/refresh';
 import { addAlarmReminder, readAlarmReminders, type ReminderRow } from '../../lib/reminders';
-import { currentSite } from '../../lib/site';
+import { currentSite, siteSelectionVersion } from '../../lib/site';
 import { selectTab, showAttention } from '../../lib/tab';
 
 // The Alarm owner has no stream yet; like the web, the page follows it on a short interval while shown.
 const refresher = whileShown(30_000);
 
 let read: { active: Alarm[]; cleared: Alarm[]; complete: boolean; todayStart: string | null } | null = null;
+let lastSiteId: string | null = null;
+let lastSiteVersion = -1;
+registerSignOutHandler(() => {
+  lastSiteId = null;
+  lastSiteVersion = -1;
+  read = null;
+});
 
 Page({
   data: {
@@ -46,12 +53,25 @@ Page({
   },
 
   async refresh(rereadSites = false) {
+    const version = siteSelectionVersion();
+    if (lastSiteId !== null && version !== lastSiteVersion) {
+      lastSiteId = null;
+      read = null;
+      this.setData({ loading: true, noSite: false, failed: '', refreshError: '', siteName: '', feed: null, partial: false });
+    }
     try {
       const site = await currentSite(rereadSites);
+      lastSiteVersion = siteSelectionVersion();
       if (site === null) {
+        lastSiteId = null;
         read = null;
         this.setData({ loading: false, noSite: true, failed: '', refreshError: '', siteName: '', feed: null, partial: false });
         return;
+      }
+      if (site.id !== lastSiteId) {
+        lastSiteId = site.id;
+        read = null;
+        this.setData({ loading: true, noSite: false, failed: '', refreshError: '', siteName: site.displayName, feed: null, partial: false });
       }
       const [active, cleared, todayStart] = await Promise.all([
         activeAlarms(gateway, site.id),

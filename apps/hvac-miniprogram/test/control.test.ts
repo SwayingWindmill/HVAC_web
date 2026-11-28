@@ -5,6 +5,7 @@ import {
   buildActionConfirmationIntent,
   buildSettingConfirmationIntent,
   canSubmitCommands,
+  canSubmitHighRiskCommands,
   clampAndRoundSetting,
   createCommandSubmitMutex,
   dispatchControlCommand,
@@ -694,4 +695,90 @@ test('parseDeviceControlTargets aggregates commands from a sibling controller bo
   assert.equal(targets.length, 1);
   assert.equal(targets[0].deviceId, 'dev-chiller-1');
   assert.deepEqual(targets[0].actions.map((item) => item.capability), ['START', 'STOP', 'RESET_FAULT']);
+});
+
+test('canSubmitHighRiskCommands separates parameter tuning from remote start/stop rights', () => {
+  assert.equal(canSubmitHighRiskCommands(null), false);
+  assert.equal(canSubmitHighRiskCommands({ authorization: { capabilities: ['command.submit.low'] } }), false);
+  assert.equal(canSubmitHighRiskCommands({ authorization: { capabilities: ['command.submit.medium'] } }), false);
+  assert.equal(canSubmitHighRiskCommands({ authorization: { capabilities: ['command.submit.high'] } }), true);
+  assert.equal(canSubmitHighRiskCommands({ authorization: { capabilities: ['command.submit.critical'] } }), true);
+  assert.equal(canSubmitHighRiskCommands({ authorization: { capabilities: ['schedule.request'] } }), false);
+  assert.equal(canSubmitHighRiskCommands({ authorization: { capabilities: ['schedule.manage'] } }), true);
+});
+
+test('evaluateControlGuards handles high-risk rights, SLEEPING/UNKNOWN connection, and priority locks', () => {
+  const [target] = parseDeviceControlTargets(sampleAssetModel(), 'dev-chiller-1', new Date('2026-11-18T10:00:00Z'));
+  const nowMs = Date.parse('2026-11-18T10:00:00.000Z');
+
+  // 1. Medium/low command right disables high-risk start/stop actions while keeping settings active.
+  const lowRight = evaluateControlGuards({
+    target,
+    device: sampleDevice({ runState: 'STOPPED' }),
+    controlState: remoteAutoState(),
+    commands: [],
+    runStateByDeviceId: new Map([['dev-pump-1', 'RUNNING']]),
+    nowMs,
+    canExecuteHighRisk: false,
+  });
+  assert.equal(lowRight.guard.blocked, false);
+  assert.equal(lowRight.actions.find((a) => a.capability === 'START')?.disabledReason, '当前账号仅开通参数调节权限，不能远程启停设备');
+  assert.equal(lowRight.actions.find((a) => a.capability === 'STOP')?.disabled, true);
+  assert.equal(lowRight.settings[0].disabled, false);
+
+  // 2. SLEEPING and UNKNOWN connection block controls with clear Chinese copy.
+  const sleeping = evaluateControlGuards({
+    target,
+    device: sampleDevice({ connection: 'SLEEPING', runState: 'STOPPED' }),
+    controlState: remoteAutoState(),
+    commands: [],
+    nowMs,
+  });
+  assert.equal(sleeping.guard.blocked, true);
+  assert.equal(sleeping.guard.badge, '设备休眠中');
+  assert.equal(buildActionConfirmationIntent({ action: target.actions[0], assetName: target.assetName, device: sampleDevice({ connection: 'SLEEPING' }) }).beforeValue, '休眠中');
+
+  const unknownConn = evaluateControlGuards({
+    target,
+    device: sampleDevice({ connection: 'UNKNOWN', runState: 'STOPPED' }),
+    controlState: remoteAutoState(),
+    commands: [],
+    nowMs,
+  });
+  assert.equal(unknownConn.guard.blocked, true);
+  assert.equal(unknownConn.guard.badge, '连接未确认');
+  assert.equal(buildActionConfirmationIntent({ action: target.actions[0], assetName: target.assetName, device: sampleDevice({ connection: 'UNKNOWN' }) }).beforeValue, '连接未确认');
+
+  // 3. Active SAFETY_INTERLOCK blocks control; expired SAFETY_INTERLOCK and lower PROTECTION_RULE do not block manual override.
+  const safetyLocked = evaluateControlGuards({
+    target,
+    device: sampleDevice({ runState: 'STOPPED' }),
+    controlState: remoteAutoState({
+      devicePriorityLocks: [{
+        deviceId: 'dev-chiller-1',
+        lockedPriority: 'SAFETY_INTERLOCK',
+        lockedUntil: '2026-11-18T11:00:00.000Z',
+        reason: '蒸发器防冻联锁激活',
+      }],
+    }),
+    commands: [],
+    nowMs,
+  });
+  assert.equal(safetyLocked.guard.blocked, true);
+  assert.equal(safetyLocked.guard.badge, '安全联锁锁定');
+  assert.match(safetyLocked.guard.detail, /蒸发器防冻联锁激活/);
+
+  const expiredSafety = evaluateControlGuards({
+    target,
+    device: sampleDevice({ runState: 'STOPPED' }),
+    controlState: remoteAutoState({
+      devicePriorityLocks: [
+        { deviceId: 'dev-chiller-1', lockedPriority: 'SAFETY_INTERLOCK', lockedUntil: '2026-11-18T09:59:00.000Z' },
+        { deviceId: 'dev-chiller-1', lockedPriority: 'PROTECTION_RULE', lockedUntil: '2026-11-18T11:00:00.000Z' },
+      ],
+    }),
+    commands: [],
+    nowMs,
+  });
+  assert.equal(expiredSafety.guard.blocked, false);
 });

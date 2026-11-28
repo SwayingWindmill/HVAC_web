@@ -1,6 +1,13 @@
 // The bottom tabs (app.json tabBar lists the same pages), and how a tab page marks itself selected in
 // the custom tab bar from onShow, as WeChat's custom tabBar guide has each tab page do.
 
+import { registerSignOutHandler } from './session-cleanup';
+
+export interface TabPageLike {
+  readonly route?: string;
+  getTabBar?: () => { setData(data: Record<string, unknown>): void } | null | undefined;
+}
+
 export interface Tab {
   readonly pagePath: string;
   readonly text: string;
@@ -25,17 +32,23 @@ export const TABS: readonly Tab[] = [
 // Each tab page has its own tab bar; the last count read is shown on all of them.
 let waiting = 0;
 
-const tabBarOf = (page: WechatMiniprogram.Page.TrivialInstance) => (typeof page.getTabBar === 'function' ? page.getTabBar() : null);
+export function clearTabBadge(): void {
+  waiting = 0;
+}
+
+registerSignOutHandler(clearTabBadge);
+
+const tabBarOf = (page: TabPageLike) => (typeof page.getTabBar === 'function' ? page.getTabBar() : null);
 
 /** The badge text: none for nothing waiting, 99+ beyond two digits. */
 const badge = (count: number) => (count === 0 ? '' : count > 99 ? '99+' : String(count));
 
-export function selectTab(page: WechatMiniprogram.Page.TrivialInstance) {
-  tabBarOf(page)?.setData({ selected: TABS.findIndex((tab) => tab.pagePath === `/${page.route}`), badge: badge(waiting) });
+export function selectTab(page: TabPageLike) {
+  tabBarOf(page)?.setData({ selected: TABS.findIndex((tab) => tab.pagePath === `/${page.route ?? ''}`), badge: badge(waiting) });
 }
 
 /** Records how many of this Site's alarms are happening with no one on them, and shows it on the 通知 tab. */
-export function showAttention(page: WechatMiniprogram.Page.TrivialInstance, count: number) {
+export function showAttention(page: TabPageLike, count: number) {
   waiting = count;
   tabBarOf(page)?.setData({ badge: badge(count) });
 }

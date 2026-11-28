@@ -2,11 +2,11 @@ import { fetchSiteAutoControlLease, presentAutoControlLease, type AutoControlLea
 import { energySeries, siteTodayStart } from '../../lib/energy';
 import type { Plant } from '../../lib/plant';
 import { loadPlant } from '../../lib/plant-load';
-import { gateway, requireSession } from '../../lib/platform';
+import { gateway, registerSignOutHandler, requireSession } from '../../lib/platform';
 import { whileShown } from '../../lib/refresh';
 import { hourlyCop, presentDevices, presentRealtime, type DeviceFilter } from '../../lib/run';
 import { siteClock } from '../../lib/today';
-import { currentSite, type Site } from '../../lib/site';
+import { currentSite, siteSelectionVersion, type Site } from '../../lib/site';
 import { selectTab } from '../../lib/tab';
 
 // The web polls current values every 30 seconds when its push stream is not open; so does the phone.
@@ -14,6 +14,13 @@ const refresher = whileShown(30_000);
 
 // The last plant read, so switching filters needs no request.
 let plant: Plant | null = null;
+let lastSiteId: string | null = null;
+let lastSiteVersion = -1;
+registerSignOutHandler(() => {
+  lastSiteId = null;
+  lastSiteVersion = -1;
+  plant = null;
+});
 
 type Chart = ReturnType<typeof hourlyCop>;
 
@@ -25,6 +32,9 @@ async function loadChart(site: Site, dayStart: PromiseSettledResult<string | nul
   const window = { from: start, to: now.toISOString() };
   try {
     const [electricity, cooling] = await Promise.all([energySeries(site, 'electricity', 'hour', window), energySeries(site, 'cooling', 'hour', window)]);
+    if (electricity.length === 0 && cooling.length === 0) {
+      return { chart: null, note: '这个站点今天还没有用电读数。' };
+    }
     return { chart: hourlyCop(electricity, cooling, start, now), note: '' };
   } catch {
     return { chart: null, note: '今天的能效暂时读不到。' };
@@ -69,12 +79,25 @@ Page({
 
   /** `rereadEquipment` also re-reads the Sites and their registered equipment, which only change when an administrator edits them. */
   async refresh({ rereadEquipment = false } = {}) {
+    const version = siteSelectionVersion();
+    if (lastSiteId !== null && version !== lastSiteVersion) {
+      lastSiteId = null;
+      plant = null;
+      this.setData({ loading: true, noSite: false, failed: false, refreshError: '', siteName: '', updatedAt: '', realtime: null, devices: null, deviceCount: 0, chart: null, chartNote: '', autoLeaseBanner: null });
+    }
     try {
       const site = await currentSite(rereadEquipment);
+      lastSiteVersion = siteSelectionVersion();
       if (site === null) {
+        lastSiteId = null;
         plant = null;
         this.setData({ loading: false, noSite: true, failed: false, refreshError: '', siteName: '', updatedAt: '', realtime: null, devices: null, deviceCount: 0, chart: null, chartNote: '', autoLeaseBanner: null });
         return;
+      }
+      if (site.id !== lastSiteId) {
+        lastSiteId = site.id;
+        plant = null;
+        this.setData({ loading: true, noSite: false, failed: false, refreshError: '', siteName: site.displayName, updatedAt: '', realtime: null, devices: null, deviceCount: 0, chart: null, chartNote: '', autoLeaseBanner: null });
       }
       const now = new Date();
       const [plantRead, dayStart, leaseRead] = await Promise.allSettled([

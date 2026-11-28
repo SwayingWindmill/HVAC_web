@@ -1,6 +1,6 @@
 // The Site the mini program shows: the one the person picked last, else the first they can see.
 
-import { gateway, sessionToken } from './platform';
+import { gateway, registerSignOutHandler, sessionToken } from './platform';
 
 export interface Site {
   readonly id: string;
@@ -14,6 +14,9 @@ const SITE_KEY = 'hvac.site';
 // The Sites a person can see change only when an administrator assigns them, so the list is read
 // once per Session and again on the Site list page or a pull-down refresh, not on every page refresh.
 let known: { readonly session: string | null; readonly sites: readonly Site[] } | null = null;
+let selectionVersion = 0;
+
+export const siteSelectionVersion = () => selectionVersion;
 
 /** The Sites this person can see, read now; the pages after it use this list. */
 export async function listSites(): Promise<readonly Site[]> {
@@ -23,14 +26,36 @@ export async function listSites(): Promise<readonly Site[]> {
   return page.items;
 }
 
-export const rememberedSiteId = () => (wx.getStorageSync(SITE_KEY) as string) || null;
+export const rememberedSiteId = () => {
+  try {
+    return (wx.getStorageSync(SITE_KEY) as string) || null;
+  } catch {
+    return null;
+  }
+};
 
-export const rememberSite = (siteId: string) => wx.setStorageSync(SITE_KEY, siteId);
+export const rememberSite = (siteId: string) => {
+  if (siteId !== rememberedSiteId()) {
+    selectionVersion += 1;
+  }
+  try {
+    wx.setStorageSync(SITE_KEY, siteId);
+  } catch {
+    // Ignore storage quota or restricted context errors.
+  }
+};
 
 export function clearSites(): void {
   known = null;
-  wx.removeStorageSync(SITE_KEY);
+  selectionVersion += 1;
+  try {
+    wx.removeStorageSync(SITE_KEY);
+  } catch {
+    // Ignore missing key cleanup errors.
+  }
 }
+
+registerSignOutHandler(clearSites);
 
 /** The list read for this Session; `fresh` reads it again (a pull-down refresh). */
 const visibleSites = async (fresh: boolean) => (!fresh && known !== null && known.session === sessionToken() ? known.sites : listSites());
