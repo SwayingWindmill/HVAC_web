@@ -65,7 +65,7 @@
   "rollbackEvidence": [
     "scripts/run-phase1-postgres-restore-test.mjs",
     "scripts/run-s1-registry-postgres-tests.mjs",
-    "scripts/run-s25-redis-rebuild-test.mjs"
+    "scripts/run-s2-telemetry-postgres-tests.mjs"
   ],
   "migrationState": {
     "states": [

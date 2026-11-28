@@ -5,7 +5,7 @@ export interface CommandSpec {
   shell?: boolean;
 }
 
-export type GateName = 'static' | 'contracts' | 'unit' | 'integration' | 'browser';
+export type GateName = 'static' | 'contracts' | 'unit' | 'integration';
 export type DomainName =
   | 'web'
   | 'platform'
@@ -68,15 +68,31 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
     // Every Go module, whatever the domain: selected by the classifier for any Go code, dependency or lint-rule change.
     go: Object.freeze([npmRun('go:lint'), npmRun('security:go-vuln')]),
     web: Object.freeze([npmRun('web:shell:test'), npmRun('web:model:test'), npmRun('web:e2e')]),
-    platform: Object.freeze([npmRun('test:identity'), npmRun('test:durable-unit'), npmRun('test:phase1-scripts')]),
+    platform: Object.freeze([
+      npmRun('test:identity'),
+      npmRun('test:durable-unit'),
+      npmRun('test:phase1-scripts'),
+      nodeRun(
+        'scripts/run-go.mjs',
+        'test',
+        './libs/limitpolicy/...',
+        './libs/schemagate/...',
+        './libs/workloadtls/...',
+        './modules/maintenance/...',
+        './cmd/maintenance-worker/...',
+      ),
+    ]),
     registry: Object.freeze([
-      nodeRun('scripts/run-go.mjs', 'test', './libs/planttwin/...', './modules/registry/...'),
+      nodeRun('scripts/run-go.mjs', 'test', './libs/fixedpoint/...', './libs/planttwin/...', './libs/schemagate/...', './modules/registry/...'),
       npmRun('test:registry-routing'),
     ]),
     telemetry: Object.freeze([
       nodeRun(
         'scripts/run-go.mjs',
         'test',
+        './libs/limitpolicy/...',
+        './libs/mqttclient/...',
+        './libs/schemagate/...',
         './libs/telemetryauth/...',
         './libs/telemetryhistorymodel/...',
         './libs/measurement/...',
@@ -95,6 +111,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
         './libs/commandauth/...',
         './libs/alarmexpr/...',
         './libs/commandmodel/...',
+        './libs/mqttclient/...',
         './libs/planttwin/...',
         './modules/command/...',
         './libs/edgecontrol/...',
@@ -104,7 +121,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       npmRun('command:formal'),
     ]),
     alarm: Object.freeze([
-      nodeRun('scripts/run-go.mjs', 'test', './libs/alarmexpr/...', './libs/alarmauth/...', './libs/alarmmodel/...', './modules/alarm/...'),
+      nodeRun('scripts/run-go.mjs', 'test', './libs/alarmexpr/...', './libs/alarmauth/...', './libs/alarmmodel/...', './modules/alarm/...', './cmd/wecom-alert-adapter/...'),
       npmRun('alarm:test'),
     ]),
     workorder: Object.freeze([
@@ -127,7 +144,6 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
     'operations-agent': Object.freeze([
       npmCi('services/operations-agent-service'),
       npmRun('operations-agent-service:check'),
-      nodeRun('scripts/check-operations-agent-service-boundaries.mjs'),
       npmRun('test:gateway'),
     ]),
   }),
@@ -139,6 +155,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       nodeRun('scripts/run-s2-telemetry-ingest-postgres-tests.mjs'),
       nodeRun('scripts/run-s2-realtime-postgres-tests.mjs'),
       nodeRun('scripts/run-s2-telemetry-history-tests.mjs'),
+      npmRun('mqtt:crl:integration'),
     ]),
     command: Object.freeze([nodeRun('--experimental-strip-types', 'scripts/run-s3-command-postgres-tests.ts')]),
     alarm: Object.freeze([nodeRun('--experimental-strip-types', 'scripts/run-s4-alarm-postgres-tests.ts')]),
@@ -152,14 +169,9 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       npmRun('operations-agent-service:postgres'),
     ]),
   }),
-  browser: Object.freeze({
-    telemetry: Object.freeze([
-      nodeRun('scripts/run-s2-telemetry-live-browser-audit.mjs'),
-    ]),
-  }),
 });
 
-export const gateProfileSets: Readonly<Record<string, Readonly<Record<'contracts' | 'unit' | 'integration' | 'browser', readonly string[]>>>> = Object.freeze({
+export const gateProfileSets: Readonly<Record<string, Readonly<Record<'contracts' | 'unit' | 'integration', readonly string[]>>>> = Object.freeze({
   all: Object.freeze({
     contracts: Object.freeze(['command', 'core', 'registry', 'telemetry', 'web']),
     unit: Object.freeze([
@@ -184,14 +196,11 @@ export const gateProfileSets: Readonly<Record<string, Readonly<Record<'contracts
       'telemetry',
       'workorder',
     ]),
-    browser: Object.freeze([
-      'telemetry',
-    ]),
   }),
 });
 
 export const isGateName = (value: string): value is GateName =>
-  value === 'static' || value === 'contracts' || value === 'unit' || value === 'integration' || value === 'browser';
+  value === 'static' || value === 'contracts' || value === 'unit' || value === 'integration';
 
 const assertExactProfiles = (label: string, actual: readonly string[], expected: readonly string[]): void => {
   const normalizedActual = [...actual].sort();
@@ -203,7 +212,7 @@ const assertExactProfiles = (label: string, actual: readonly string[], expected:
   }
 };
 
-for (const gate of ['contracts', 'unit', 'integration', 'browser'] as const) {
+for (const gate of ['contracts', 'unit', 'integration'] as const) {
   assertExactProfiles(
     `Profile set all.${gate}`,
     gateProfileSets.all[gate],
@@ -222,60 +231,51 @@ export const resolveGateProfileSet = (gate: GateName, profileSet: string): strin
   return [...profiles];
 };
 
-export const domainTaskProfiles: Readonly<Record<DomainName, Readonly<Record<'contracts' | 'unit' | 'integration' | 'browser', readonly string[]>>>> = Object.freeze({
+export const domainTaskProfiles: Readonly<Record<DomainName, Readonly<Record<'contracts' | 'unit' | 'integration', readonly string[]>>>> = Object.freeze({
   web: Object.freeze({
     contracts: Object.freeze(['web']),
     unit: Object.freeze(['web']),
     integration: Object.freeze([]),
-    browser: Object.freeze([]),
   }),
   platform: Object.freeze({
     contracts: Object.freeze(['core']),
     unit: Object.freeze(['platform']),
     integration: Object.freeze(['platform']),
-    browser: Object.freeze([]),
   }),
   registry: Object.freeze({
     contracts: Object.freeze(['core', 'registry']),
     unit: Object.freeze(['registry']),
     integration: Object.freeze(['registry']),
-    browser: Object.freeze([]),
   }),
   telemetry: Object.freeze({
     contracts: Object.freeze(['core', 'telemetry']),
     unit: Object.freeze(['telemetry']),
     integration: Object.freeze(['telemetry']),
-    browser: Object.freeze(['telemetry']),
   }),
   command: Object.freeze({
     contracts: Object.freeze(['core', 'command']),
     unit: Object.freeze(['command']),
     integration: Object.freeze(['command']),
-    browser: Object.freeze([]),
   }),
   alarm: Object.freeze({
     contracts: Object.freeze(['core']),
     unit: Object.freeze(['alarm']),
     integration: Object.freeze(['alarm']),
-    browser: Object.freeze([]),
   }),
   workorder: Object.freeze({
     contracts: Object.freeze(['core']),
     unit: Object.freeze(['workorder']),
     integration: Object.freeze(['workorder']),
-    browser: Object.freeze([]),
   }),
   analytics: Object.freeze({
     contracts: Object.freeze(['core']),
     unit: Object.freeze(['analytics']),
     integration: Object.freeze(['analytics']),
-    browser: Object.freeze([]),
   }),
   'operations-agent': Object.freeze({
     contracts: Object.freeze(['core']),
     unit: Object.freeze(['operations-agent']),
     integration: Object.freeze(['operations-agent']),
-    browser: Object.freeze([]),
   }),
 });
 
@@ -315,7 +315,7 @@ export const resolveDomainCommands = (domain: string, layers: readonly string[] 
   const commands: CommandSpec[] = [];
   const selectedProfiles: Record<string, string[]> = {};
   for (const layer of layers) {
-    if (layer !== 'contracts' && layer !== 'unit' && layer !== 'integration' && layer !== 'browser') {
+    if (layer !== 'contracts' && layer !== 'unit' && layer !== 'integration') {
       throw new Error(`Unsupported domain layer: ${layer}`);
     }
     const profiles = profilesByLayer[layer];

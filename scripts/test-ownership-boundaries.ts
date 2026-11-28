@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import {
   checkCrossSchemaSqlInFile,
+  checkGoLayerImportsInFile,
   checkPeerModuleImportsInFile,
   checkUntypedMapsInFile,
   inspectOwnershipBoundaries,
@@ -342,12 +343,22 @@ test('inspectOwnershipBoundaries discovers custom schemas from data-ownership.v1
       'libs/intelligencemodel/bad.go',
       'package intelligencemodel\ntype X map[string]any\n',
     );
+    writeGoFile(
+      rootDir,
+      'libs/grant/bad_layer.go',
+      'package grant\nimport "github.com/quanlaihe/hvac-web/cmd/energy-api/internal/gateway"\n',
+    );
 
     const result = inspectOwnershipBoundaries(rootDir);
-    assert.equal(result.checkedFiles, 3);
+    assert.equal(result.checkedFiles, 4);
     assert.deepEqual(
       result.violations.map((v) => ({ rule: v.rule, file: v.file, symbol: v.symbol })),
       [
+        {
+          rule: 'go-layer-import',
+          file: 'libs/grant/bad_layer.go',
+          symbol: 'github.com/quanlaihe/hvac-web/cmd/energy-api/internal/gateway',
+        },
         { rule: 'untyped-map', file: 'libs/intelligencemodel/bad.go', symbol: 'map[string]any' },
         { rule: 'cross-schema-sql', file: 'modules/iam/internal/iam/bad.go', symbol: 'custom_billing.invoices' },
         {
@@ -357,6 +368,49 @@ test('inspectOwnershipBoundaries discovers custom schemas from data-ownership.v1
         },
       ],
     );
-    assert.match(result.violations[1].message, /owned by billing-service/);
+    assert.match(result.violations[2].message, /owned by billing-service/);
   });
+});
+
+test('Go layer DAG forbids upward libs->modules/services/cmd/tools, module/service->cmd/tools, and sibling cmd/tool imports', () => {
+  assert.equal(
+    checkGoLayerImportsInFile('libs/grant/bad.go', 'package grant\nimport "github.com/quanlaihe/hvac-web/modules/iam/pkg/iam"\n').length,
+    1,
+  );
+  assert.equal(
+    checkGoLayerImportsInFile('libs/grant/bad2.go', 'package grant\nimport "github.com/quanlaihe/hvac-web/services/identity-service/pkg/identityadmin"\n').length,
+    1,
+  );
+  assert.equal(
+    checkGoLayerImportsInFile('modules/alarm/internal/alarm.go', 'package alarm\nimport "github.com/quanlaihe/hvac-web/cmd/energy-api/internal/gateway"\n').length,
+    1,
+  );
+  assert.equal(
+    checkGoLayerImportsInFile('services/forecast-service/internal/f.go', 'package forecast\nimport "github.com/quanlaihe/hvac-web/tools/eg8200-simulator/internal/simulator"\n').length,
+    1,
+  );
+  assert.equal(
+    checkGoLayerImportsInFile('cmd/energy-api/main.go', 'package main\nimport "github.com/quanlaihe/hvac-web/cmd/connectivity/internal/x"\n').length,
+    1,
+  );
+  assert.equal(
+    checkGoLayerImportsInFile('cmd/energy-api/main.go', 'package main\nimport "github.com/quanlaihe/hvac-web/tools/eg8200-simulator/internal/simulator"\n').length,
+    1,
+  );
+
+  // Downward or same-binary internal imports remain permitted
+  assert.deepEqual(
+    checkGoLayerImportsInFile(
+      'cmd/energy-api/main.go',
+      'package main\nimport (\n  "github.com/quanlaihe/hvac-web/cmd/energy-api/internal/gateway"\n  "github.com/quanlaihe/hvac-web/modules/iam/pkg/iam"\n  "github.com/quanlaihe/hvac-web/libs/grant"\n)\n',
+    ),
+    [],
+  );
+  assert.deepEqual(
+    checkGoLayerImportsInFile(
+      'tools/eg8200-simulator/cmd/eg8200-mqtt-publisher/main.go',
+      'package main\nimport (\n  "github.com/quanlaihe/hvac-web/tools/eg8200-simulator/internal/simulator"\n  "github.com/quanlaihe/hvac-web/libs/edgecontrol"\n)\n',
+    ),
+    [],
+  );
 });

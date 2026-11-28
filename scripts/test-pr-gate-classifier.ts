@@ -10,6 +10,7 @@ import {
   findComposePortExposureViolations,
   findDebugMarkerViolations,
   findHandoffBudgetViolations,
+  findJavascriptToolingViolations,
   findPackageScriptViolations,
   findRequiredGuardrailFileViolations,
   findSkillMirrorViolations,
@@ -30,12 +31,11 @@ interface ClassificationReport {
   unitWeb: boolean;
   unitDomain: boolean;
   integrations: boolean;
-  browsers: boolean;
   contractProfiles: string[];
   unitProfiles: string[];
   unitDomainProfiles: string[];
   integrationProfiles: string[];
-  browserProfiles: string[];
+  reasons: Array<{ file: string; reason: string }>;
 }
 
 interface GatePlan {
@@ -79,20 +79,18 @@ test('documentation-only changes keep expensive affected gates idle', () => {
     assert.equal(classification.contracts, false);
     assert.equal(classification.units, false);
     assert.equal(classification.integrations, false);
-    assert.equal(classification.browsers, false);
     assert.equal(classification.broad, false);
     assert.equal(classification.unknown, false);
   }
 });
 
-test('package-lock changes compile and unit test without database or browser fan-out', () => {
+test('package-lock changes compile and unit test without database fan-out', () => {
   const classification = runClassification(['package-lock.json']);
   assert.deepEqual(classification.unitProfiles, ['web']);
   assert.deepEqual(classification.integrationProfiles, []);
-  assert.deepEqual(classification.browserProfiles, []);
 });
 
-test('HVAC Web changes select stable domain profiles on the Linux browser runner', () => {
+test('HVAC Web changes select the web unit profile cleanly', () => {
   for (const file of [
     'apps/hvac-web/src/app/router.ts',
     'scripts/check-design-system.ts',
@@ -104,7 +102,6 @@ test('HVAC Web changes select stable domain profiles on the Linux browser runner
   ]) {
     const classification = runClassification([file]);
     assert.deepEqual(classification.unitProfiles, ['web']);
-    assert.deepEqual(classification.browserProfiles, ['telemetry']);
     assert.equal(classification.integrations, false);
     assert.equal(classification.unknown, false);
   }
@@ -227,13 +224,12 @@ test('package, workflow, and central task-matrix changes fail closed to broad co
     assert.equal(classification.unknown, false);
     assert.ok(classification.unitProfiles.includes('operations-agent'));
     assert.deepEqual(classification.integrationProfiles, []);
-    assert.deepEqual(classification.browserProfiles, []);
   }
   assert.deepEqual(findPackageScriptViolations({ ok: 'a && b && c && d' }), []);
   assert.equal(findPackageScriptViolations({ bad: 'a && b && c && d && e', 's1:old': 'echo' }).length, 2);
 });
 
-test('unknown paths and automation scripts fail closed without database or browser matrices', () => {
+test('unknown paths and automation scripts fail closed without database fan-out', () => {
   for (const file of ['new-platform-area/owner.go', 'scripts/new-automation-wrapper.mjs']) {
     const classification = runClassification([file]);
     assert.equal(classification.broad, true);
@@ -241,7 +237,6 @@ test('unknown paths and automation scripts fail closed without database or brows
     assert.equal(classification.contracts, true);
     assert.equal(classification.units, true);
     assert.equal(classification.integrations, false);
-    assert.equal(classification.browsers, false);
   }
 });
 
@@ -252,6 +247,7 @@ test('integration plans resolve through stable domain profiles', () => {
     'node scripts/run-s2-telemetry-ingest-postgres-tests.mjs',
     'node scripts/run-s2-realtime-postgres-tests.mjs',
     'node scripts/run-s2-telemetry-history-tests.mjs',
+    'npm run mqtt:crl:integration',
     'node --experimental-strip-types scripts/run-s3-command-postgres-tests.ts',
   ]);
 });
@@ -260,7 +256,6 @@ test('Operations Agent changes select dedicated domain gates', () => {
   const classification = runClassification(['services/operations-agent-service/src/index.ts']);
   assert.deepEqual(classification.unitProfiles, ['operations-agent']);
   assert.deepEqual(classification.integrationProfiles, ['operations-agent']);
-  assert.deepEqual(classification.browserProfiles, []);
   assert.equal(classification.broad, false);
 });
 
@@ -499,6 +494,11 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
   ]) {
     const concClassification = runClassification([connFile]);
     assert.deepEqual(concClassification.unitProfiles, ['telemetry']);
+    assert.deepEqual(
+      concClassification.integrationProfiles,
+      connFile.includes('crl') ? ['telemetry'] : [],
+      connFile,
+    );
     assert.equal(concClassification.unknown, false, connFile);
     assert.equal(concClassification.broad, false, connFile);
   }
@@ -683,7 +683,6 @@ test('Python AI solver service changes run analytics unit tests cleanly without 
   assert.deepEqual(classification.contractProfiles, ['core']);
   assert.deepEqual(classification.unitProfiles, ['analytics']);
   assert.deepEqual(classification.integrationProfiles, []);
-  assert.deepEqual(classification.browserProfiles, []);
 
   const analyticsUnitCommands = runPlan('unit', ['analytics']).commands;
   assert.ok(analyticsUnitCommands.includes('npm run ai-solver:test'));
@@ -700,4 +699,69 @@ test('edge-gateway daemon and packaging changes stay scoped to command and go ga
   assert.deepEqual(daemonDeploy.unitProfiles, ['command']);
   assert.equal(daemonDeploy.broad, false);
   assert.equal(daemonDeploy.unknown, false);
+});
+
+test('javascript tooling ratchet rejects both growth and slack', () => {
+  const baseline = {
+    schemaVersion: 1,
+    policy: 'legacy-js-ratchet',
+    trackedExtensions: ['.mjs'],
+    allowedLegacyRoots: { 'scripts/': { fileCount: 1, maxBytes: 100 } },
+    fileCount: 1,
+    maxBytes: 100,
+  };
+  assert.deepEqual(findJavascriptToolingViolations({ files: [{ path: 'scripts/a.mjs', bytes: 100 }], baseline }), []);
+  assert.equal(findJavascriptToolingViolations({ files: [{ path: 'scripts/a.mjs', bytes: 101 }], baseline }).length, 2);
+  const slackViolations = findJavascriptToolingViolations({ files: [{ path: 'scripts/a.mjs', bytes: 90 }], baseline });
+  assert.equal(slackViolations.length, 2);
+  assert.ok(slackViolations.every((entry) => entry.includes('tighten scripts/javascript-tooling-baseline.json')));
+});
+
+test('every tracked repository path is classified with unknown=false', () => {
+  const listed = spawnSync('git', ['ls-files'], { cwd: process.cwd(), encoding: 'utf8', windowsHide: true });
+  assert.equal(listed.status, 0, listed.stderr || listed.stdout);
+  const tempDir = mkdtempSync(join(tmpdir(), 'hvac-pr-all-tracked-'));
+  try {
+    const listFile = join(tempDir, 'tracked.txt');
+    writeFileSync(listFile, listed.stdout, 'utf8');
+    const result = spawnSync(
+      process.execPath,
+      ['--experimental-strip-types', 'scripts/classify-pr-gates.ts', `--files-file=${listFile}`],
+      { cwd: process.cwd(), encoding: 'utf8', windowsHide: true },
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const report = JSON.parse(result.stdout.trim()) as ClassificationReport & { reasons: Array<{ file: string; reason: string }> };
+    const unknowns = report.reasons.filter((entry) => entry.reason.includes('unknown ')).map((entry) => entry.file);
+    assert.deepEqual(unknowns, [], `unclassified repository files: ${unknowns.join(', ')}`);
+    assert.equal(report.unknown, false);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('classifier preserves deployment secret check on .gitignore, spatial model coupling, and unit test execution for classified Go packages', () => {
+  const gitignore = runClassification(['.gitignore']);
+  assert.deepEqual(gitignore.contractProfiles, ['core']);
+  assert.equal(gitignore.broad, false);
+  assert.equal(gitignore.unknown, false);
+
+  const archScript = runClassification(['scripts/check-backend-architecture-v2.ts']);
+  assert.deepEqual(archScript.contractProfiles, ['core']);
+  assert.ok(archScript.reasons.length > 0);
+
+  const spatial = runClassification(['scripts/central-plant-spatial-model.mjs']);
+  assert.ok(spatial.unitProfiles.includes('registry'));
+  assert.ok(spatial.unitProfiles.includes('command'));
+
+  const wecom = runClassification(['cmd/wecom-alert-adapter/main.go']);
+  assert.ok(wecom.unitProfiles.includes('alarm'));
+  assert.ok(runPlan('unit', wecom.unitProfiles).commands.some((cmd) => cmd.includes('./cmd/wecom-alert-adapter/...')));
+
+  const maintenance = runClassification(['modules/maintenance/pkg/maintenance/domain.go']);
+  assert.ok(maintenance.unitProfiles.includes('platform'));
+  assert.ok(runPlan('unit', maintenance.unitProfiles).commands.some((cmd) => cmd.includes('./modules/maintenance/...')));
+
+  const schedCmd = runClassification(['cmd/scheduler/main.go']);
+  assert.ok(schedCmd.unitProfiles.includes('analytics'));
+  assert.ok(runPlan('unit', schedCmd.unitProfiles).commands.includes('npm run test:analytics'));
 });

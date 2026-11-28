@@ -639,6 +639,8 @@ async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): 
   const baseline = JSON.parse(await readFile(baselinePath, 'utf8')) as WebAsCastBaseline;
   if (nonConstAsCastCount > baseline.maxNonConstAsCasts) {
     errors.push(`apps/hvac-web/src non-const \`as\` casts grew from ${baseline.maxNonConstAsCasts} to ${nonConstAsCastCount} (scripts/web-as-cast-baseline.json); narrow types or parse payloads instead of adding casts`);
+  } else if (nonConstAsCastCount < baseline.maxNonConstAsCasts) {
+    errors.push(`apps/hvac-web/src non-const \`as\` casts dropped from ${baseline.maxNonConstAsCasts} to ${nonConstAsCastCount}; tighten scripts/web-as-cast-baseline.json`);
   }
 }
 

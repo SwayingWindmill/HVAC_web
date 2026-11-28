@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export type BoundaryRuleKind = 'cross-schema-sql' | 'peer-module-import' | 'untyped-map';
+export type BoundaryRuleKind = 'cross-schema-sql' | 'peer-module-import' | 'go-layer-import' | 'untyped-map';
 
 export interface BoundaryViolation {
   readonly rule: BoundaryRuleKind;
@@ -52,36 +52,34 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const dataOwnershipRegistryPath = 'contracts/ownership/data-ownership.v1.json';
 const allowedCrossModuleImport = 'github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi';
 const peerImportPattern = /^github\.com\/quanlaihe\/hvac-web\/(modules|services)\/([^/]+)(?:\/.*)?$/u;
+const goLayerImportPattern = /^github\.com\/quanlaihe\/hvac-web\/(libs|modules|services|cmd|tools)\/([^/]+)(?:\/.*)?$/u;
 const untypedMapPattern = /\bmap\s*\[\s*string\s*\]\s*(?:any\b|interface\s*\{\s*\})/gu;
 
 const SCHEMA_PRIMARY_OWNER: Readonly<Record<string, string>> = Object.freeze({
   identity: 'services/identity-service',
   iam: 'modules/iam',
   core_registry: 'modules/registry',
-  asset_twin: 'modules/registry',
   connectivity: 'modules/connectivity',
   gateway: 'cmd/energy-api',
   telemetry_runtime: 'modules/telemetry',
   telemetry_history: 'modules/telemetry',
   analytics: 'modules/energy',
   command_runtime: 'modules/command',
-  maintenance_ops: 'modules/maintenance',
   alarm_runtime: 'modules/alarm',
   notification_runtime: 'services/notification-service',
   work_order_runtime: 'modules/workorder',
   audit_ledger: 'modules/audit',
-  audit: 'modules/audit',
-  optimization: 'services/optimization-service',
-  ops_agent: 'services/operations-agent-service',
   agent_operations: 'services/operations-agent-service',
   phase1_deployment: 'libs/schemagate',
 });
 
 const REGISTRY_WRITER_TO_UNIT: Readonly<Record<string, string>> = Object.freeze({
+  'identity-service': 'services/identity-service',
   'platform-gateway': 'cmd/energy-api',
   'audit-ledger-service': 'modules/audit',
   'iam-service': 'modules/iam',
   'platform-core-service': 'modules/registry',
+  connectivity: 'modules/connectivity',
   'telemetry-runtime-service': 'modules/telemetry',
   'telemetry-history-projector': 'modules/telemetry',
   'analytics-read-model-projector': 'modules/energy',
@@ -89,6 +87,7 @@ const REGISTRY_WRITER_TO_UNIT: Readonly<Record<string, string>> = Object.freeze(
   'alarm-service': 'modules/alarm',
   'notification-service': 'services/notification-service',
   'work-order-service': 'modules/workorder',
+  'operations-agent-service': 'services/operations-agent-service',
 });
 
 // Phase 1 intelligence, metric, scheduler, and maintenance modules store their own RLS-isolated
@@ -102,7 +101,7 @@ const UNIT_OWNED_SCHEMAS: Readonly<Record<string, readonly string[]>> = Object.f
   'libs/schemagate': ['phase1_deployment'],
   'libs/schedulerjob': ['core_registry'],
   'modules/iam': ['iam'],
-  'modules/registry': ['core_registry', 'asset_twin'],
+  'modules/registry': ['core_registry'],
   'modules/connectivity': ['connectivity'],
   'modules/telemetry': ['telemetry_runtime', 'telemetry_history', 'analytics'],
   'modules/energy': ['analytics', 'telemetry_history'],
@@ -110,15 +109,15 @@ const UNIT_OWNED_SCHEMAS: Readonly<Record<string, readonly string[]>> = Object.f
   'modules/alarm': ['alarm_runtime'],
   'services/notification-service': ['notification_runtime'],
   'modules/workorder': ['work_order_runtime'],
-  'modules/audit': ['audit_ledger', 'audit'],
+  'modules/audit': ['audit_ledger'],
   'modules/scheduler': ['core_registry'],
-  'modules/maintenance': ['core_registry', 'maintenance_ops'],
+  'modules/maintenance': ['core_registry'],
   'modules/metric': ['core_registry', 'analytics'],
   'services/fdd-service': ['core_registry'],
   'services/forecast-service': ['core_registry'],
   'services/mv-service': ['core_registry'],
   'services/report-service': ['core_registry'],
-  'services/optimization-service': ['core_registry', 'optimization'],
+  'services/optimization-service': ['core_registry'],
 });
 
 // Cross-schema access declared in data-ownership.v1.json, ADRs (0020/0021), or operational relays.
@@ -785,6 +784,54 @@ export const checkPeerModuleImportsInFile = (filePath: string, content: string):
 };
 
 /**
+ * Enforces downward-only Go package layering:
+ * - libs/* must not import modules/*, services/*, cmd/*, or tools/*
+ * - modules/* and services/* must not import cmd/* or tools/*
+ * - cmd/<A> must not import sibling cmd/<B> or tools/*
+ * - tools/<A> must not import cmd/* or sibling tools/<B>
+ */
+export const checkGoLayerImportsInFile = (filePath: string, content: string): BoundaryViolation[] => {
+  const normalizedPath = normalizePath(filePath);
+  if (!normalizedPath.endsWith('.go')) return [];
+  const callerMatch = /^(libs|modules|services|cmd|tools)\/([^/]+)\//u.exec(normalizedPath);
+  if (!callerMatch) return [];
+  const callerLayer = callerMatch[1];
+  const callerUnit = `${callerLayer}/${callerMatch[2]}`;
+
+  const lexed = lexGoSource(content);
+  const violations: BoundaryViolation[] = [];
+
+  for (const entry of lexed.imports) {
+    const targetMatch = goLayerImportPattern.exec(entry.importPath);
+    if (!targetMatch) continue;
+    const targetLayer = targetMatch[1];
+    const targetUnit = `${targetLayer}/${targetMatch[2]}`;
+
+    let reason = '';
+    if (callerLayer === 'libs' && (targetLayer === 'modules' || targetLayer === 'services' || targetLayer === 'cmd' || targetLayer === 'tools')) {
+      reason = `libs/* must stay domain-foundational and cannot depend upward on ${targetLayer}/*`;
+    } else if ((callerLayer === 'modules' || callerLayer === 'services') && (targetLayer === 'cmd' || targetLayer === 'tools')) {
+      reason = `${callerLayer}/* cannot depend upward on executable ${targetLayer}/*`;
+    } else if (callerLayer === 'cmd' && ((targetLayer === 'cmd' && targetUnit !== callerUnit) || targetLayer === 'tools')) {
+      reason = `executable ${callerUnit} cannot import ${targetLayer === 'tools' ? 'tools/*' : `sibling ${targetUnit}`}`;
+    } else if (callerLayer === 'tools' && (targetLayer === 'cmd' || (targetLayer === 'tools' && targetUnit !== callerUnit))) {
+      reason = `tool ${callerUnit} cannot import ${targetLayer === 'cmd' ? 'cmd/*' : `sibling ${targetUnit}`}`;
+    }
+
+    if (!reason) continue;
+    violations.push({
+      rule: 'go-layer-import',
+      file: normalizedPath,
+      line: entry.line,
+      symbol: entry.importPath,
+      message: `${normalizedPath}:${entry.line}: forbidden Go layer import ${entry.importPath} (${reason}).`,
+    });
+  }
+
+  return violations;
+};
+
+/**
  * Checks non-test Go files under services/optimization-service/ and libs/intelligencemodel/ for untyped string maps.
  */
 export const checkUntypedMapsInFile = (filePath: string, content: string): BoundaryViolation[] => {
@@ -832,7 +879,7 @@ const collectGoFiles = (rootDir: string): string[] => {
       }
     }
   };
-  for (const topDir of ['modules', 'services', 'cmd', 'libs']) {
+  for (const topDir of ['modules', 'services', 'cmd', 'libs', 'tools']) {
     const absTop = join(rootDir, topDir);
     if (existsSync(absTop)) visit(absTop);
   }
@@ -840,7 +887,7 @@ const collectGoFiles = (rootDir: string): string[] => {
 };
 
 /**
- * Inspects all Go source files in rootDir against cross-schema SQL, peer import, and untyped map boundaries.
+ * Inspects all Go source files in rootDir against cross-schema SQL, peer import, layer DAG, and untyped map boundaries.
  */
 export const inspectOwnershipBoundaries = (rootDir: string = repositoryRoot): OwnershipBoundariesResult => {
   const schemaOwners = loadRegistrySchemas(rootDir);
@@ -852,6 +899,7 @@ export const inspectOwnershipBoundaries = (rootDir: string = repositoryRoot): Ow
     violations.push(
       ...checkCrossSchemaSqlInFile(relPath, content, schemaOwners),
       ...checkPeerModuleImportsInFile(relPath, content),
+      ...checkGoLayerImportsInFile(relPath, content),
       ...checkUntypedMapsInFile(relPath, content),
     );
   }

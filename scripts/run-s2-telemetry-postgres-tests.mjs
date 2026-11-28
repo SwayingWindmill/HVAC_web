@@ -401,7 +401,7 @@ try {
     'scripts/run-isolated-go.mjs', '--module=modules/telemetry', 'test', '-count=1', '-run', pattern, '-v', './pkg/telemetry/...',
   ], { env: { ...process.env, ...extraEnv } });
   report.assertions.alarmEvaluationDeadLetter = { schemaAndGrantReady: true };
-  report.assertions.redisLatestCAS = runTelemetryGo('TestRedisLatestCacheNeverRegressesBusinessRevision', {
+  report.assertions.redisLatestCAS = runTelemetryGo('Test(RedisLatestCacheNeverRegressesBusinessRevision|RebuildLatestCacheRestoresBusinessSnapshots)', {
     S2_TELEMETRY_LATEST_REDIS_TEST_URL: `redis://127.0.0.1:${latestRedisHostPort}/0`,
   });
   const edgeMeta = psql(`SELECT (SELECT string_agg(pg_get_constraintdef(oid),'|') FROM pg_constraint WHERE conrelid='telemetry_runtime.mqtt_runtime_events'::regclass AND conname LIKE 'mqtt_runtime_events_alarm_%')||'|'||(to_regclass('telemetry_runtime.mqtt_runtime_events_alarm_pending_idx') IS NOT NULL)::text||'|'||has_column_privilege('s2_telemetry_runtime','telemetry_runtime.mqtt_runtime_events','alarm_delivery_state','UPDATE')::text||'|'||(SELECT coalesce(col_description('telemetry_runtime.mqtt_runtime_events'::regclass,attnum),'') FROM pg_attribute WHERE attrelid='telemetry_runtime.mqtt_runtime_events'::regclass AND attname='alarm_delivery_state')`);

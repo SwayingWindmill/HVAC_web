@@ -1,7 +1,13 @@
 {
   "registryVersion": 1,
-  "registryRevision": 26,
+  "registryRevision": 27,
   "resources": [
+    {
+      "kind": "schema",
+      "name": "identity",
+      "writer": "identity-service",
+      "revision": 1
+    },
     {
       "kind": "schema",
       "name": "gateway",
@@ -24,6 +30,12 @@
       "kind": "schema",
       "name": "core_registry",
       "writer": "platform-core-service",
+      "revision": 1
+    },
+    {
+      "kind": "schema",
+      "name": "connectivity",
+      "writer": "connectivity",
       "revision": 1
     },
     {
@@ -54,6 +66,12 @@
       "kind": "schema",
       "name": "work_order_runtime",
       "writer": "work-order-service",
+      "revision": 1
+    },
+    {
+      "kind": "schema",
+      "name": "agent_operations",
+      "writer": "operations-agent-service",
       "revision": 1
     },
     {

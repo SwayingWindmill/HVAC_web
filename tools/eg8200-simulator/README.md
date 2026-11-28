@@ -60,7 +60,7 @@ go run ./tools/eg8200-simulator/cmd/eg8200-history-replay \
   -server-ca /path/to/ca.crt
 ```
 
-导入来源（`HISTORY_REPLAY`）、收到时间、来源分区和事件编号、点位对应、校验、去重和写历史都由遥测负责。导入的读数可以成为正式的历史，但不会改最新读数、在线状态、设备快照或状态版本号。同一批次重导会得到同样的顺序号，所以中途重试或重启不会重复写入。数据库和历史的集成测试：`node scripts/run-historical-replay-integration.mjs`。
+导入来源（`HISTORY_REPLAY`）、收到时间、来源分区和事件编号、点位对应、校验、去重和写历史都由遥测负责。导入的读数可以成为正式的历史，但不会改最新读数、在线状态、设备快照或状态版本号。同一批次重导会得到同样的顺序号，所以中途重试或重启不会重复写入。本地历史导入入口：`node scripts/local-history-replay.mjs`（导入去重与不污染实时快照的测试见 `modules/telemetry`）。
 
 ## ATV630 变频器
 
