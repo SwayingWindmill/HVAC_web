@@ -20,8 +20,12 @@ class MemoryAgentSessionStateStore {
   }
 
   async transact(tenantId, sessionId, update) {
-    const current = this.state?.session.tenantId === tenantId && this.state.session.id === sessionId ? this.state : null;
-    const next = update(current);
+    const existing = this.state?.session.id === sessionId ? this.state : null;
+    const visible = existing?.session.tenantId === tenantId ? existing : null;
+    const next = update(visible);
+    if (existing !== null && existing.session.tenantId !== tenantId) {
+      throw new AgentSessionLifecycleError('SESSION_IDENTITY_CONFLICT', 'Session belongs to another tenant.');
+    }
     this.state = next;
     return next;
   }
@@ -32,7 +36,7 @@ class MemoryAgentSessionStateStore {
     const runs = this.state.runs.map((run) => {
       if (run.id !== this.state.session.activeRunId || run.status !== 'RUNNING') return run;
       interrupted += 1;
-      return Object.freeze({ ...run, status: 'FAILED', finishedAt: at, failureCode: 'RUN_INTERRUPTED' });
+      return Object.freeze({ ...run, status: 'FAILED', finishedAt: Math.max(at, run.startedAt), failureCode: 'RUN_INTERRUPTED' });
     });
     if (interrupted > 0) this.state = Object.freeze({ ...this.state, runs: Object.freeze(runs) });
     return interrupted;

@@ -24,7 +24,11 @@ class MemoryAgentSessionStateStore {
 
   async transact(tenantId, sessionId, update) {
     const existing = this.states.get(sessionId) ?? null;
-    const next = update(existing?.session.tenantId === tenantId ? existing : null);
+    const visible = existing?.session.tenantId === tenantId ? existing : null;
+    const next = update(visible);
+    if (existing !== null && existing.session.tenantId !== tenantId) {
+      throw new Error('Session belongs to another tenant.');
+    }
     this.states.set(sessionId, next);
     return next;
   }
@@ -38,7 +42,7 @@ class MemoryAgentSessionStateStore {
         if (run.id !== state.session.activeRunId || run.status !== 'RUNNING') return run;
         changed = true;
         interrupted += 1;
-        return Object.freeze({ ...run, status: 'FAILED', finishedAt: at, failureCode: 'RUN_INTERRUPTED' });
+        return Object.freeze({ ...run, status: 'FAILED', finishedAt: Math.max(at, run.startedAt), failureCode: 'RUN_INTERRUPTED' });
       });
       if (changed) this.states.set(sessionId, Object.freeze({ ...state, runs: Object.freeze(runs) }));
     }

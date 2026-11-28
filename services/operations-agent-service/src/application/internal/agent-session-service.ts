@@ -292,12 +292,23 @@ export const createAgentSessionService = ({
     liveRuns.set(started.session.id, live);
     void finishRun(context, started, run, controller)
       .catch(async () => {
-        await lifecycle.interrupt({ tenantId: context.tenantId, sessionId: started.session.id, runId: run.id, at: now() }).catch(() => undefined);
+        const interrupted = await lifecycle.interrupt({
+          tenantId: context.tenantId,
+          sessionId: started.session.id,
+          runId: run.id,
+          at: now(),
+        }).catch(() => undefined);
+        const current = liveRuns.get(started.session.id);
+        if (interrupted !== undefined && current === live) {
+          const event = snapshotEvent(interrupted, now());
+          live.events.push(event);
+          for (const listener of live.listeners) listener(event);
+        }
       })
       .finally(() => {
         live.settled = true;
         const current = liveRuns.get(started.session.id);
-        if (current === live && current.listeners.size === 0) liveRuns.delete(started.session.id);
+        if (current === live) liveRuns.delete(started.session.id);
       });
   };
 
@@ -461,9 +472,10 @@ export const createAgentSessionService = ({
       const state = await scopedGet(context, sessionId);
       listener(snapshotEvent(state, now()));
       const live = liveRuns.get(state.session.id);
-      if (live === undefined || state.session.activeRunId !== live.runId) {
+      if (live === undefined || live.settled || state.session.activeRunId !== live.runId) {
         const refreshed = await scopedGet(context, state.session.id);
-        if (refreshed.session.revision !== state.session.revision) {
+        const refreshedActiveRun = refreshed.runs.find((entry) => entry.id === state.session.activeRunId);
+        if (refreshed.session.revision !== state.session.revision || (refreshedActiveRun !== undefined && refreshedActiveRun.status !== 'RUNNING')) {
           listener(snapshotEvent(refreshed, now()));
         }
         return () => undefined;
