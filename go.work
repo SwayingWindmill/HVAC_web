@@ -3,12 +3,4 @@ go 1.27.4
 use (
 	.
 	./cmd/wecom-alert-adapter
-	./libs/alarmexpr
-	./libs/commandmodel
-	./libs/edgecontrol
-	./libs/grant
-	./libs/identitycontext
-	./libs/observability
-	./libs/telemetryhistorymodel
-	./tools/eg8200-simulator
 )

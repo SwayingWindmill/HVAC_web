@@ -119,8 +119,6 @@ jobs:
             go.sum
             go.work.sum
             cmd/*/go.mod
-            libs/*/go.mod
-            tools/*/go.mod
       - uses: actions/setup-node@v7
         with:
           node-version: "22.22.0"
@@ -169,8 +167,6 @@ jobs:
             go.sum
             go.work.sum
             cmd/*/go.mod
-            libs/*/go.mod
-            tools/*/go.mod
       - uses: actions/setup-node@v7
         with:
           node-version: "22.22.0"
@@ -219,8 +215,6 @@ jobs:
             go.sum
             go.work.sum
             cmd/*/go.mod
-            libs/*/go.mod
-            tools/*/go.mod
       - uses: actions/setup-node@v7
         with:
           node-version: "22.22.0"

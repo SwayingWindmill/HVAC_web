@@ -9,6 +9,7 @@ import test from 'node:test';
 import {
   findComposePortExposureViolations,
   findDebugMarkerViolations,
+  findGoWorkspaceModuleListViolations,
   findHandoffBudgetViolations,
   findJavascriptToolingViolations,
   findPackageScriptViolations,
@@ -268,7 +269,7 @@ test('PR workflow exposes only the stable required checks', async () => {
 });
 
 test('Go code, Go dependencies, lint rules and the Go check scripts select the go unit profile', () => {
-  for (const file of ['.golangci.yml', 'go.mod', 'go.sum', 'go.work', 'libs/edgecontrol/go.mod', 'tools/eg8200-simulator/go.sum', 'cmd/energy-api/main.go', 'scripts/run-go.mjs', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs']) {
+  for (const file of ['.golangci.yml', 'go.mod', 'go.sum', 'go.work', 'cmd/wecom-alert-adapter/go.mod', 'cmd/energy-api/main.go', 'scripts/run-go.mjs', 'scripts/run-go-lint.mjs', 'scripts/run-go-vulnerability-scan.mjs']) {
     const classification = runClassification([file]);
     assert.ok(classification.unitProfiles.includes('go'), file);
     assert.equal(classification.unknown, false, file);
@@ -764,4 +765,7 @@ test('classifier preserves deployment secret check on .gitignore, spatial model 
   const schedCmd = runClassification(['cmd/scheduler/main.go']);
   assert.ok(schedCmd.unitProfiles.includes('analytics'));
   assert.ok(runPlan('unit', schedCmd.unitProfiles).commands.includes('npm run test:analytics'));
+
+  assert.deepEqual(findGoWorkspaceModuleListViolations(['.', 'cmd/wecom-alert-adapter']), []);
+  assert.equal(findGoWorkspaceModuleListViolations(['.', 'cmd/wecom-alert-adapter', 'libs/rogue']).length, 1);
 });
