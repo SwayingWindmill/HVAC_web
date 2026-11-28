@@ -30,12 +30,10 @@ interface ClassificationReport {
   unitWeb: boolean;
   unitDomain: boolean;
   integrations: boolean;
-  browsers: boolean;
   contractProfiles: string[];
   unitProfiles: string[];
   unitDomainProfiles: string[];
   integrationProfiles: string[];
-  browserProfiles: string[];
 }
 
 interface GatePlan {
@@ -79,20 +77,18 @@ test('documentation-only changes keep expensive affected gates idle', () => {
     assert.equal(classification.contracts, false);
     assert.equal(classification.units, false);
     assert.equal(classification.integrations, false);
-    assert.equal(classification.browsers, false);
     assert.equal(classification.broad, false);
     assert.equal(classification.unknown, false);
   }
 });
 
-test('package-lock changes compile and unit test without database or browser fan-out', () => {
+test('package-lock changes compile and unit test without database fan-out', () => {
   const classification = runClassification(['package-lock.json']);
   assert.deepEqual(classification.unitProfiles, ['web']);
   assert.deepEqual(classification.integrationProfiles, []);
-  assert.deepEqual(classification.browserProfiles, []);
 });
 
-test('HVAC Web changes select stable domain profiles on the Linux browser runner', () => {
+test('HVAC Web changes select the web unit profile cleanly', () => {
   for (const file of [
     'apps/hvac-web/src/app/router.ts',
     'scripts/check-design-system.ts',
@@ -104,7 +100,6 @@ test('HVAC Web changes select stable domain profiles on the Linux browser runner
   ]) {
     const classification = runClassification([file]);
     assert.deepEqual(classification.unitProfiles, ['web']);
-    assert.deepEqual(classification.browserProfiles, ['telemetry']);
     assert.equal(classification.integrations, false);
     assert.equal(classification.unknown, false);
   }
@@ -227,13 +222,12 @@ test('package, workflow, and central task-matrix changes fail closed to broad co
     assert.equal(classification.unknown, false);
     assert.ok(classification.unitProfiles.includes('operations-agent'));
     assert.deepEqual(classification.integrationProfiles, []);
-    assert.deepEqual(classification.browserProfiles, []);
   }
   assert.deepEqual(findPackageScriptViolations({ ok: 'a && b && c && d' }), []);
   assert.equal(findPackageScriptViolations({ bad: 'a && b && c && d && e', 's1:old': 'echo' }).length, 2);
 });
 
-test('unknown paths and automation scripts fail closed without database or browser matrices', () => {
+test('unknown paths and automation scripts fail closed without database fan-out', () => {
   for (const file of ['new-platform-area/owner.go', 'scripts/new-automation-wrapper.mjs']) {
     const classification = runClassification([file]);
     assert.equal(classification.broad, true);
@@ -241,7 +235,6 @@ test('unknown paths and automation scripts fail closed without database or brows
     assert.equal(classification.contracts, true);
     assert.equal(classification.units, true);
     assert.equal(classification.integrations, false);
-    assert.equal(classification.browsers, false);
   }
 });
 
@@ -252,6 +245,7 @@ test('integration plans resolve through stable domain profiles', () => {
     'node scripts/run-s2-telemetry-ingest-postgres-tests.mjs',
     'node scripts/run-s2-realtime-postgres-tests.mjs',
     'node scripts/run-s2-telemetry-history-tests.mjs',
+    'npm run mqtt:crl:integration',
     'node --experimental-strip-types scripts/run-s3-command-postgres-tests.ts',
   ]);
 });
@@ -260,7 +254,6 @@ test('Operations Agent changes select dedicated domain gates', () => {
   const classification = runClassification(['services/operations-agent-service/src/index.ts']);
   assert.deepEqual(classification.unitProfiles, ['operations-agent']);
   assert.deepEqual(classification.integrationProfiles, ['operations-agent']);
-  assert.deepEqual(classification.browserProfiles, []);
   assert.equal(classification.broad, false);
 });
 
@@ -499,6 +492,11 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
   ]) {
     const concClassification = runClassification([connFile]);
     assert.deepEqual(concClassification.unitProfiles, ['telemetry']);
+    assert.deepEqual(
+      concClassification.integrationProfiles,
+      connFile.includes('crl') ? ['telemetry'] : [],
+      connFile,
+    );
     assert.equal(concClassification.unknown, false, connFile);
     assert.equal(concClassification.broad, false, connFile);
   }
@@ -683,7 +681,6 @@ test('Python AI solver service changes run analytics unit tests cleanly without 
   assert.deepEqual(classification.contractProfiles, ['core']);
   assert.deepEqual(classification.unitProfiles, ['analytics']);
   assert.deepEqual(classification.integrationProfiles, []);
-  assert.deepEqual(classification.browserProfiles, []);
 
   const analyticsUnitCommands = runPlan('unit', ['analytics']).commands;
   assert.ok(analyticsUnitCommands.includes('npm run ai-solver:test'));

@@ -95,7 +95,7 @@ test('domain matrix exposes stable product domains and standard layers', () => {
     'operations-agent',
   ]);
   for (const profiles of Object.values(domainTaskProfiles) as Array<Record<string, unknown>>) {
-    assert.deepEqual(Object.keys(profiles), ['contracts', 'unit', 'integration', 'browser']);
+    assert.deepEqual(Object.keys(profiles), ['contracts', 'unit', 'integration']);
   }
 });
 
@@ -112,9 +112,6 @@ test('gate profiles use product domains rather than implementation stage numbers
     'telemetry',
     'web',
     'workorder',
-  ]);
-  assert.deepEqual(resolveGateProfileSet('browser', 'all'), [
-    'telemetry',
   ]);
 
   const serialized = JSON.stringify({ gateProfileSets, domainTaskProfiles });
@@ -163,6 +160,7 @@ test('telemetry integration is one domain profile with all durable fixtures', ()
     'node scripts/run-s2-telemetry-ingest-postgres-tests.mjs',
     'node scripts/run-s2-realtime-postgres-tests.mjs',
     'node scripts/run-s2-telemetry-history-tests.mjs',
+    'npm run mqtt:crl:integration',
   ]);
 });
 
@@ -173,11 +171,6 @@ test('domain plans deduplicate shared setup across layers', () => {
     1,
   );
   assert.ok(labels(plan.commands).includes('npm run operations-agent-service:postgres'));
-});
-
-test('command browser layer is explicitly empty', () => {
-  const plan = runDomainPlan('command', ['browser']);
-  assert.deepEqual(plan.commands, []);
 });
 
 test('command unit layer includes formal command-safety verification', () => {

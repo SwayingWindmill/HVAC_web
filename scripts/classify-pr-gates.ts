@@ -11,7 +11,6 @@ interface ClassificationReason {
 
 interface FlagOptions {
   integration?: boolean;
-  browser?: boolean;
 }
 
 const root = resolve(process.cwd());
@@ -77,7 +76,6 @@ const phase1Migrations = new Set(
 const contractProfiles = new Set<string>();
 const unitProfiles = new Set<string>();
 const integrationProfiles = new Set<string>();
-const browserProfiles = new Set<string>();
 const reasons: ClassificationReason[] = [];
 let broad = false;
 let unknown = false;
@@ -93,9 +91,8 @@ const selectBroad = (file: string, reason: string): void => {
   addReason(file, reason);
 };
 
-const selectWeb = (file: string, reason: string, { browser = true }: FlagOptions = {}): void => {
+const selectWeb = (file: string, reason: string): void => {
   add(unitProfiles, ['web']);
-  if (browser) add(browserProfiles, ['telemetry']);
   addReason(file, reason);
 };
 
@@ -113,11 +110,10 @@ const selectRegistry = (file: string, reason: string, { integration = false }: F
   addReason(file, reason);
 };
 
-const selectTelemetry = (file: string, reason: string, { integration = false, browser = false }: FlagOptions = {}): void => {
+const selectTelemetry = (file: string, reason: string, { integration = false }: FlagOptions = {}): void => {
   add(contractProfiles, ['core', 'telemetry']);
   add(unitProfiles, ['telemetry']);
   if (integration) add(integrationProfiles, ['telemetry']);
-  if (browser) add(browserProfiles, ['telemetry']);
   addReason(file, reason);
 };
 
@@ -167,7 +163,7 @@ for (const file of files) {
   match(file === 'package.json' || file === 'tsconfig.scripts.json', () => selectBroad(file, 'root package scripts, dependency declarations or script tsconfig changed'));
   match(file === 'package-lock.json', () => {
     add(unitProfiles, ['web']);
-    addReason(file, 'dependency lock changed; compile and unit checks run, database and browser gates stay selective');
+    addReason(file, 'dependency lock changed; compile and unit checks run, database gates stay selective');
   });
   match(file === 'go.mod' || file === 'go.sum' || file === 'go.work' || file === 'go.work.sum', () => {
     add(unitProfiles, ['platform', 'registry', 'telemetry', 'command', 'alarm', 'workorder', 'analytics']);
@@ -249,7 +245,7 @@ for (const file of files) {
     add(contractProfiles, ['core']);
     if (file.includes('operations-agent') || file.includes('operations-investigation')) {
       selectOperationsAgent(file, 'Operations Investigation contract changed', { integration: false });
-    } else if (file.includes('telemetry') || file.includes('s2-')) selectTelemetry(file, 'telemetry contract changed', { integration: false, browser: true });
+    } else if (file.includes('telemetry') || file.includes('s2-')) selectTelemetry(file, 'telemetry contract changed');
     else if (file.includes('command') || file.includes('s3-')) selectCommand(file, 'command contract changed');
     else if (file.includes('alarm') || file.includes('s4-')) selectAlarm(file, 'Alarm contract changed');
     else if (file.includes('work-order') || file.includes('workorder') || file.includes('s5-')) selectWorkOrder(file, 'Work Order contract changed');
@@ -275,11 +271,7 @@ for (const file of files) {
     selectRegistry(file, 'Connectivity database schema changed', { integration: true });
   });
   match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/telemetryauth/') || file.startsWith('libs/telemetryhistorymodel/') || file.startsWith('modules/connectivity/') || file.startsWith('cmd/connectivity/') || file.startsWith('cmd/telemetry-worker/') || file.startsWith('modules/telemetry/pkg/telemetry/') || file.startsWith('modules/telemetry/pkg/telemetryapi/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('infra/telemetry/'), () => {
-    const lower = file.toLowerCase();
-    selectTelemetry(file, 'telemetry capability changed', {
-      integration: true,
-      browser: lower.includes('live') || lower.includes('hvac-web'),
-    });
+    selectTelemetry(file, 'telemetry capability changed', { integration: true });
   });
   match(file.startsWith('libs/commandauth/') || file.startsWith('libs/commandmodel/') || file.startsWith('modules/command/') || file.startsWith('infra/command/'), () => selectCommand(file, 'command capability changed', { integration: true }));
   match(file === 'modules/connectivity/pkg/connectivity/store.go' || file === 'modules/connectivity/pkg/connectivity/command_route.go' || file === 'cmd/connectivity/command_runtime.go', () => selectCommand(file, 'connectivity command correlation or runtime changed'));
@@ -303,7 +295,7 @@ for (const file of files) {
   match(file.startsWith('modules/iam/') || file.startsWith('cmd/energy-api/'), () => {
     selectPlatform(file, 'shared IAM or Gateway boundary changed');
     selectRegistry(file, 'shared IAM or Gateway boundary changed');
-    selectTelemetry(file, 'shared IAM or Gateway boundary changed', { integration: true, browser: true });
+    selectTelemetry(file, 'shared IAM or Gateway boundary changed', { integration: true });
     selectCommand(file, 'shared IAM or Gateway boundary changed');
   });
   match(
@@ -351,7 +343,7 @@ for (const file of files) {
     scriptMatch(lower.includes('s1-') || lower.includes('registry'), () => selectRegistry(file, 'registry automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('s2-') || lower.includes('telemetry'), () => {
       const integration = lower.includes('realtime') || lower.includes('history') || lower.includes('ingest') || lower.includes('postgres');
-      selectTelemetry(file, 'telemetry automation changed', { integration, browser: lower.includes('browser') || lower.includes('live-client') || lower.includes('hvac-web') });
+      selectTelemetry(file, 'telemetry automation changed', { integration });
     });
     scriptMatch(lower.includes('s3-') || lower.includes('command'), () => selectCommand(file, 'command automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('site-onboarding'), () => {
@@ -363,7 +355,7 @@ for (const file of files) {
     scriptMatch(lower.includes('s5-') || lower.includes('work-order') || lower.includes('workorder'), () => selectWorkOrder(file, 'Work Order automation changed', { integration: lower.includes('postgres') }));
     scriptMatch(lower.includes('analytics'), () => selectAnalytics(file, 'analytics automation changed', { integration: lower.includes('history') || lower.includes('cube') }));
     scriptMatch(lower.includes('operations-agent'), () => selectOperationsAgent(file, 'Operations Agent automation changed', { integration: lower.includes('postgres') || lower.includes('migration') }));
-    scriptMatch(lower.includes('concentrator') || lower.includes('mqtt-broker-acl') || lower.includes('mqtt-broker-crl'), () => selectTelemetry(file, 'Connectivity or MQTT automation changed'));
+    scriptMatch(lower.includes('concentrator') || lower.includes('mqtt-broker-acl') || lower.includes('mqtt-broker-crl'), () => selectTelemetry(file, 'Connectivity or MQTT automation changed', { integration: lower.includes('mqtt-broker-crl') }));
     // The migration freeze and convention checks run in the contracts core; their tests run in every static gate.
     scriptMatch(
       lower.includes('ownership') ||
@@ -423,12 +415,10 @@ const classification = {
   unitWeb,
   unitDomain,
   integrations: integrationProfiles.size > 0,
-  browsers: browserProfiles.size > 0,
   contractProfiles: sorted(contractProfiles),
   unitProfiles: unitProfileList,
   unitDomainProfiles,
   integrationProfiles: sorted(integrationProfiles),
-  browserProfiles: sorted(browserProfiles),
   reasons,
 };
 
@@ -444,12 +434,10 @@ if (process.env.GITHUB_OUTPUT) {
     `unit_web=${classification.unitWeb}`,
     `unit_domain=${classification.unitDomain}`,
     `integrations=${classification.integrations}`,
-    `browsers=${classification.browsers}`,
     `contract_profiles=${classification.contractProfiles.join(',')}`,
     `unit_profiles=${classification.unitProfiles.join(',')}`,
     `unit_domain_profiles=${classification.unitDomainProfiles.join(',')}`,
     `integration_profiles=${classification.integrationProfiles.join(',')}`,
-    `browser_profiles=${classification.browserProfiles.join(',')}`,
   ];
   await appendFile(process.env.GITHUB_OUTPUT, `${outputs.join('\n')}\n`);
 }
@@ -459,7 +447,6 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     ['Contracts', classification.contractProfiles.join(', ') || 'none'],
     ['Unit', classification.unitProfiles.join(', ') || 'none'],
     ['Integration', classification.integrationProfiles.join(', ') || 'none'],
-    ['Browser', classification.browserProfiles.join(', ') || 'none'],
     ['Fail closed', classification.broad ? 'yes' : 'no'],
   ];
   await appendFile(process.env.GITHUB_STEP_SUMMARY, `## PR gate classification\n\n| Gate | Profiles |\n|---|---|\n${rows.map(([gate, profiles]) => `| ${gate} | ${profiles} |`).join('\n')}\n`);
