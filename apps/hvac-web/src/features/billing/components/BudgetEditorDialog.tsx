@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { z } from 'zod';
 import type { MonthlyElectricityBudget } from '@/api/generated/platformGateway.gen';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -117,7 +117,7 @@ export function BudgetEditorDialog({
     },
     onSuccess: async (saved) => {
       await queryClient.invalidateQueries({ queryKey: billingKeys.budgetsRoot(siteId) });
-      toast.success(
+      notifySuccess(
         `已保存 ${formatBillingMonthLabel(saved.billingMonth)} 电费预算（¥${formatDecimal(saved.budgetAmountCny, 2)}）`,
       );
       onOpenChange(false);

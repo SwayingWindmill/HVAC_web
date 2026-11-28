@@ -3,7 +3,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2 } from 'lucide-react';
 import { Controller, useFieldArray, useForm } from 'react-hook-form';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { z } from 'zod';
 import type {
   OperatingExceptionKind,
@@ -160,7 +160,7 @@ export function ExceptionRequestDialog({
       ),
     onSuccess: (created) => {
       void queryClient.invalidateQueries({ queryKey: scheduleKeys.exceptionsRoot(siteId) });
-      toast.success(
+      notifySuccess(
         created.status === 'APPROVED' ? '已登记并立即生效运行例外' : '已提交运行例外申请，等待审批',
       );
       onOpenChange(false);

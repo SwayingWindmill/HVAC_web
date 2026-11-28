@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Activity, ChevronRight, Copy, Download, FileText, RefreshCw, ShieldCheck } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -169,10 +169,10 @@ export function GatewayLogPullSection({
         csrfToken,
       ),
     onSuccess: (res) => {
-      toast.success(`已安全拉取 ${res.returnedBytes} B 脱敏日志（脱敏 ${res.redactedCount} 处）`);
+      notifySuccess(`已安全拉取 ${res.returnedBytes} B 脱敏日志（脱敏 ${res.redactedCount} 处）`);
     },
     onError: (err) => {
-      toast.error(describeRemoteDiagError(err, '端侧日志拉取失败，请检查权限或网关在线状态'));
+      notifyError(describeRemoteDiagError(err, '端侧日志拉取失败，请检查权限或网关在线状态'));
     },
   });
 
@@ -258,7 +258,7 @@ export function GatewayLogPullSection({
                     size="sm"
                     onClick={() => {
                       void navigator.clipboard.writeText(bundle.content);
-                      toast.success('脱敏日志片段已复制');
+                      notifySuccess('脱敏日志片段已复制');
                     }}
                   >
                     <Copy data-icon="inline-start" aria-hidden="true" />

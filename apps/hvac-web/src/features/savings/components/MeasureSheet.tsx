@@ -3,7 +3,7 @@ import { getRouteApi, Link } from '@tanstack/react-router';
 import { CircleCheck, CircleDashed, CircleX, Flag, Link2, RefreshCcw, Rocket } from 'lucide-react';
 import { useState } from 'react';
 import { Bar, BarChart, CartesianGrid, Cell, ReferenceLine, XAxis, YAxis } from 'recharts';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess, notifyWarning } from '@/lib/toast';
 import { FactTile } from '@/blocks/fact-list';
 import { InfoTip } from '@/components/info-tip';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -235,9 +235,9 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
     onSuccess: (updated) => {
       queryClient.setQueryData(savingsKeys.measure(site.id, updated.id), updated);
       void queryClient.invalidateQueries({ queryKey: savingsKeys.all(site.id) });
-      if (action === 'end') toast.success('措施已结束，此后不再统计');
-      else if (updated.baseline?.trusted) toast.success('对比基线已算出，检验通过');
-      else toast.warning('对比基线不可靠，暂不统计');
+      if (action === 'end') notifySuccess('措施已结束，此后不再统计');
+      else if (updated.baseline?.trusted) notifySuccess('对比基线已算出，检验通过');
+      else notifyWarning('对比基线不可靠，暂不统计');
       setAction(null);
     },
   });
@@ -290,7 +290,7 @@ export function MeasureSheet({ measureId, names, canManage, onClose }: {
   const dialog = action ? dialogs[action] : null;
   const rate = measure ? savingsRate(measure.totals) : null;
   const copyLink = () => {
-    void navigator.clipboard.writeText(window.location.href).then(() => toast.success('链接已复制'), () => toast.error('无法复制链接'));
+    void navigator.clipboard.writeText(window.location.href).then(() => notifySuccess('链接已复制'), () => notifyError('无法复制链接'));
   };
 
   return (

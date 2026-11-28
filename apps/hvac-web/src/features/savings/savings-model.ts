@@ -1,4 +1,4 @@
-import { wallTime } from '../energy-analysis/consumption/model.ts';
+import { wallTime } from '../../lib/site-time.ts';
 
 // Savings verification (ADR 0021): a Site's energy conservation measures, each with a baseline
 // frozen at implementation and the days verified against it. mv-service owns all of it; the page

@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Radio, RefreshCw, ShieldAlert } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import type {
   ConcentratorEidSlot,
   ConcentratorParamsPatch,
@@ -169,7 +169,7 @@ export function ConcentratorsTab({
                 }
               : current,
         );
-        toast.success(
+        notifySuccess(
           `网关当前离线，参数变更已暂存至配置影子（期望修订 v${result.desiredRevision ?? '?'}），待重连后自动下发`,
         );
         return;
@@ -196,7 +196,7 @@ export function ConcentratorsTab({
       void queryClient.invalidateQueries({
         queryKey: gatewayConcentratorEidsKey(selectedGatewayId, nextUnitId),
       });
-      toast.success(`已将 ${result.writtenCount} 项参数写入集中器 Flash`);
+      notifySuccess(`已将 ${result.writtenCount} 项参数写入集中器 Flash`);
     },
   });
 
@@ -236,7 +236,7 @@ export function ConcentratorsTab({
                 }
               : current,
         );
-        toast.success(
+        notifySuccess(
           `网关当前离线，EID 映射变更已暂存至配置影子（期望修订 v${result.desiredRevision ?? '?'}），待重连后自动下发`,
         );
         return;
@@ -258,7 +258,7 @@ export function ConcentratorsTab({
       void queryClient.invalidateQueries({
         queryKey: gatewayConcentratorEidsKey(selectedGatewayId, parsedUnitId),
       });
-      toast.success(
+      notifySuccess(
         `已分 ${result.chunkCount} 段更新 ${result.updatedSlots} 个槽位并写入 Flash`,
       );
     },

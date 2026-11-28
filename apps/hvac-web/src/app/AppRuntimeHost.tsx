@@ -16,7 +16,8 @@ import { FocusHeading } from './FocusHeading';
 import { ShellRuntimeProvider } from './ShellRuntimeContext';
 import { createBrowserShellEnvironment, createShellRuntime, type ShellSnapshot } from './shell-runtime';
 import { shouldInvalidateRouter } from './shell-policy';
-import { createHvacRouter, preloadPathChunks } from './router';
+import { createHvacRouter } from './router';
+import { preloadPathChunks } from './router-paths';
 import type { RuntimeConfig, RuntimeConfigFailure } from './runtime-config';
 
 const WEB_SHELL_MARKER = 'AUTHORITATIVE WEB SHELL';

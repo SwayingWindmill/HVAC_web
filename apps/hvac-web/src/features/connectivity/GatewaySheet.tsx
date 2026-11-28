@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Copy, KeyRound, Link2, RefreshCw, RotateCw, ShieldCheck, ShieldX } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import type {
   Device,
   GatewayCredentialList,
@@ -318,7 +318,7 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite, onWorkingChange
     onSuccess: (_result, wasStopped) => {
       void queryClient.invalidateQueries({ queryKey: gatewayCredentialKey(gateway.id) });
       void queryClient.invalidateQueries({ queryKey: gatewayCredentialListKey(gateway.id) });
-      toast.success(wasStopped ? '网关已重新启用并生成接入码' : '已生成轮换接入码');
+      notifySuccess(wasStopped ? '网关已重新启用并生成接入码' : '已生成轮换接入码');
     },
   });
   const code = useMutation({
@@ -341,7 +341,7 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite, onWorkingChange
       ));
       void queryClient.invalidateQueries({ queryKey: gatewayCredentialKey(gateway.id) });
       void queryClient.invalidateQueries({ queryKey: gatewayCredentialListKey(gateway.id) });
-      toast.success('证书已吊销');
+      notifySuccess('证书已吊销');
     },
   });
   const stop = useMutation({
@@ -352,7 +352,7 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite, onWorkingChange
       setConfirmingStop(false);
       queryClient.setQueryData(gatewayCredentialKey(gateway.id), result);
       void queryClient.invalidateQueries({ queryKey: gatewayCredentialListKey(gateway.id) });
-      toast.success('网关已停用');
+      notifySuccess('网关已停用');
     },
   });
 
@@ -370,7 +370,7 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite, onWorkingChange
     void credentials.refetch();
   };
   const copyLink = () => {
-    void navigator.clipboard.writeText(window.location.href).then(() => toast.success('链接已复制'), () => toast.error('无法复制链接'));
+    void navigator.clipboard.writeText(window.location.href).then(() => notifySuccess('链接已复制'), () => notifyError('无法复制链接'));
   };
 
   return (
@@ -479,12 +479,12 @@ function GatewayDetail({ gateway, siteName, csrfToken, canWrite, onWorkingChange
                 className="shrink-0"
                 onClick={() => {
                   if (!navigator.clipboard?.writeText) {
-                    toast.error('复制失败，请手动选中复制');
+                    notifyError('复制失败，请手动选中复制');
                     return;
                   }
                   void navigator.clipboard.writeText(activeEnrollmentCode.enrollmentCode).then(
-                    () => toast.success('一次性接入码已复制'),
-                    () => toast.error('复制失败，请手动选中复制'),
+                    () => notifySuccess('一次性接入码已复制'),
+                    () => notifyError('复制失败，请手动选中复制'),
                   );
                 }}
               >

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import type { Site } from '@/api/generated/platformGateway.gen';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -146,12 +146,12 @@ export function AlarmTemplateEditorDialog({
       return template.templateId;
     },
     onSuccess: (tid) => {
-      toast.success(mode === 'create' ? '已新建基准规则模板并发布 v1' : '已发布新版本基准模板');
+      notifySuccess(mode === 'create' ? '已新建基准规则模板并发布 v1' : '已发布新版本基准模板');
       void queryClient.invalidateQueries({ queryKey: alarmTemplateKeys.all });
       onSaved(tid);
       onClose();
     },
-    onError: (err) => toast.error(describeAlarmTemplateError(err, '保存模板失败')),
+    onError: (err) => notifyError(describeAlarmTemplateError(err, '保存模板失败')),
   });
 
   const toggleSite = (siteId: string) => {

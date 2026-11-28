@@ -1,5 +1,5 @@
 import { Link2, Terminal } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
@@ -137,7 +137,7 @@ export function CommandSheet({ command, labels, timeZone, actions, onClose }: {
 }) {
   const summary = command ? commandSummary(command, labels) : null;
   const copyLink = () => {
-    void navigator.clipboard.writeText(window.location.href).then(() => toast.success('链接已复制'), () => toast.error('无法复制链接'));
+    void navigator.clipboard.writeText(window.location.href).then(() => notifySuccess('链接已复制'), () => notifyError('无法复制链接'));
   };
   return (
     <Sheet open={Boolean(command)} onOpenChange={(open) => { if (!open) onClose(); }}>

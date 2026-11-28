@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import { Alert, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -109,7 +109,7 @@ function ShutdownForm({ siteId, csrfToken, state, subject, onBusyChange, onClose
       queryClient.setQueryData(controlStateKeys.site(siteId), response.siteControlState);
       void queryClient.invalidateQueries({ queryKey: commandKeys.site(siteId) });
       const done = subject.kind === 'unit' ? `已中止${subject.unitName}` : MODE_COPY[siteMode].done;
-      toast.success(`${done}：${outcome(response)}`);
+      notifySuccess(`${done}：${outcome(response)}`);
       onClose();
     },
     onError: (error) => {
@@ -125,7 +125,7 @@ function ShutdownForm({ siteId, csrfToken, state, subject, onBusyChange, onClose
       if (error instanceof CommandRequestError && error.code === 'REGISTRY_REVISION_CONFLICT') {
         void queryClient.invalidateQueries({ queryKey: controlStateKeys.site(siteId) });
       }
-      toast.error(error instanceof CommandRequestError ? error.message : '停机请求没有送达，请稍后再试');
+      notifyError(error instanceof CommandRequestError ? error.message : '停机请求没有送达，请稍后再试');
       onClose();
     },
   });

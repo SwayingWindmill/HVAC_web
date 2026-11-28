@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { formatDecimal } from '@/lib/operator-format';
 import { useYearLive, yearSnapshotsQuery } from '../query';
-import { wallTime } from '../../energy-analysis/consumption/model.ts';
+import { wallTime } from '@/lib/site-time';
 import { yearMonths, yearRows, yearTotals, type YearRow } from '../report-model';
 import { EnergyTrend, energyText, Figure, FigureGrid, ReportSheet, Section } from './ReportParts';
 

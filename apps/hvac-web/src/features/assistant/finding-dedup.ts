@@ -1,5 +1,5 @@
 import { formatTelemetryUnit } from '../../domain/centralPlantTelemetry.ts';
-import { normalizeAssistantMarkdown } from './answer-markdown.ts';
+import { normalizeAssistantMarkdown } from '../../lib/answer-markdown.ts';
 
 export interface KeyFigureItem {
   readonly label: string;

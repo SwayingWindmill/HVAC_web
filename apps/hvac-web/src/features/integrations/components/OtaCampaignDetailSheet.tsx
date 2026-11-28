@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Pause, Play, RefreshCw, RotateCcw } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import type { OTACampaignDetail, Site } from '@/api/generated/platformGateway.gen';
 import { FactTile } from '@/blocks/fact-list';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -235,7 +235,7 @@ export function OtaCampaignDetailSheet({
         resume: '已恢复发布任务',
         rollback: '已下发紧急回滚指令',
       };
-      toast.success(labels[variables.kind]);
+      notifySuccess(labels[variables.kind]);
       setPendingDialog(null);
       setActionReason('');
       setRollbackConfirmed(false);

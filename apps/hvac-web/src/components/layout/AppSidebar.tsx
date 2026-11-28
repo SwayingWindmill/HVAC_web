@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation, useRouter } from '@tanstack/react-router';
 import { ChevronDown, PanelLeft } from 'lucide-react';
-import { preloadPathChunks } from '@/app/router';
+import { preloadPathChunks } from '@/app/router-paths';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {

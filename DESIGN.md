@@ -220,20 +220,20 @@
 | ToggleGroup | `ui/toggle-group` | 分段控件，用于面板内筛选同一份数据 |
 | 指标页签 | `components/metric-tabs-chart-card` | 标签 12 + 数值 24，选中项底边 2px 靛蓝 |
 | Badge / Status / DeltaBadge | `ui/badge`、`ui/status`、`ui/delta-badge` | soft 变体；严重度带形状；变化徽章按“好坏”着色，不按“升降”着色 |
-| Tooltip / HoverCard | `ui/tooltip`、`ui/hover-card` | 简单提示用反色样式；算法和公式说明放在 ⓘ 图标里 |
+| Tooltip | `ui/tooltip` | 简单提示用反色样式；算法和公式说明放在 ⓘ 图标里 |
 | Dialog / AlertDialog / Sheet | `ui/dialog`、`ui/alert-dialog`、`ui/sheet` | 对象详情一律用 Sheet，由 `?inspect=` 打开；危险操作需要勾选确认后才能提交 |
 | Popover / DropdownMenu | `ui/popover`、`ui/dropdown-menu` | 筛选改动先暂存，点“应用”才生效；危险菜单项放最后，红字并带省略号 |
 | Calendar（日期选择） | `ui/calendar` + `ui/popover` | 预设放在左侧；不能选未来日期；按站点时区 |
 | Command | `ui/command` | Ctrl K；范围限当前站点；结果按“页面 → 对象 → 操作”分组 |
 | Sidebar | `ui/sidebar` | `collapsible="icon"`；计数徽章只用于需要人处理的事项 |
-| Breadcrumb / 页头 | `ui/breadcrumb`、`blocks/page-header` | 面包屑只在管理类二级页面使用 |
+| 页头 | `blocks/page-header` | 展示页面标题、说明与右侧操作区 |
 | Data Table | `components/data-table`（tablecn 来源） | 行高 44（密集 36）；筛选、排序、分页、列显示都写进 URL；选中时出现批量操作条 |
 | Pagination | `components/data-table/data-table-pagination` | 显示“共 N 条”、每页条数、页码 |
 | Chart | `ui/chart`、`ui/composed-chart`、`ui/heatmap-chart`、`ui/sparkline`、`ui/bar-list`、`ui/distribution-bar` | 一张图只用一个单位；不做双 Y 轴；缺数据用斜线占位；同时提供表格视图 |
 | Metric Card | `ui/kpi-card`、`ui/metric-value` | 五种状态：正常、无可比数据、缺数据、加载、出错 |
 | Field（表单） | `ui/field` + react-hook-form + zod | 标签在上；错误信息替换说明文字；失焦时校验 |
 | Toast | `ui/sonner` | 成功提示 4 秒后消失；错误提示不自动消失，并提供重试 |
-| Alert / Empty / Skeleton / Spinner / Progress | 同名组件 | 空状态区分“筛选后为空”和“本来就没有” |
+| Alert / Empty / Skeleton / Spinner | 同名组件 | 空状态区分“筛选后为空”和“本来就没有” |
 
 ### 4.2 状态与结构规则
 
@@ -248,7 +248,7 @@
 
 | 组件 | 注册表 | 用途 | 为什么选它 |
 |---|---|---|---|
-| Filters | `@reui/filters` | 列表顶部的筛选条，形式为“字段 · 条件 · 值”胶囊 | 现有 `data-table-filter-list` 偏高级筛选；列表顶部需要更紧凑、一眼能读出当前条件的形式 |
+| Filters | `@reui/filters` | 列表顶部的筛选条，形式为“字段 · 条件 · 值”胶囊 | 各列表顶部若需更紧凑、一眼读出当前条件的胶囊筛选条，再按需从注册表安装 |
 | Choicebox | `@kibo-ui/choicebox` | 带说明的卡片单选（例如节能措施的测量边界） | RadioGroup 放不下说明文字 |
 | Combobox | `@diceui/combobox` | 设备这类长列表的搜索选择 | 也可以用现有 `command` + `popover` 自己组合；diceui 自带分组和虚拟滚动 |
 

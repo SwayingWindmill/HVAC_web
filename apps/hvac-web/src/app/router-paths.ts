@@ -1,3 +1,5 @@
+import type { AnyRouter } from '@tanstack/react-router';
+
 const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 export function isUUIDv7(value: string): boolean {
@@ -14,4 +16,16 @@ export function siteIdFromLocation(search: string): string | undefined {
 export function workspaceLocationForSite(pathname: string, siteId: string): string {
   if (!isUUIDv7(siteId)) throw new Error('站点标识格式无效。');
   return `${pathname}?site=${siteId}`;
+}
+
+/** Preload route code chunks for a pathname without running route loaders or guards. */
+export function preloadPathChunks(
+  router: Pick<AnyRouter, 'getMatchedRoutes' | 'loadRouteChunk'>,
+  targetHrefOrPath: string,
+): void {
+  const pathname = targetHrefOrPath.split(/[?#]/)[0] || '/';
+  const [matchedRoutes] = router.getMatchedRoutes(pathname);
+  for (const route of matchedRoutes) {
+    void Promise.resolve(router.loadRouteChunk(route)).catch(() => undefined);
+  }
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, Copy, RefreshCw } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import type {
   GatewayCapturedPacket,
   GatewayQuarantineRecord,
@@ -139,12 +139,12 @@ function formatRemainingCountdown(expiresAt: string, nowMs: number): string {
 
 function copyPayloadText(value: string, successText: string) {
   if (!navigator.clipboard) {
-    toast.error('当前环境不支持复制到剪贴板');
+    notifyError('当前环境不支持复制到剪贴板');
     return;
   }
   void navigator.clipboard.writeText(value).then(
-    () => toast.success(successText),
-    () => toast.error('无法复制内容，请手动选中后复制'),
+    () => notifySuccess(successText),
+    () => notifyError('无法复制内容，请手动选中后复制'),
   );
 }
 
@@ -200,7 +200,7 @@ export function GatewayPacketCaptureSection({
       gatewayDiagnosticsApi.startPacketCapture(gatewayId, seconds, csrfToken),
     onSuccess: (snapshot) => {
       queryClient.setQueryData(gatewayPacketCaptureKey(gatewayId), snapshot);
-      toast.success('已开启通信抓包');
+      notifySuccess('已开启通信抓包');
     },
   });
 
@@ -208,7 +208,7 @@ export function GatewayPacketCaptureSection({
     mutationFn: () => gatewayDiagnosticsApi.stopPacketCapture(gatewayId, csrfToken),
     onSuccess: (snapshot) => {
       queryClient.setQueryData(gatewayPacketCaptureKey(gatewayId), snapshot);
-      toast.success('已停止通信抓包');
+      notifySuccess('已停止通信抓包');
     },
   });
 

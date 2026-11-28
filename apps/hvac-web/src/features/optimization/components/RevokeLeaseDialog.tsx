@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useId, useState } from 'react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -98,7 +98,7 @@ function RevokeLeaseForm({
       queryClient.setQueryData(autoControlKeys.lease(siteId), next);
       void queryClient.invalidateQueries({ queryKey: autoControlKeys.lease(siteId) });
       void queryClient.invalidateQueries({ queryKey: autoControlKeys.monitors(siteId) });
-      toast.success('已撤回自动控制租约，恢复为人工确认下发');
+      notifySuccess('已撤回自动控制租约，恢复为人工确认下发');
       onClose();
     },
     onError: (error) => {

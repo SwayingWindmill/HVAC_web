@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { ChevronLeft, ChevronRight, Pencil, Plus } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import type { OperatingExceptionStatus } from '@/api/generated/platformGateway.gen';
 import { PageHeader, PageMeta } from '@/blocks/page-header';
 import { StateCard } from '@/blocks/state/state-card';
@@ -12,7 +12,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { wallTime } from '@/features/energy-analysis/consumption/model';
+import { wallTime } from '@/lib/site-time';
 import { siteAssetModelQuery } from '@/api/site-asset-model';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
@@ -514,7 +514,7 @@ export function SchedulesWorkspace() {
           sourceReferences={workOrderDraft.sourceReferences}
           onCreated={() => {
             void queryClient.invalidateQueries({ queryKey: workOrderKeys.all(site.id) });
-            toast.success('已创建计划外开机核查工单');
+            notifySuccess('已创建计划外开机核查工单');
           }}
         />
       ) : null}

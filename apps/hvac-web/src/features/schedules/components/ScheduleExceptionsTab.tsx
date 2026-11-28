@@ -3,7 +3,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { CalendarOff, Check, ChevronLeft, ChevronRight, Undo2, X } from 'lucide-react';
 import { useForm } from 'react-hook-form';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import { z } from 'zod';
 import type {
   OperatingException,
@@ -156,7 +156,7 @@ export function ScheduleExceptionsTab({
       ),
     onSuccess: (_updated, variables) => {
       void queryClient.invalidateQueries({ queryKey: scheduleKeys.exceptionsRoot(siteId) });
-      toast.success(
+      notifySuccess(
         variables.decision === 'APPROVE'
           ? '已审批通过，运行例外现已生效'
           : variables.decision === 'REJECT'
@@ -171,7 +171,7 @@ export function ScheduleExceptionsTab({
       if (pendingDecision) {
         setDecisionError(msg);
       } else {
-        toast.error(msg, {
+        notifyError(msg, {
           duration: Infinity,
           action: {
             label: '重试',

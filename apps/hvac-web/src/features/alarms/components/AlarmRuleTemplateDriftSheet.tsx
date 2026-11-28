@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { RotateCcw } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -52,13 +52,13 @@ export function AlarmRuleTemplateDriftSheet({
       ),
     onSuccess: () => {
       setPendingReset(null);
-      toast.success('已将该规则恢复为模板默认值并同步版本记录');
+      notifySuccess('已将该规则恢复为模板默认值并同步版本记录');
       void queryClient.invalidateQueries({ queryKey: alarmTemplateKeys.siteDrift(siteId) });
       onResetCompleted();
     },
     onError: (err) => {
       setPendingReset(null);
-      toast.error(describeAlarmTemplateError(err, '恢复模板默认值失败'));
+      notifyError(describeAlarmTemplateError(err, '恢复模板默认值失败'));
     },
   });
 

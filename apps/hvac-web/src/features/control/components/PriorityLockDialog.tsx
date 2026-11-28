@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ShieldAlert, Unlock } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -146,7 +146,7 @@ function PriorityLockForm({
     onMutate: () => onBusyChange(true),
     onSettled: () => onBusyChange(false),
     onSuccess: (saved) => {
-      toast.success(`已为 ${target.assetName} 设置${DEVICE_PRIORITY_TIER_LABEL[saved.lockedPriority]}锁定`);
+      notifySuccess(`已为 ${target.assetName} 设置${DEVICE_PRIORITY_TIER_LABEL[saved.lockedPriority]}锁定`);
       void refreshState();
       onClose();
     },
@@ -161,7 +161,7 @@ function PriorityLockForm({
     onMutate: () => onBusyChange(true),
     onSettled: () => onBusyChange(false),
     onSuccess: () => {
-      toast.success(`已解除 ${target.assetName} 的优先级锁定`);
+      notifySuccess(`已解除 ${target.assetName} 的优先级锁定`);
       void refreshState();
       onClose();
     },

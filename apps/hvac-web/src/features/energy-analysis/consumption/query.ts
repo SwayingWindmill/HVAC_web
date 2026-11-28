@@ -2,10 +2,10 @@ import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
 import { createPlatformGatewayClient, type EnergySeriesQuery } from '../../../api/generated/platformGateway.gen';
+import { energyQueryNow } from '../../../lib/site-time';
 import {
   comparePeriods,
   completedComparisonTotals,
-  energyQueryNow,
   energyRetryDelay,
   hourlyHeatmap,
   periodWindow,

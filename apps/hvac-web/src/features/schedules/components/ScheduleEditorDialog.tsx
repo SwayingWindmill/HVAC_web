@@ -3,7 +3,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Copy, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { Controller, useFieldArray, useForm } from 'react-hook-form';
-import { toast } from 'sonner';
+import { notifyInfo, notifySuccess } from '@/lib/toast';
 import { z } from 'zod';
 import type { OperatingSchedule, OperatingScheduleSlotInput } from '@/api/generated/platformGateway.gen';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -162,7 +162,7 @@ export function ScheduleEditorDialog({
         location: null,
       });
       void queryClient.invalidateQueries({ queryKey: scheduleKeys.schedule(siteId) });
-      toast.success('已保存周运行计划');
+      notifySuccess('已保存周运行计划');
       onOpenChange(false);
     },
     onError: (error) => {
@@ -200,7 +200,7 @@ export function ScheduleEditorDialog({
     }));
     rowsField.replace([...copied, ...keptWeekend]);
     setSlotError(null);
-    toast.info('已将该供冷时段复制到周一至周五');
+    notifyInfo('已将该供冷时段复制到周一至周五');
   };
 
   const handleReloadConflict = async () => {
@@ -209,7 +209,7 @@ export function ScheduleEditorDialog({
       form.reset(toDefaultValues(latest));
       setConflictDetected(false);
       setSlotError(null);
-      toast.info('已加载最新周运行计划，请核对后重新保存');
+      notifyInfo('已加载最新周运行计划，请核对后重新保存');
     }
   };
 

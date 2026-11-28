@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, CheckCircle2, Rocket, ShieldCheck } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import type { Site } from '@/api/generated/platformGateway.gen';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -63,10 +63,10 @@ export function AlarmTemplateRolloutDialog({
   const bindSitesMutation = useMutation({
     mutationFn: () => alarmTemplatesApi.updateBoundSites(template!.templateId, selectedSiteIds, csrfToken),
     onSuccess: () => {
-      toast.success('模板绑定站点范围已保存');
+      notifySuccess('模板绑定站点范围已保存');
       void queryClient.invalidateQueries({ queryKey: alarmTemplateKeys.all });
     },
-    onError: (err) => toast.error(describeAlarmTemplateError(err, '保存绑定站点失败')),
+    onError: (err) => notifyError(describeAlarmTemplateError(err, '保存绑定站点失败')),
   });
 
   const rolloutMutation = useMutation({
@@ -78,13 +78,13 @@ export function AlarmTemplateRolloutDialog({
       ),
     onSuccess: (res) => {
       setRolloutResult(res);
-      toast.success(`已完成下发：同步 ${res.totalAppliedSites} 个站点，保留 ${res.totalPreservedOverrides} 处站点覆写`);
+      notifySuccess(`已完成下发：同步 ${res.totalAppliedSites} 个站点，保留 ${res.totalPreservedOverrides} 处站点覆写`);
       void queryClient.invalidateQueries({ queryKey: alarmTemplateKeys.all });
       for (const sid of selectedSiteIds) {
         void queryClient.invalidateQueries({ queryKey: ['alarms', sid, 'rules'] });
       }
     },
-    onError: (err) => toast.error(describeAlarmTemplateError(err, '受控下发失败')),
+    onError: (err) => notifyError(describeAlarmTemplateError(err, '受控下发失败')),
   });
 
   const toggleSite = (siteId: string) => {

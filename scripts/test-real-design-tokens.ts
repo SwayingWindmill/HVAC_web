@@ -213,13 +213,32 @@ test('design system check passes on the repository and rejects violations across
     writeFileSync(join(sandbox, 'apps/hvac-web/src/routes/__root.tsx'), 'import { createRootRoute } from "@tanstack/react-router";\nexport const Route = createRootRoute({});\n');
     writeFileSync(join(sandbox, 'apps/hvac-web/src/routes/index.tsx'), 'import { createFileRoute } from "@tanstack/react-router";\nexport const Route = createFileRoute("/")({});\n');
     writeFileSync(join(sandbox, 'apps/hvac-web/src/routeTree.gen.ts'), '// stale route tree\n');
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/BadSonner.tsx'),
+      `import { toast } from 'sonner';\nexport const badToast = () => toast.success('ok');\n`,
+    );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/CycleA.ts'),
+      `import { b } from './CycleB';\nexport const a = b;\n`,
+    );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/CycleB.ts'),
+      `import { a } from './CycleA';\nexport const b = a;\n`,
+    );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/BadLayerFeature.ts'),
+      `import { Route } from '@/routes/index';\nexport const leakedRoute = Route;\n`,
+    );
 
     const { errors } = await validateDesignSystem(sandbox);
     assert.equal(errors.some((entry: string) => entry.includes('AllowedClient.tsx')), false);
     assert.equal(errors.some((entry: string) => entry.includes('AllowedTransition.tsx')), false);
     assert.equal(errors.some((entry: string) => entry.includes('GoodWave2Patterns.tsx')), false);
-    assert.equal(errors.some((entry: string) => entry.includes('apps/hvac-web/src/lib/parsers.ts')), false);
-    assert.ok(errors.some((entry: string) => entry.includes('BadNuqs.tsx:1 avoid `nuqs` outside DataTable filter internals')));
+    assert.ok(errors.some((entry: string) => entry.includes('apps/hvac-web/src/lib/parsers.ts:1 avoid `nuqs`')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadNuqs.tsx:1 avoid `nuqs`')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadSonner.tsx:1 avoid importing `sonner` directly')));
+    assert.ok(errors.some((entry: string) => entry.includes('Web circular dependency detected:')));
+    assert.ok(errors.some((entry: string) => entry.includes('features/demo/BadLayerFeature.ts:1 (feature layer) must not import from routes/index.tsx')));
     assert.ok(errors.some((entry: string) => entry.includes('TooLongNew.tsx has 22 lines (limit 20)')));
     assert.ok(errors.some((entry: string) => entry.includes('TooLongLegacy.tsx grew from 22 to 24 lines')));
     assert.ok(errors.some((entry: string) => entry.includes('stale entry for apps/hvac-web/src/features/demo/ShrunkLegacy.tsx (1 <= 20)')));

@@ -4,7 +4,7 @@ import type {
   DeviceHistoryStateAggregate,
 } from '../../../api/generated/s2Telemetry.gen.ts';
 import { formatTelemetryUnit, telemetryPointDefinition } from '../../../domain/centralPlantTelemetry.ts';
-import { siteMidnight, wallTime } from '../../energy-analysis/consumption/model.ts';
+import { siteMidnight, wallTime } from '../../../lib/site-time.ts';
 import { buildTimeSlots, type TimeSlot, type TrendGranularity } from './timeline.ts';
 
 export const MAX_TREND_POINTS = 8;

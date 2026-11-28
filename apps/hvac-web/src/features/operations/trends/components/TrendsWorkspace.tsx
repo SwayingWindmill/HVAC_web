@@ -15,7 +15,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { AlarmRequestError } from '@/features/alarms/alarm-api';
 import { PRIORITY_BY_SEVERITY } from '@/features/alarms/components/AlarmDetailPane';
 import { CommandRequestError } from '@/features/control/command-api';
-import { siteMidnight, wallTime } from '@/features/energy-analysis/consumption/model';
+import { siteMidnight, wallTime } from '@/lib/site-time';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { useNow } from '@/hooks/use-now';

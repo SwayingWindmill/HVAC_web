@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Lock, LockOpen } from 'lucide-react';
 import { useId, useState, type ReactNode } from 'react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -164,7 +164,7 @@ function ModeForm({ siteId, csrfToken, state, initial, commands, describe, onBus
     onSuccess: ({ cancelledCommandIds, ...next }) => {
       queryClient.setQueryData(controlStateKeys.site(siteId), next);
       void queryClient.invalidateQueries({ queryKey: commandKeys.site(siteId) });
-      toast.success(`已切换到${MODE_PRESENTATION[next.controlMode].label}${cancelledCommandIds.length > 0 ? `，撤回了 ${cancelledCommandIds.length} 条指令` : ''}`);
+      notifySuccess(`已切换到${MODE_PRESENTATION[next.controlMode].label}${cancelledCommandIds.length > 0 ? `，撤回了 ${cancelledCommandIds.length} 条指令` : ''}`);
       onClose();
     },
     onError: (error) => {
@@ -175,7 +175,7 @@ function ModeForm({ siteId, csrfToken, state, initial, commands, describe, onBus
       if (error instanceof CommandRequestError && error.code === 'REGISTRY_REVISION_CONFLICT') {
         void queryClient.invalidateQueries({ queryKey: controlStateKeys.site(siteId) });
       }
-      toast.error(error instanceof CommandRequestError ? error.message : '没有保存成功，请稍后再试');
+      notifyError(error instanceof CommandRequestError ? error.message : '没有保存成功，请稍后再试');
       onClose();
     },
   });
@@ -312,14 +312,14 @@ function LockForm({ siteId, csrfToken, subject, myId, timeZone, onBusyChange, on
     onSuccess: ({ cancelledCommandIds }) => {
       void queryClient.invalidateQueries({ queryKey: controlStateKeys.site(siteId) });
       void queryClient.invalidateQueries({ queryKey: commandKeys.site(siteId) });
-      toast.success(mode === 'UNLOCKED' ? `已解除 ${subject.assetName} 的锁定` : `已${LOCK_PRESENTATION[mode].label} ${subject.assetName}${cancelledCommandIds.length > 0 ? `，撤回了 ${cancelledCommandIds.length} 条指令` : ''}`);
+      notifySuccess(mode === 'UNLOCKED' ? `已解除 ${subject.assetName} 的锁定` : `已${LOCK_PRESENTATION[mode].label} ${subject.assetName}${cancelledCommandIds.length > 0 ? `，撤回了 ${cancelledCommandIds.length} 条指令` : ''}`);
       onClose();
     },
     onError: (error) => {
       if (error instanceof CommandRequestError && error.code === 'REGISTRY_REVISION_CONFLICT') {
         void queryClient.invalidateQueries({ queryKey: controlStateKeys.site(siteId) });
       }
-      toast.error(error instanceof CommandRequestError ? error.message : '没有保存成功，请稍后再试');
+      notifyError(error instanceof CommandRequestError ? error.message : '没有保存成功，请稍后再试');
       onClose();
     },
   });

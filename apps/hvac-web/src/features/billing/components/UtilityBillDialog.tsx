@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm, useWatch } from 'react-hook-form';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import type { UtilityBill } from '@/api/generated/platformGateway.gen';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -130,7 +130,7 @@ export function UtilityBillDialog({
     },
     onSuccess: async (saved) => {
       await queryClient.invalidateQueries({ queryKey: billingKeys.billsRoot(siteId) });
-      toast.success(
+      notifySuccess(
         editingBill
           ? `已更新 ${formatBillingMonthLabel(saved.billingMonth)} 结算电费单草稿`
           : `已录入 ${formatBillingMonthLabel(saved.billingMonth)} 结算电费单草稿`,

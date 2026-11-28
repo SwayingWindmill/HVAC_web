@@ -6,7 +6,7 @@ import type {
   SiteCalendarDayType,
 } from '../../api/accounting-config.ts';
 import { isOneOf } from '../../lib/typed.ts';
-import { siteMidnight } from '../energy-analysis/consumption/model.ts';
+import { siteMidnight } from '../../lib/site-time.ts';
 import { instantFromSiteInput } from '../savings/savings-model.ts';
 
 export const SITE_CALENDAR_DAY_TYPES = [

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Controller, useForm } from 'react-hook-form';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { z } from 'zod';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -130,7 +130,7 @@ export function SiteHolidayEditorDialog({
         ? `已保存 ${saved.holidayDate} 日历覆盖，后台重算任务已加入队列`
         : `已保存 ${saved.holidayDate} 日历覆盖`;
       onNotice(message);
-      toast.success(message);
+      notifySuccess(message);
       onOpenChange(false);
     },
     onError: (error) => {

@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useId, useMemo, useState, type KeyboardEvent } from 'react';
 import { Controller, useForm, useWatch, type FieldErrors, type Resolver } from 'react-hook-form';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -246,7 +246,7 @@ function ArmLeaseForm({
       void queryClient.invalidateQueries({ queryKey: autoControlKeys.lease(siteId) });
       void queryClient.invalidateQueries({ queryKey: autoControlKeys.monitors(siteId) });
       const armedMode = resolveAutoControlExecutionMode(next.activeLease ?? { executionMode: submitted.executionMode });
-      toast.success(
+      notifySuccess(
         armedMode === 'SHADOW'
           ? (isUpdate ? '已更新影子跟跑租约' : '已开启影子跟跑租约')
           : (isUpdate ? '已更新限时自动控制租约' : '已开启限时自动控制租约'),
