@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 )
 
@@ -19,7 +20,12 @@ type internalTOTPVerifyRequest struct {
 }
 
 func (server *Server) verifyInternalTOTP(writer http.ResponseWriter, request *http.Request) {
-	claims, err := identitycontext.VerifyDelegation(server.gatewayKey, request.Header.Get("X-Delegation-Grant"))
+	token, hasToken := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	if !hasToken {
+		writeOAuthError(writer, http.StatusUnauthorized, "access_denied", "a Gateway grant for the signed-in account is required")
+		return
+	}
+	claims, err := identitycontext.VerifyDelegation(server.gatewayKey, token)
 	if err == nil {
 		err = identitycontext.ValidateDelegationFromIssuer(
 			claims,

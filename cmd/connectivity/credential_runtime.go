@@ -18,6 +18,7 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/edgetunnel"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -209,7 +210,11 @@ func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *edgetunne
 		return nil, nil, nil, err
 	}
 	authorize := func(r *http.Request, action registryauth.Action) (registryauth.GrantClaims, error) {
-		claims, err := registryauth.VerifyGrant(iam.PublicKey, r.Header.Get("X-Delegation-Grant"))
+		token, ok := grant.SingleHeader(r.Header, "X-Delegation-Grant")
+		if !ok {
+			return registryauth.GrantClaims{}, connectivity.ErrCredentialForbidden
+		}
+		claims, err := registryauth.VerifyGrant(iam.PublicKey, token)
 		if err != nil {
 			return claims, connectivity.ErrCredentialForbidden
 		}

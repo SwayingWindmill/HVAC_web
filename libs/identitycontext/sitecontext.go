@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/grant"
 )
 
 var (
@@ -47,7 +49,11 @@ func (verifier SiteContextVerifier) Verify(request *http.Request, action string,
 	if peer == "" || !containsExact(presenters, peer) {
 		return SiteContext{}, ErrSiteContextWorkload
 	}
-	claims, err := VerifyDelegation(verifier.PublicKey, strings.TrimSpace(request.Header.Get(verifier.Header)))
+	token, ok := grant.SingleHeader(request.Header, verifier.Header)
+	if !ok {
+		return SiteContext{}, ErrSiteContextInvalid
+	}
+	claims, err := VerifyDelegation(verifier.PublicKey, token)
 	// A context names one Tenant and one Site, in that order.
 	if err != nil || len(claims.Scopes) != 2 || !strings.HasPrefix(claims.Scopes[1], "site:") ||
 		ValidateDelegationFromIssuerAnyScope(claims, verifier.now(), verifier.Issuer, peer, verifier.Audience, action, []string{"tenant:" + claims.TenantID, claims.Scopes[1]}) != nil {

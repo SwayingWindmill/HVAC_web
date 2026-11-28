@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/operationsauditevent"
@@ -179,12 +180,10 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		writeAuditProblem(writer, status, "AUDIT_RECORD_NOT_FOUND", "Audit record not found")
 		return
 	}
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Site-ID", "X-Admin"} {
-		if request.Header.Get(header) != "" {
-			status = http.StatusBadRequest
-			writeAuditProblem(writer, status, "AUDIT_FORGED_IDENTITY_HEADER", "Caller identity headers are not accepted")
-			return
-		}
+	if grant.HasNonEmptyHeader(request.Header, "X-Principal", "X-Roles", "X-Tenant-ID", "X-Site-ID", "X-Admin") {
+		status = http.StatusBadRequest
+		writeAuditProblem(writer, status, "AUDIT_FORGED_IDENTITY_HEADER", "Caller identity headers are not accepted")
+		return
 	}
 	certificate, peerSPIFFE, ok := verifiedPeer(request)
 	if !ok || peerSPIFFE != server.allowedWorkloadSPIFFE {
@@ -192,8 +191,13 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 		writeAuditProblem(writer, status, "AUDIT_WORKLOAD_IDENTITY_INVALID", "Workload identity is invalid")
 		return
 	}
-	grant := request.Header.Get("X-Delegation-Grant")
-	claims, err := identitycontext.VerifyDelegation(certificate.PublicKey, grant)
+	token, hasGrant := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	if !hasGrant {
+		status = http.StatusUnauthorized
+		writeAuditProblem(writer, status, "AUDIT_DELEGATION_INVALID", "Delegation grant is invalid")
+		return
+	}
+	claims, err := identitycontext.VerifyDelegation(certificate.PublicKey, token)
 	if err != nil {
 		status = http.StatusUnauthorized
 		writeAuditProblem(writer, status, "AUDIT_DELEGATION_INVALID", "Delegation grant is invalid")
@@ -226,18 +230,21 @@ func (server *server) serveAuditSearch(writer http.ResponseWriter, request *http
 		writeAuditProblem(writer, http.StatusNotFound, "AUDIT_ROUTE_NOT_FOUND", "Audit route not found")
 		return http.StatusNotFound
 	}
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Tenant-ID", "X-Site-ID", "X-Admin"} {
-		if request.Header.Get(header) != "" {
-			writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_FORGED_IDENTITY_HEADER", "Caller identity headers are not accepted")
-			return http.StatusBadRequest
-		}
+	if grant.HasNonEmptyHeader(request.Header, "X-Principal", "X-Roles", "X-Tenant-ID", "X-Site-ID", "X-Admin") {
+		writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_FORGED_IDENTITY_HEADER", "Caller identity headers are not accepted")
+		return http.StatusBadRequest
 	}
 	certificate, peerSPIFFE, ok := verifiedPeer(request)
 	if !ok || peerSPIFFE != server.allowedWorkloadSPIFFE {
 		writeAuditProblem(writer, http.StatusUnauthorized, "AUDIT_WORKLOAD_IDENTITY_INVALID", "Workload identity is invalid")
 		return http.StatusUnauthorized
 	}
-	claims, err := identitycontext.VerifyDelegation(certificate.PublicKey, request.Header.Get("X-Delegation-Grant"))
+	token, hasGrant := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	if !hasGrant {
+		writeAuditProblem(writer, http.StatusUnauthorized, "AUDIT_DELEGATION_INVALID", "Delegation grant is invalid")
+		return http.StatusUnauthorized
+	}
+	claims, err := identitycontext.VerifyDelegation(certificate.PublicKey, token)
 	if err != nil {
 		writeAuditProblem(writer, http.StatusUnauthorized, "AUDIT_DELEGATION_INVALID", "Delegation grant is invalid")
 		return http.StatusUnauthorized
@@ -332,21 +339,25 @@ func (server *server) serveDomainIngest(writer http.ResponseWriter, request *htt
 		writeAuditProblem(writer, http.StatusNotFound, "AUDIT_ROUTE_NOT_FOUND", "Audit route not found")
 		return http.StatusNotFound
 	}
-	for _, header := range []string{
+	if grant.HasNonEmptyHeader(
+		request.Header,
 		"Authorization", "Cookie", "X-Principal", "X-Roles",
 		"X-Tenant-ID", "X-Site-ID", "X-Admin",
-	} {
-		if request.Header.Get(header) != "" {
-			writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_FORGED_IDENTITY_HEADER", "Caller identity headers are not accepted")
-			return http.StatusBadRequest
-		}
+	) {
+		writeAuditProblem(writer, http.StatusBadRequest, "AUDIT_FORGED_IDENTITY_HEADER", "Caller identity headers are not accepted")
+		return http.StatusBadRequest
 	}
 	certificate, peerSPIFFE, ok := verifiedPeer(request)
 	if !ok || peerSPIFFE != server.allowedWorkloadSPIFFE {
 		writeAuditProblem(writer, http.StatusUnauthorized, "AUDIT_WORKLOAD_IDENTITY_INVALID", "Workload identity is invalid")
 		return http.StatusUnauthorized
 	}
-	claims, err := identitycontext.VerifyDelegation(certificate.PublicKey, request.Header.Get("X-Delegation-Grant"))
+	token, hasGrant := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	if !hasGrant {
+		writeAuditProblem(writer, http.StatusUnauthorized, "AUDIT_DELEGATION_INVALID", "Delegation grant is invalid")
+		return http.StatusUnauthorized
+	}
+	claims, err := identitycontext.VerifyDelegation(certificate.PublicKey, token)
 	if err != nil {
 		writeAuditProblem(writer, http.StatusUnauthorized, "AUDIT_DELEGATION_INVALID", "Delegation grant is invalid")
 		return http.StatusUnauthorized

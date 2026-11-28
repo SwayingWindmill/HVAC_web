@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -487,11 +488,9 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		writeMethodNotAllowedFor(writer, request, http.MethodPost)
 		return
 	}
-	for _, header := range operationsForgedHeaders {
-		if request.Header.Get(header) != "" {
-			writeProblem(writer, request, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Browser Session and caller-supplied identity headers are not accepted on the internal Tool authorization route.", false, nil)
-			return
-		}
+	if grant.HasNonEmptyHeader(request.Header, operationsForgedHeaders...) {
+		writeProblem(writer, request, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Browser Session and caller-supplied identity headers are not accepted on the internal Tool authorization route.", false, nil)
+		return
 	}
 	if h.operations == nil || h.operations.workloadSPIFFEID == "" || h.identity == nil {
 		unavailableOperationsProblem("The Operations authorization boundary is not configured.").write(writer, request)
@@ -539,7 +538,12 @@ func (h *handler) authorizeOperationsTool(writer http.ResponseWriter, request *h
 		invalidToolRequestProblem("The Tool request Site identity is invalid.").write(writer, request)
 		return
 	}
-	claims, err := identitycontext.VerifyDelegation(h.identity.config.DelegationSigner.Public(), request.Header.Get("X-Delegation-Grant"))
+	token, ok := grant.SingleHeader(request.Header, "X-Delegation-Grant")
+	if !ok {
+		writeProblem(writer, request, http.StatusUnauthorized, "OPERATIONS_DELEGATION_INVALID", "Operations delegation invalid", "The Operations service delegation is invalid.", false, nil)
+		return
+	}
+	claims, err := identitycontext.VerifyDelegation(h.identity.config.DelegationSigner.Public(), token)
 	if err != nil || claims.TenantID == "" || claims.PolicyRevision != h.identity.config.PolicyRevision {
 		writeProblem(writer, request, http.StatusUnauthorized, "OPERATIONS_DELEGATION_INVALID", "Operations delegation invalid", "The Operations service delegation is invalid.", false, nil)
 		return

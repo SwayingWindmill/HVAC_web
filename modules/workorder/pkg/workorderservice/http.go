@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/workordermodel"
 )
@@ -135,11 +136,9 @@ func NewHTTPHandler(config HTTPConfig) (http.Handler, error) {
 
 func (handler *httpHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	writer.Header().Set("Cache-Control", "private, no-store")
-	for _, header := range []string{"X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Work-Order-ID", "X-Admin", "X-Delegation-Grant"} {
-		if request.Header.Get(header) != "" {
-			handler.writeProblem(writer, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted by Work Order Service.", false)
-			return
-		}
+	if grant.HasNonEmptyHeader(request.Header, "X-Principal", "X-Roles", "X-Organization-ID", "X-Site-ID", "X-Work-Order-ID", "X-Admin", "X-Delegation-Grant") {
+		handler.writeProblem(writer, http.StatusBadRequest, "FORGED_IDENTITY_HEADER", "Forged identity header", "Caller-supplied identity headers are not accepted by Work Order Service.", false)
+		return
 	}
 	route, ok := matchWorkOrderPath(request.URL.Path)
 	if !ok {
@@ -327,12 +326,17 @@ func (handler *httpHandler) handleLifecyclePrecondition(writer http.ResponseWrit
 		handler.writeProblem(writer, http.StatusBadRequest, "IDEMPOTENCY_KEY_INVALID", "Idempotency key invalid", "A bounded Idempotency-Key is required for lifecycle precondition reads.", false)
 		return
 	}
-	claims, err := identitycontext.VerifyDelegation(handler.gatewayPublicKey, request.Header.Get(WorkOrderWriteContextHeader))
+	token, ok := grant.SingleHeader(request.Header, WorkOrderWriteContextHeader)
+	if !ok {
+		handler.writeAccessDenied(writer)
+		return
+	}
+	claims, err := identitycontext.VerifyDelegation(handler.gatewayPublicKey, token)
 	if err != nil || len(claims.Actions) != 1 || !isLifecycleAction(claims.Actions[0]) {
 		handler.writeAccessDenied(writer)
 		return
 	}
-	claims, ok := handler.authorize(request, claims.Actions[0], []string{"site:" + route.siteID, "work-order:" + route.workOrderID, mutationKeyScope(idempotencyKey)}, true)
+	claims, ok = handler.authorize(request, claims.Actions[0], []string{"site:" + route.siteID, "work-order:" + route.workOrderID, mutationKeyScope(idempotencyKey)}, true)
 	if !ok {
 		handler.writeAccessDenied(writer)
 		return
@@ -447,10 +451,13 @@ func (handler *httpHandler) authorize(request *http.Request, action string, reso
 	if write {
 		header, otherHeader = WorkOrderWriteContextHeader, WorkOrderReadContextHeader
 	}
-	if request.Header.Get(otherHeader) != "" {
+	if len(request.Header.Values(otherHeader)) > 0 {
 		return identitycontext.DelegationClaims{}, false
 	}
-	token := strings.TrimSpace(request.Header.Get(header))
+	token, ok := grant.SingleHeader(request.Header, header)
+	if !ok {
+		return identitycontext.DelegationClaims{}, false
+	}
 	claims, err := identitycontext.VerifyDelegation(handler.gatewayPublicKey, token)
 	if err != nil || !workordermodel.IsUUIDv7(claims.TenantID) || len(claims.Actions) != 1 || claims.Actions[0] != action {
 		return identitycontext.DelegationClaims{}, false

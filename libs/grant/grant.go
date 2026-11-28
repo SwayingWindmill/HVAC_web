@@ -100,3 +100,18 @@ func SingleHeader(header http.Header, name string) (string, bool) {
 	}
 	return value, true
 }
+
+// HasNonEmptyHeader reports whether any listed header carries a non-empty value across all instances.
+func HasNonEmptyHeader(header http.Header, names ...string) bool {
+	if header == nil {
+		return false
+	}
+	for _, name := range names {
+		for _, value := range header.Values(name) {
+			if value != "" {
+				return true
+			}
+		}
+	}
+	return false
+}

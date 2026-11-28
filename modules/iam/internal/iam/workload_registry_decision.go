@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/quanlaihe/hvac-web/libs/grant"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
@@ -18,7 +19,7 @@ func (h *handler) handleRegistryWorkloadDecision(writer http.ResponseWriter, req
 		writeProblem(writer, http.StatusMethodNotAllowed, "IAM_METHOD_NOT_ALLOWED", "This IAM route only supports POST.")
 		return http.StatusMethodNotAllowed
 	}
-	if hasForgedIdentityHeader(request.Header) || strings.TrimSpace(request.Header.Get("X-Delegation-Grant")) != "" {
+	if hasForgedIdentityHeader(request.Header) || grant.HasNonEmptyHeader(request.Header, "X-Delegation-Grant") {
 		writeProblem(writer, http.StatusBadRequest, "IAM_FORGED_IDENTITY_HEADER", "Caller-supplied identity headers are not accepted.")
 		return http.StatusBadRequest
 	}

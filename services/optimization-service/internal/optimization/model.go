@@ -112,8 +112,8 @@ func (request Request) Validate() error {
 	if request.Horizon != "DAY_AHEAD" || request.HorizonMinutes != 1440 || request.Granularity != "15MIN" {
 		return errors.New("HVAC recommendation requires DAY_AHEAD 1440-minute horizon at 15MIN granularity")
 	}
-	if request.ValidFrom.IsZero() {
-		return errors.New("validFrom is required")
+	if request.ValidFrom.IsZero() || request.ValidFrom.UTC().UnixMilli() < 0 {
+		return errors.New("validFrom is required and must be on or after 1970-01-01T00:00:00Z")
 	}
 	return validateHVACExecutionInputs(request.Baseline, request.Constraints, request.ResponseModel)
 }

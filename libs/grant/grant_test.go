@@ -125,4 +125,10 @@ func TestSingleHeaderRejectsMissingBlankAndDuplicateValues(t *testing.T) {
 	if value, ok := grant.SingleHeader(http.Header{"X-Delegation-Grant": {"   "}}, "X-Delegation-Grant"); ok || value != "" {
 		t.Fatalf("blank header = (%q, %v), want empty false", value, ok)
 	}
+	if !grant.HasNonEmptyHeader(http.Header{"X-Principal": {"", "alice"}}, "X-Principal") {
+		t.Fatal("HasNonEmptyHeader missed non-empty second header value")
+	}
+	if grant.HasNonEmptyHeader(http.Header{"X-Principal": {""}}, "X-Principal") {
+		t.Fatal("HasNonEmptyHeader flagged empty header value")
+	}
 }
