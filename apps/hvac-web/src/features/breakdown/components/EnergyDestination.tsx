@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { bucketLabel, relativeChange, type Granularity } from '@/features/energy-analysis/consumption/model';
 import { formatDecimal } from '@/lib/operator-format';
+import { isPlainRecord } from '@/lib/typed';
 import { cn } from '@/lib/utils';
 import { EQUIPMENT_ORDER, type Breakdown, type EquipmentCategory } from '../breakdown-model';
 import type { useEnergyBreakdown } from '../query';
@@ -81,11 +82,10 @@ function flowData(breakdown: Breakdown) {
 }
 
 function isFlowNode(value: unknown): value is FlowNode {
-  if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as Partial<FlowNode>;
-  return typeof candidate.name === 'string'
-    && typeof candidate.color === 'string'
-    && typeof candidate.energyKWh === 'number';
+  if (!isPlainRecord(value)) return false;
+  return typeof value.name === 'string'
+    && typeof value.color === 'string'
+    && typeof value.energyKWh === 'number';
 }
 
 function FlowNodeShape({ x, y, width, height, payload }: SankeyNodeProps) {

@@ -9,7 +9,7 @@ import { plantPowerPoint, useDemandChunks } from '@/features/load/query';
 import { energyRetryDelay, retryEnergyQuery, siteDayKey } from '@/features/energy-analysis/consumption/model';
 import { siteMidnight, wallTime } from '@/lib/site-time';
 import { useEnergyReader } from '@/features/energy-analysis/consumption/query';
-import { siteTariffQuery } from '@/features/tariff/query';
+import { siteTariffQuery } from '@/api/site-tariff';
 import { sumCosts } from '@/features/tariff/tariff-model';
 import { listView } from '@/features/work-orders/work-order-queries';
 import type { LiveMonth, ReportWindow, StoredReport } from './report-model';

@@ -1,10 +1,10 @@
 import { queryOptions } from '@tanstack/react-query';
 import {
-  createPlatformGatewayClient,
   type Device,
   type EnergySeriesResponse,
   type TelemetryPoint,
 } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient as gatewayClient } from '@/api/platform-client';
 import {
   createS2TelemetryClient,
   type DeviceHistoryAggregateBucket,
@@ -13,7 +13,6 @@ import { listWorkOrders } from '@/api/work-orders';
 import { loadAssetsCurrentState } from '@/features/assets/data';
 import type { CheckMeterHourlySeries } from './meter-reconciliation-model';
 
-const gatewayClient = createPlatformGatewayClient();
 const telemetryClient = createS2TelemetryClient();
 
 export interface HourlyHistoryRow {

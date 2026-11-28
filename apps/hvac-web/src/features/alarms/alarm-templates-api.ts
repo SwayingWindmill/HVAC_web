@@ -1,6 +1,5 @@
 import {
   PlatformApiError,
-  createPlatformGatewayClient,
   type AlarmRuleBaselineTemplate,
   type AlarmRuleTemplateDetail,
   type AlarmRuleTemplateRelease,
@@ -14,9 +13,8 @@ import {
   type SiteAlarmRuleTemplateDriftReport,
   type UpdateAlarmRuleTemplateRequest,
 } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient as client } from '@/api/platform-client';
 import { SEVERITY_LABELS } from './alarm-presentation';
-
-const client = createPlatformGatewayClient();
 
 export const alarmTemplateKeys = {
   all: ['alarm-rule-templates'] as const,

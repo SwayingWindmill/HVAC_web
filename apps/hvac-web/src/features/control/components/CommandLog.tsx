@@ -1,6 +1,6 @@
 import { Link2, Terminal } from 'lucide-react';
 import { notifyError, notifySuccess } from '@/lib/toast';
-import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient } from '@/api/platform-client';
 import { Button } from '@/components/ui/button';
 import { ButtonGroup } from '@/components/ui/button-group';
 import {
@@ -206,8 +206,6 @@ export function CommandSheet({ command, labels, timeZone, actions, onClose }: {
   );
 }
 
-const platform = createPlatformGatewayClient();
-
 /**
  * A high-risk approval needs a two-step sign-in in the last 10 minutes. The sign-in returns to this
  * command, where the operator approves again.
@@ -220,7 +218,7 @@ export function StepUpDialog({ command, describe, onClose }: {
   const verify = () => {
     const returnTo = new URL(window.location.href);
     if (command) returnTo.searchParams.set('inspect', command.commandId);
-    window.location.assign(platform.loginUrl({ returnTo: `${returnTo.pathname}${returnTo.search}`, assurance: 'high' }));
+    window.location.assign(platformGatewayClient.loginUrl({ returnTo: `${returnTo.pathname}${returnTo.search}`, assurance: 'high' }));
   };
   return (
     <Dialog open={command !== null} onOpenChange={(open) => { if (!open) onClose(); }}>

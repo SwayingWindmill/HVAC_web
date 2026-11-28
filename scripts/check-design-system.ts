@@ -262,6 +262,13 @@ const SONNER_ALLOWED_FILES = new Set([
   'apps/hvac-web/src/lib/toast.ts',
 ]);
 
+const RAW_FETCH_ALLOWED_FILES = new Set([
+  'apps/hvac-web/src/api/gateway-client.ts',
+  'apps/hvac-web/src/api/identity-sign-in.ts',
+]);
+
+const PLATFORM_GATEWAY_CLIENT_FILE = 'apps/hvac-web/src/api/platform-client.ts';
+
 const FEATURE_FORBIDDEN_APP_IMPORTS = new Set([
   'app/main.tsx',
   'app/router.ts',
@@ -628,7 +635,8 @@ async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): 
   for (const path of sourcePaths) {
     const source = await readFile(path, 'utf8');
     const relativePath = repoRelative(root, path);
-    const isFeatureOrRoute = relativePath.startsWith('apps/hvac-web/src/features/')
+    const isFeature = relativePath.startsWith('apps/hvac-web/src/features/');
+    const isFeatureOrRoute = isFeature
       || relativePath.startsWith('apps/hvac-web/src/routes/');
     const isUiPrimitive = relativePath.startsWith('apps/hvac-web/src/components/ui/');
     const sourceFile = ts.createSourceFile(
@@ -691,6 +699,8 @@ async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): 
         const inner = unwrapParentheses(node.expression);
         if (ts.isAsExpression(inner) && inner.type.kind === ts.SyntaxKind.UnknownKeyword) {
           errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} avoid \`as unknown as\`; narrow with a type guard or use typed DTOs instead`);
+        } else if (isFeature) {
+          errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} avoid non-const \`as\` type assertions in features/; narrow with type guards or typed DTOs instead`);
         }
       }
 
@@ -706,12 +716,20 @@ async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): 
         if (hookName) {
           errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} ${hookName}() must specify an explicit dependency array (\`[]\` or \`[deps]\`) to avoid re-running subscriptions/effects on every render`);
         }
+        if (!RAW_FETCH_ALLOWED_FILES.has(relativePath) && isDirectFetchCall(node.expression)) {
+          errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} web modules must use gatewayRequest instead of raw fetch()`);
+        }
+        if (
+          relativePath !== PLATFORM_GATEWAY_CLIENT_FILE
+          && ts.isIdentifier(node.expression)
+          && node.expression.text === 'createPlatformGatewayClient'
+        ) {
+          errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} reuse platformGatewayClient from @/api/platform-client instead of calling createPlatformGatewayClient()`);
+        }
       }
 
       if (isFeatureOrRoute) {
-        if (ts.isCallExpression(node) && isDirectFetchCall(node.expression)) {
-          errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} feature/route modules must use gatewayRequest instead of raw fetch()`);
-        } else if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'WebSocket') {
+        if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'WebSocket') {
           errors.push(`${relativePath}:${lineOfNode(sourceFile, node)} feature/route modules must use src/platform/telemetry-live/ instead of new WebSocket()`);
         }
       }

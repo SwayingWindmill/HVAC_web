@@ -11,6 +11,7 @@ import type {
   ShellSnapshot,
   TenantSwitchOutcome,
 } from '../apps/hvac-web/src/app/shell-runtime.ts';
+import { fetchLoginContext, resetLoginContextCache } from '../apps/hvac-web/src/api/identity-sign-in.ts';
 import type { shouldInvalidateRouter } from '../apps/hvac-web/src/app/shell-policy.ts';
 import type {
   APP_NAVIGATION_CONFIG,
@@ -649,4 +650,38 @@ test('performSiteNavigation keeps purging state until an async environment.navig
   resolveNavigate?.();
   assert.equal(await navigation, 'navigated');
   assert.equal(runtime.current().siteTransition, undefined);
+});
+
+test('fetchLoginContext skips caching non-ready responses and resets cached ready state cleanly', async () => {
+  const responses = [
+    new Response('Service Unavailable', { status: 503, headers: { 'content-type': 'text/plain' } }),
+    new Response(JSON.stringify({ status: 'expired' }), { status: 200, headers: { 'content-type': 'application/json' } }),
+    new Response(JSON.stringify({ status: 'none' }), { status: 200, headers: { 'content-type': 'application/json' } }),
+    new Response(JSON.stringify({ status: 'ready', step: 'password', csrfToken: 'csrf-1' }), { status: 200, headers: { 'content-type': 'application/json' } }),
+    new Response(JSON.stringify({ status: 'ready', step: 'totp', csrfToken: 'csrf-2' }), { status: 200, headers: { 'content-type': 'application/json' } }),
+  ];
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  resetLoginContextCache();
+  globalThis.fetch = Object.assign(async (): Promise<Response> => {
+    calls += 1;
+    return responses.shift()!;
+  }, originalFetch);
+  try {
+    assert.deepEqual(await fetchLoginContext(), { status: 'unavailable' });
+    assert.deepEqual(await fetchLoginContext(), { status: 'expired' });
+    assert.deepEqual(await fetchLoginContext(), { status: 'none' });
+    assert.equal(calls, 3);
+
+    assert.deepEqual(await fetchLoginContext(), { status: 'ready', step: 'password', csrfToken: 'csrf-1', error: undefined });
+    assert.deepEqual(await fetchLoginContext(), { status: 'ready', step: 'password', csrfToken: 'csrf-1', error: undefined });
+    assert.equal(calls, 4);
+
+    resetLoginContextCache();
+    assert.deepEqual(await fetchLoginContext(), { status: 'ready', step: 'totp', csrfToken: 'csrf-2', error: undefined });
+    assert.equal(calls, 5);
+  } finally {
+    globalThis.fetch = originalFetch;
+    resetLoginContextCache();
+  }
 });

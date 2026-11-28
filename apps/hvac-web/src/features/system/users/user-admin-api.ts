@@ -1,14 +1,13 @@
 import { queryOptions } from '@tanstack/react-query';
 import {
   PlatformApiError,
-  createPlatformGatewayClient,
   type UserAdminCreateMemberRequest,
   type UserAdminProfileRequest,
   type UserAdminRoleAssignment,
 } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient as client } from '@/api/platform-client';
 import { passwordRefusal } from '@/features/account/password';
 
-const client = createPlatformGatewayClient();
 const withCsrf = (csrfToken: string): RequestInit => ({ headers: { 'X-CSRF-Token': csrfToken } });
 
 export const userAdminKey = ['iam', 'members'] as const;

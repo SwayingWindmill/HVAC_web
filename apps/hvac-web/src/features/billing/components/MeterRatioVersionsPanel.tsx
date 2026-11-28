@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Plus, SlidersHorizontal } from 'lucide-react';
 import { uuidV7Schema } from '@/api/generated/platformGateway.gen';
-import { registryAssetModelQuery } from '@/api/registry';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
 import { Panel, PanelHeader } from '@/blocks/panel';
 import { StateCard } from '@/blocks/state/state-card';
 import { InfoTip } from '@/components/info-tip';
@@ -57,7 +57,7 @@ export function MeterRatioVersionsPanel({
 
   const ratiosQuery = useQuery(siteMeterRatioVersionsQuery(siteId, { includeSuperseded }));
   const assetModelQuery = useQuery({
-    ...registryAssetModelQuery(siteId, uuidV7Schema.safeParse(siteId).success),
+    ...siteAssetModelQuery(siteId, { enabled: uuidV7Schema.safeParse(siteId).success }),
     retry: false,
   });
 

@@ -20,7 +20,7 @@ import { useEnergyBreakdown } from "@/features/breakdown/query";
 import { DataGapBanner } from "@/features/data-gaps/DataGapBanner";
 import { dataGapsKeys } from "@/features/data-gaps/query";
 import { TouCostDetail } from "@/features/tariff/components/TouCostDetail";
-import { siteTariffQuery } from "@/features/tariff/query";
+import { siteTariffQuery } from "@/api/site-tariff";
 import {
   PERIOD_LABEL,
   PERIOD_ORDER,

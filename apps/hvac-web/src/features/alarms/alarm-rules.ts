@@ -1,6 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
 import {
-  createPlatformGatewayClient,
   PlatformApiError,
   type AlarmRule,
   type AlarmRuleBundleRevision,
@@ -26,10 +25,9 @@ import {
   type EdgeRuleCompileResult,
   type EdgeRuleEligibility,
 } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient as client } from '@/api/platform-client';
 import { formatTelemetryDisplayValue, formatTelemetryUnit } from '@/domain/centralPlantTelemetry';
 import { WINDOW_AGG_LABELS, WINDOW_TYPE_LABELS } from './alarm-rule-dag';
-
-const client = createPlatformGatewayClient();
 
 export type AlarmRuleSeverity = AlarmRule['severity'];
 

@@ -486,9 +486,9 @@ export function MeterReconciliationTab({
                   />
                   <ChartTooltip
                     content={(tooltipProps) => {
-                      const bucket = tooltipProps.payload?.[0]?.payload as
-                        | (typeof chartData)[number]
-                        | undefined;
+                      const bucket = chartData.find((item) =>
+                        Object.is(item, tooltipProps.payload?.[0]?.payload),
+                      );
                       if (tooltipProps.active && bucket) {
                         if (bucket.status === 'MISSING') {
                           return <ChartEmptySlotTooltip label={`${bucket.hourLabel} · ◆ 缺数据`} />;

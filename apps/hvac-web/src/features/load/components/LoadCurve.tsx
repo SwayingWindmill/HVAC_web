@@ -55,7 +55,7 @@ export function LoadCurve({ rows, days, now, monthPeakKW, spans, timeZone, forec
         </span>
       </div>
       <ChartContainer config={config} className="aspect-auto h-[320px] w-full">
-        <ComposedChart data={rows as LoadCurveRow[]} margin={{ left: 4, right: 12, top: 18 }}>
+        <ComposedChart data={[...rows]} margin={{ left: 4, right: 12, top: 18 }}>
           <CartesianGrid vertical={false} />
           <XAxis
             dataKey="at"
@@ -75,7 +75,7 @@ export function LoadCurve({ rows, days, now, monthPeakKW, spans, timeZone, forec
           <ChartTooltip
             cursor={{ strokeDasharray: '3 3' }}
             content={({ active, payload }) => {
-              const row = payload?.[0]?.payload as LoadCurveRow | undefined;
+              const row = rows.find((item) => Object.is(item, payload?.[0]?.payload));
               if (!active || !row) return null;
               const line = (name: string, value: string) => (
                 <p className="flex justify-between gap-4"><span className="text-muted-foreground">{name}</span><span className="tabular-nums">{value}</span></p>

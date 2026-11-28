@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
-import { createPlatformGatewayClient, type EnergySeriesQuery } from '../../../api/generated/platformGateway.gen';
+import { type EnergySeriesQuery } from '../../../api/generated/platformGateway.gen';
+import { platformGatewayClient as client } from '../../../api/platform-client';
 import { energyQueryNow } from '../../../lib/site-time';
 import {
   comparePeriods,
@@ -18,7 +19,6 @@ import {
   type Granularity,
 } from './model';
 
-const client = createPlatformGatewayClient();
 const siteRoute = getRouteApi('/_app/_site');
 const DAY_MS = 86_400_000;
 

@@ -1,13 +1,11 @@
-import { queryOptions, type QueryClient } from '@tanstack/react-query';
+import { queryOptions, useQuery, type QueryClient } from '@tanstack/react-query';
 import { ZodError } from 'zod';
 import {
   PlatformApiError,
-  createPlatformGatewayClient,
   type PlatformResponse,
   type SiteAssetModel,
 } from './generated/platformGateway.gen.ts';
-
-const client = createPlatformGatewayClient();
+import { platformGatewayClient } from './platform-client.ts';
 
 export const SITE_ASSET_MODEL_QUERY_ROOT = ['site-asset-model'] as const;
 
@@ -35,7 +33,7 @@ export function siteAssetModelEnvelopeQuery(
 ) {
   return queryOptions({
     queryKey: siteAssetModelQueryKey(siteId),
-    queryFn: ({ signal }) => client.getSiteAssetModel(siteId!, { signal }),
+    queryFn: ({ signal }) => platformGatewayClient.getSiteAssetModel(siteId!, { signal }),
     enabled: Boolean(siteId) && (options.enabled ?? true),
     staleTime: options.staleTime ?? 5 * 60_000,
     retry: options.retry ?? retrySiteAssetModelQuery,
@@ -51,6 +49,14 @@ export function siteAssetModelQuery(
     ...siteAssetModelEnvelopeQuery(siteId, options),
     select: (response: PlatformResponse<SiteAssetModel>) => response.data,
   });
+}
+
+/** React Query hook reading the canonical Site Asset Model for a Site. */
+export function useSiteAssetModel(
+  siteId: string | null,
+  options: SiteAssetModelQueryOptions = {},
+) {
+  return useQuery(siteAssetModelQuery(siteId, options));
 }
 
 /** Invalidates both the canonical asset-model cache and any protected site-assets entries derived from it. */

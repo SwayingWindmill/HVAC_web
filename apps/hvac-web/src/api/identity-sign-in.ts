@@ -31,10 +31,18 @@ export function parseLoginContext(payload: unknown): LoginContextResponse {
 }
 
 let cachedLoginContextPromise: Promise<LoginContextResponse> | null = null;
+let loginContextGeneration = 0;
+
+export function resetLoginContextCache(): void {
+  loginContextGeneration += 1;
+  cachedLoginContextPromise = null;
+}
 
 export function fetchLoginContext(): Promise<LoginContextResponse> {
   if (cachedLoginContextPromise === null) {
+    const generation = loginContextGeneration;
     cachedLoginContextPromise = (async (): Promise<LoginContextResponse> => {
+      let result: LoginContextResponse;
       try {
         const response = await fetch('/identity/login-context', {
           method: 'GET',
@@ -44,13 +52,18 @@ export function fetchLoginContext(): Promise<LoginContextResponse> {
         });
         const contentType = response.headers.get('content-type') ?? '';
         if (!response.ok && !contentType.includes('application/json')) {
-          return { status: 'unavailable' };
+          result = { status: 'unavailable' };
+        } else {
+          const payload: unknown = await response.json();
+          result = parseLoginContext(payload);
         }
-        const payload: unknown = await response.json();
-        return parseLoginContext(payload);
       } catch {
-        return { status: 'unavailable' };
+        result = { status: 'unavailable' };
       }
+      if (result.status !== 'ready' && loginContextGeneration === generation) {
+        cachedLoginContextPromise = null;
+      }
+      return result;
     })();
   }
   return cachedLoginContextPromise;

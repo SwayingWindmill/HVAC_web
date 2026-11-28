@@ -1,6 +1,5 @@
 import {
   PlatformApiError,
-  createPlatformGatewayClient,
   type GatewayHostMetricsSummary,
   type GatewayLogBundleResult,
   type GatewayWaveformCapture,
@@ -9,8 +8,7 @@ import {
   type TriggerWaveformCaptureRequest,
   type WaveformTriggerType,
 } from '@/api/generated/platformGateway.gen';
-
-const client = createPlatformGatewayClient();
+import { platformGatewayClient as client } from '@/api/platform-client';
 
 export const gatewayWaveformRulesKey = (gatewayId: string) =>
   ['gateway-waveform-rules', gatewayId] as const;

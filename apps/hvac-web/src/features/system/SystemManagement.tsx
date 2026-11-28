@@ -2,7 +2,7 @@ import { useMemo, type ReactNode } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { Check, ChevronRight } from 'lucide-react';
-import { registryAssetModelQuery } from '@/api/registry';
+import { siteAssetModelQuery } from '@/api/site-asset-model';
 import { createIdleRealtimeStatus, realtimeStatusPresentation } from '@/app/realtime-status';
 import type { ShellSnapshot } from '@/app/shell-runtime';
 import { PageHeader } from '@/blocks/page-header';
@@ -72,7 +72,7 @@ export function SystemManagement({ snapshot, registerUnsavedDraft }: { readonly 
   const roles = roleLabels(principal.principal.roles).join('、');
 
   // Each Site's registered devices, for the gateway and device counts.
-  const models = useQueries({ queries: sites.map((site) => registryAssetModelQuery(site.id, capabilities.includes('device.list'))) });
+  const models = useQueries({ queries: sites.map((site) => siteAssetModelQuery(site.id, { enabled: capabilities.includes('device.list') })) });
   const modelOf = new Map(sites.map((site, index) => [site.id, models[index]?.data]));
   const countsReady = models.length > 0 && models.every((model) => model.isSuccess);
   const gatewaysOf = (siteId: string) => modelOf.get(siteId)?.devices.filter((device) => device.deviceType === 'GATEWAY' && device.status === 'ACTIVE').length ?? null;

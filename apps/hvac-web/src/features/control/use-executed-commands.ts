@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
-import { useRegistryAssetModel } from '@/api/registry';
+import { useSiteAssetModel } from '@/api/site-asset-model';
 import { formatTime } from '@/lib/operator-format';
 import { siteCommandsQuery } from './command-api';
 import { commandSummary } from './command-presentation';
@@ -15,7 +15,7 @@ export interface ExecutedCommand {
 /** The Site's recent commands that took effect, described in the operator's words. */
 export function useExecutedCommands(siteId: string, timeZone: string, enabled = true) {
   const commands = useQuery({ ...siteCommandsQuery(siteId), enabled });
-  const model = useRegistryAssetModel(siteId, enabled);
+  const model = useSiteAssetModel(siteId, { enabled });
   const executed = useMemo((): readonly ExecutedCommand[] => {
     const labels = commandLabels(model.data ? controlTargets(model.data, new Date()) : []);
     return (commands.data ?? []).filter((command) => command.status === 'SUCCEEDED').map((command) => {

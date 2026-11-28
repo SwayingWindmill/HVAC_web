@@ -3,7 +3,8 @@ import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { Download } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
 import { Line, LineChart, ReferenceLine, YAxis } from 'recharts';
-import { createPlatformGatewayClient, PlatformApiError, type Site } from '@/api/generated/platformGateway.gen';
+import { PlatformApiError, type Site } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient as client } from '@/api/platform-client';
 import { siteAssetModelEnvelopeQuery } from '@/api/site-asset-model';
 import { createS2TelemetryClient } from '@/api/generated/s2Telemetry.gen';
 import type { ShellSnapshot } from '@/app/shell-runtime';
@@ -24,7 +25,6 @@ import { formatDecimal } from '@/lib/operator-format';
 import { cn } from '@/lib/utils';
 import { benchmark, DEGREE_DAY_BASE_C, type BenchmarkSite } from '../benchmark-model';
 
-const client = createPlatformGatewayClient();
 const telemetry = createS2TelemetryClient();
 type BenchmarkPeriod = '7d' | 'month';
 const PERIODS: readonly PeriodOption<BenchmarkPeriod>[] = [{ value: '7d', label: '近 7 天' }, { value: 'month', label: '本月' }];

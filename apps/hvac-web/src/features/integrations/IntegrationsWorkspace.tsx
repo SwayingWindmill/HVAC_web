@@ -1,13 +1,12 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { getRouteApi } from '@tanstack/react-router';
-import { flattenRegistryPages, useRegistryDevices, useRegistrySites } from '@/api/registry';
+import { flattenRegistryPages, useRegistryDevices } from '@/api/registry';
 import { useShellSnapshot } from '@/app/ShellRuntimeContext';
 import { PageHeader, PageMeta } from '@/blocks/page-header';
 import { StateCard } from '@/blocks/state/state-card';
 import { Main } from '@/components/layout/Main';
 import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Button } from '@/components/ui/button';
 import {
   Select,
   SelectContent,
@@ -58,8 +57,8 @@ export function IntegrationsWorkspace() {
   const windowToMs = Math.floor(nowMs / HOUR_MS) * HOUR_MS + HOUR_MS;
   const windowFromMs = windowToMs - 24 * HOUR_MS;
 
-  const sitesQuery = useRegistrySites();
-  const sites = flattenRegistryPages(sitesQuery.data);
+  const sites = useMemo(() => snapshot.sites?.items ?? [], [snapshot.sites?.items]);
+  const sitesError = snapshot.sites?.state === 'forbidden' || snapshot.sites?.state === 'unavailable';
   const siteId = search.site ?? sites[0]?.id ?? null;
   const currentSite = sites.find((site) => site.id === siteId) ?? null;
   const siteName = currentSite?.displayName ?? '';
@@ -272,21 +271,11 @@ export function IntegrationsWorkspace() {
                 ))}
               </SelectContent>
             </Select>
-            {sitesQuery.hasNextPage ? (
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={sitesQuery.isFetchingNextPage}
-                onClick={() => void sitesQuery.fetchNextPage()}
-              >
-                加载更多站点
-              </Button>
-            ) : null}
           </>
         }
       />
 
-      {sitesQuery.isError || devicesQuery.isError ? (
+      {sitesError || devicesQuery.isError ? (
         <Alert variant="destructive">
           <AlertDescription>
             登记信息暂时读不到，请确认当前站点权限和服务状态。
@@ -324,7 +313,7 @@ export function IntegrationsWorkspace() {
             allDevices={allDevices}
             devicesPending={devicesQuery.isPending}
             devicesError={devicesQuery.isError}
-            sitesError={sitesQuery.isError}
+            sitesError={sitesError}
             hasNextDevicesPage={devicesQuery.hasNextPage}
             isFetchingNextDevicesPage={devicesQuery.isFetchingNextPage}
             onFetchNextDevicesPage={() => void devicesQuery.fetchNextPage()}

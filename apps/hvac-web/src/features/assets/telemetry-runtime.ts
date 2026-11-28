@@ -19,7 +19,7 @@ export interface AssetsTelemetryLiveSession {
 export interface AssetsTelemetryLiveClient {
   open(
     targets: ReadonlyArray<AssetsRealtimeTarget>,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; csrfToken?: string },
   ): Promise<AssetsTelemetryLiveSession>;
   purge(): void;
 }
@@ -34,13 +34,17 @@ export interface AssetsTelemetryRuntime {
 export interface AssetsTelemetryRuntimeDependencies {
   readonly client?: S2TelemetryClient;
   readonly live?: AssetsTelemetryLiveClient;
+  readonly getCsrfToken?: () => string | undefined;
 }
 
-function createLazyTelemetryLiveClient(telemetry: S2TelemetryClient): AssetsTelemetryLiveClient {
+function createLazyTelemetryLiveClient(
+  telemetry: S2TelemetryClient,
+  getCsrfToken?: () => string | undefined,
+): AssetsTelemetryLiveClient {
   let loaded: Promise<AssetsTelemetryLiveClient> | null = null;
   const load = () => {
     loaded ??= import('../../platform/telemetry-live/index.ts').then((module) => (
-      module.createTelemetryLiveClient({ telemetry }) as AssetsTelemetryLiveClient
+      module.createTelemetryLiveClient({ telemetry, getCsrfToken })
     ));
     return loaded;
   };
@@ -59,24 +63,27 @@ export function createAssetsTelemetryRuntime(
 ): AssetsTelemetryRuntime {
   let routePolicyRevision: string | null = null;
   const listeners = new Set<(previousRevision: string, nextRevision: string) => void>();
-  const routeAwareFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const response = await fetchImplementation(input, init);
-    const nextRevision = response.headers.get('x-route-policy-revision');
-    if (nextRevision) {
-      const previousRevision = routePolicyRevision;
-      routePolicyRevision = nextRevision;
-      if (previousRevision && previousRevision !== nextRevision) {
-        globalThis.queueMicrotask(() => {
-          for (const listener of listeners) listener(previousRevision, nextRevision);
-        });
+  const routeAwareFetch: typeof fetch = Object.assign(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const response = await fetchImplementation(input, init);
+      const nextRevision = response.headers.get('x-route-policy-revision');
+      if (nextRevision) {
+        const previousRevision = routePolicyRevision;
+        routePolicyRevision = nextRevision;
+        if (previousRevision && previousRevision !== nextRevision) {
+          globalThis.queueMicrotask(() => {
+            for (const listener of listeners) listener(previousRevision, nextRevision);
+          });
+        }
       }
-    }
-    return response;
-  }) as typeof fetch;
+      return response;
+    },
+    fetchImplementation,
+  );
   const client = dependencies.client ?? createS2TelemetryClient(baseURL, routeAwareFetch);
   return {
     client,
-    live: dependencies.live ?? createLazyTelemetryLiveClient(client),
+    live: dependencies.live ?? createLazyTelemetryLiveClient(client, dependencies.getCsrfToken),
     currentRoutePolicyRevision: () => routePolicyRevision,
     subscribeRoutePolicyChange: (listener) => {
       listeners.add(listener);

@@ -34,14 +34,63 @@ export function buildRegistryExport(site: Site, model: SiteAssetModel, exportedA
   return {
     schemaVersion: 1,
     exportedAt,
-    site: pick(site, ['id', 'tenantId', 'code', 'displayName', 'timezone', 'status', 'revision']),
-    spaces: model.spaces.map((space) => pick(space, ['id', 'siteId', 'parentSpaceId', 'code', 'displayName', 'spaceType', 'status', 'revision'])),
-    assets: model.assets.map((asset) => pick(asset, ['id', 'siteId', 'code', 'displayName', 'assetType', 'status', 'revision'])),
-    devices: model.devices.map((device) => pick(device, ['id', 'siteId', 'code', 'displayName', 'deviceType', 'status', 'revision'])),
-    points: model.telemetryPoints.map((point) => pick(point, [
-      'id', 'siteId', 'reportingDeviceId', 'sensorId', 'pointCode', 'sourceKey', 'displayName', 'pointType', 'valueType', 'unit',
-      'writable', 'sampleIntervalMs', 'publishIntervalMs', 'staleAfterMs', 'counterDecreaseMode', 'counterRolloverModulus', 'status', 'revision',
-    ])),
+    site: {
+      id: site.id,
+      tenantId: site.tenantId,
+      code: site.code,
+      displayName: site.displayName,
+      timezone: site.timezone,
+      status: site.status,
+      revision: site.revision,
+    },
+    spaces: model.spaces.map((space) => ({
+      id: space.id,
+      siteId: space.siteId,
+      parentSpaceId: space.parentSpaceId,
+      code: space.code,
+      displayName: space.displayName,
+      spaceType: space.spaceType,
+      status: space.status,
+      revision: space.revision,
+    })),
+    assets: model.assets.map((asset) => ({
+      id: asset.id,
+      siteId: asset.siteId,
+      code: asset.code,
+      displayName: asset.displayName,
+      assetType: asset.assetType,
+      status: asset.status,
+      revision: asset.revision,
+    })),
+    devices: model.devices.map((device) => ({
+      id: device.id,
+      siteId: device.siteId,
+      code: device.code,
+      displayName: device.displayName,
+      deviceType: device.deviceType,
+      status: device.status,
+      revision: device.revision,
+    })),
+    points: model.telemetryPoints.map((point) => ({
+      id: point.id,
+      siteId: point.siteId,
+      reportingDeviceId: point.reportingDeviceId,
+      sensorId: point.sensorId,
+      pointCode: point.pointCode,
+      sourceKey: point.sourceKey,
+      displayName: point.displayName,
+      pointType: point.pointType,
+      valueType: point.valueType,
+      unit: point.unit,
+      writable: point.writable,
+      sampleIntervalMs: point.sampleIntervalMs,
+      publishIntervalMs: point.publishIntervalMs,
+      staleAfterMs: point.staleAfterMs,
+      counterDecreaseMode: point.counterDecreaseMode,
+      counterRolloverModulus: point.counterRolloverModulus,
+      status: point.status,
+      revision: point.revision,
+    })),
     relationships: model.relationships,
   };
 }
@@ -52,10 +101,4 @@ export function registryExportFileName(site: Site): string {
 
 export function newRegistryIdempotencyKey(action: string): string {
   return `${action}:${crypto.randomUUID()}`;
-}
-
-function pick<T extends object, K extends keyof T>(value: T, keys: readonly K[]): Pick<T, K> {
-  const result = {} as Pick<T, K>;
-  for (const key of keys) result[key] = value[key];
-  return result;
 }

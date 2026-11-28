@@ -194,7 +194,7 @@ export function DrawerHourlyHistorySection({
             />
             <ChartTooltip
               content={(tooltipProps) => {
-                const slot = tooltipProps.payload?.[0]?.payload as (typeof slots)[number] | undefined;
+                const slot = slots.find((item) => Object.is(item, tooltipProps.payload?.[0]?.payload));
                 if (tooltipProps.active && slot && slot.value === null) {
                   return <ChartEmptySlotTooltip label={slot.fullLabel} />;
                 }

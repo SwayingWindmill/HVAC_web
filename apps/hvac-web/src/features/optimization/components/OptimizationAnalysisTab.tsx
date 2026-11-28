@@ -740,7 +740,7 @@ function ForecastSummaryPanel({
               <ChartTooltip
                 cursor={{ strokeDasharray: '3 3' }}
                 content={({ active, payload }) => {
-                  const row = payload?.[0]?.payload as (typeof hours)[number] | undefined;
+                  const row = hours.find((item) => Object.is(item, payload?.[0]?.payload));
                   if (!active || !row) return null;
                   return (
                     <div className="grid min-w-36 gap-1 rounded-lg border bg-background px-2.5 py-1.5 text-xs shadow-xl">

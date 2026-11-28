@@ -18,10 +18,10 @@ export type TelemetryLiveUnavailableReason =
   | 'protocol-violation';
 
 interface TelemetryLiveStateBase {
-  clientSubscriptionId: ClientSubscriptionId;
-  deviceId: UUIDv7;
-  keys: ReadonlyArray<TelemetryKey>;
-  updatedAt: string;
+  readonly clientSubscriptionId: ClientSubscriptionId;
+  readonly deviceId: UUIDv7;
+  readonly keys: ReadonlyArray<TelemetryKey>;
+  readonly updatedAt: string;
 }
 
 export interface TelemetryLiveInitializingState extends TelemetryLiveStateBase {
@@ -70,6 +70,6 @@ export interface TelemetryLiveSession {
 }
 
 export interface TelemetryLiveClient {
-  open(targets: ReadonlyArray<TelemetryLiveTarget>, options?: { signal?: AbortSignal }): Promise<TelemetryLiveSession>;
+  open(targets: ReadonlyArray<TelemetryLiveTarget>, options?: { signal?: AbortSignal; csrfToken?: string }): Promise<TelemetryLiveSession>;
   purge(): void;
 }
