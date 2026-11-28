@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 )
@@ -283,7 +284,7 @@ func postWorkloadTelemetryJSON(
 	if err != nil {
 		return fmt.Errorf("request %s: %w", label, err)
 	}
-	defer drainAndClose(resp.Body)
+	defer clickhousehttp.DrainAndClose(resp.Body)
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {

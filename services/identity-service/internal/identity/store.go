@@ -185,6 +185,14 @@ func (store *Store) VerifyProductSchema(ctx context.Context, expectedVersion str
 	return schemagate.VerifyProductSchema(ctx, store.pool, expectedVersion)
 }
 
+// VerifyEnvProductSchema validates the database schema version against PHASE1_PRODUCT_VERSION when set.
+func (store *Store) VerifyEnvProductSchema(ctx context.Context) error {
+	if store == nil {
+		return schemagate.VerifyEnvProductSchema(ctx, nil)
+	}
+	return schemagate.VerifyEnvProductSchema(ctx, store.pool)
+}
+
 func (store *Store) CreateUser(ctx context.Context, input CreateUserInput) (CreatedUser, error) {
 	username := strings.TrimSpace(input.Username)
 	displayName := strings.TrimSpace(input.DisplayName)

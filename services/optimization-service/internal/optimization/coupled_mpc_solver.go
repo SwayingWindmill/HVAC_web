@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
 	"github.com/quanlaihe/hvac-web/libs/measurement"
@@ -1559,7 +1560,7 @@ func NewCoupledSolverHTTPHandler(solver *CoupledPlantMPCSolver) http.Handler {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		defer drainAndClose(r.Body)
+		defer clickhousehttp.DrainAndClose(r.Body)
 		body, err := io.ReadAll(io.LimitReader(r.Body, 512*1024))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)

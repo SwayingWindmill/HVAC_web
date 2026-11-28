@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -25,8 +26,21 @@ type Querier interface {
 // VerifyProductSchema returns nil when the database records a product_schema
 // row whose product_version equals expectedVersion. A missing row or a
 // version mismatch is an error; the caller must refuse to start on it.
-func VerifyProductSchema(ctx context.Context, db Querier, expectedVersion string) error {
+func isNilQuerier(db Querier) bool {
 	if db == nil {
+		return true
+	}
+	value := reflect.ValueOf(db)
+	switch value.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Slice, reflect.Map, reflect.Func, reflect.Chan:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func VerifyProductSchema(ctx context.Context, db Querier, expectedVersion string) error {
+	if isNilQuerier(db) {
 		return errors.New("schema compatibility check requires a non-nil database connection")
 	}
 	var actual string

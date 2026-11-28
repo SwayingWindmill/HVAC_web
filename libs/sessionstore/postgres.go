@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/schemagate"
 	"github.com/quanlaihe/hvac-web/libs/sessionevent"
 )
 
@@ -62,6 +63,14 @@ func (store *PostgresStore) Close() {
 
 func (store *PostgresStore) Ping(ctx context.Context) error {
 	return store.pool.Ping(ctx)
+}
+
+// VerifyProductSchema validates the database schema version against PHASE1_PRODUCT_VERSION when set.
+func (store *PostgresStore) VerifyProductSchema(ctx context.Context) error {
+	if store == nil {
+		return schemagate.VerifyEnvProductSchema(ctx, nil)
+	}
+	return schemagate.VerifyEnvProductSchema(ctx, store.pool)
 }
 
 func (store *PostgresStore) CreateSession(ctx context.Context, session Session, mutation MutationContext) (Session, error) {

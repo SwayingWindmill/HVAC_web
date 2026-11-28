@@ -7,18 +7,18 @@ on:
       - ".github/workflows/dependency-security.yml"
       - "package.json"
       - "package-lock.json"
-      - "scripts/check-npm-production-audit.mjs"
-      - "scripts/check-production-licenses.mjs"
-      - "scripts/test-npm-production-audit-retry.mjs"
+      - "scripts/check-npm-production-audit.ts"
+      - "scripts/check-production-licenses.ts"
+      - "scripts/test-npm-production-audit-retry.ts"
   push:
     branches: [main]
     paths:
       - ".github/workflows/dependency-security.yml"
       - "package.json"
       - "package-lock.json"
-      - "scripts/check-npm-production-audit.mjs"
-      - "scripts/check-production-licenses.mjs"
-      - "scripts/test-npm-production-audit-retry.mjs"
+      - "scripts/check-npm-production-audit.ts"
+      - "scripts/check-production-licenses.ts"
+      - "scripts/test-npm-production-audit-retry.ts"
   schedule:
     # New advisories land without any dependency change; audit main daily.
     - cron: "23 2 * * *"

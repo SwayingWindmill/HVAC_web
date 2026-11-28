@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/schemagate"
 	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
@@ -76,6 +77,14 @@ type Store struct {
 	pool  *pgxpool.Pool
 	now   func() time.Time
 	cache uplinkCache
+}
+
+// VerifyProductSchema validates the database schema version against PHASE1_PRODUCT_VERSION when set.
+func (store *Store) VerifyProductSchema(ctx context.Context) error {
+	if store == nil {
+		return schemagate.VerifyEnvProductSchema(ctx, nil)
+	}
+	return schemagate.VerifyEnvProductSchema(ctx, store.pool)
 }
 
 func openConfig(databaseURL string) (*pgxpool.Config, error) {

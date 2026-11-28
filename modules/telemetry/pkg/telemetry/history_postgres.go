@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/schemagate"
 )
 
 type HistoryPostgresRepository struct {
@@ -57,6 +58,14 @@ func (repository *HistoryPostgresRepository) Close() {
 	if repository != nil && repository.pool != nil {
 		repository.pool.Close()
 	}
+}
+
+// VerifyProductSchema validates the database schema version against PHASE1_PRODUCT_VERSION when set.
+func (repository *HistoryPostgresRepository) VerifyProductSchema(ctx context.Context) error {
+	if repository == nil {
+		return schemagate.VerifyEnvProductSchema(ctx, nil)
+	}
+	return schemagate.VerifyEnvProductSchema(ctx, repository.pool)
 }
 
 func encodeHistoryOutboxPayload(observationID string, candidate ObservationCandidate, decision ObservationDecision, sourcePayloadSHA string) ([]byte, string, error) {

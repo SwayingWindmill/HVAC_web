@@ -2,7 +2,6 @@ package clickhouse
 
 import (
 	"bytes"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -20,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/energy/internal/energy"
 )
@@ -49,6 +48,7 @@ type Reader struct {
 	username          string
 	password          string
 	httpClient        *http.Client
+	ch                *clickhousehttp.Client
 }
 
 type WriterConfig struct {
@@ -67,6 +67,7 @@ type Writer struct {
 	username   string
 	password   string
 	httpClient *http.Client
+	ch         *clickhousehttp.Client
 }
 
 type counterDeltaRow struct {
@@ -114,10 +115,13 @@ func NewReader(config ReaderConfig) (*Reader, error) {
 			return nil, errors.New("ClickHouse analytics reader identifiers are invalid")
 		}
 	}
+	trimmedUser := strings.TrimSpace(config.Username)
+	creds := clickhousehttp.Credentials{Username: trimmedUser, Password: config.Password}
 	return &Reader{
 		endpoint: endpoint, sourceDatabase: config.SourceDatabase,
 		analyticsDatabase: config.AnalyticsDatabase, analyticsTable: config.AnalyticsTable,
-		username: strings.TrimSpace(config.Username), password: config.Password, httpClient: client,
+		username: trimmedUser, password: config.Password, httpClient: client,
+		ch: clickhousehttp.NewClient(endpoint, client, creds),
 	}, nil
 }
 
@@ -129,83 +133,50 @@ func NewWriter(config WriterConfig) (*Writer, error) {
 	if !identifierPattern.MatchString(config.Database) || !identifierPattern.MatchString(config.Table) {
 		return nil, errors.New("ClickHouse analytics writer identifiers are invalid")
 	}
+	trimmedUser := strings.TrimSpace(config.Username)
+	creds := clickhousehttp.Credentials{Username: trimmedUser, Password: config.Password}
 	return &Writer{
 		endpoint: endpoint, database: config.Database, table: config.Table,
-		username: strings.TrimSpace(config.Username), password: config.Password, httpClient: client,
+		username: trimmedUser, password: config.Password, httpClient: client,
+		ch: clickhousehttp.NewClient(endpoint, client, creds),
 	}, nil
 }
 
 func validateClientConfig(rawURL string, client *http.Client) (*url.URL, *http.Client, error) {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || parsed == nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
-		parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+	parsed, err := clickhousehttp.ParseOriginURL(rawURL)
+	if err != nil {
 		return nil, nil, errors.New("ClickHouse analytics base URL must be an HTTP(S) origin without user info, path, query or fragment")
 	}
 	if client == nil {
-		client = newDefaultAnalyticsHTTPClient(15 * time.Second)
+		client = clickhousehttp.NewPooledHTTPClient(clickhousehttp.DataPlaneTransportConfig(15 * time.Second))
 	}
 	return parsed, client, nil
-}
-
-func newDefaultAnalyticsHTTPClient(timeout time.Duration) *http.Client {
-	var transport *http.Transport
-	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
-		transport = base.Clone()
-	} else {
-		transport = &http.Transport{}
-	}
-	transport.DialContext = (&net.Dialer{
-		Timeout:   5 * time.Second,
-		KeepAlive: 30 * time.Second,
-	}).DialContext
-	transport.MaxConnsPerHost = 16
-	transport.MaxIdleConns = 64
-	transport.MaxIdleConnsPerHost = 16
-	transport.IdleConnTimeout = 90 * time.Second
-	transport.TLSHandshakeTimeout = 10 * time.Second
-	transport.ResponseHeaderTimeout = 30 * time.Second
-	transport.ExpectContinueTimeout = time.Second
-	return &http.Client{Timeout: timeout, Transport: transport}
 }
 
 func (reader *Reader) Ping(ctx context.Context) error {
 	if reader == nil || reader.endpoint == nil || reader.httpClient == nil {
 		return errors.New("ClickHouse analytics reader is closed")
 	}
-	return pingAnalyticsClickHouse(ctx, reader.endpoint, reader.username, reader.password, reader.httpClient)
+	return pingAnalyticsClickHouse(ctx, reader.endpoint, reader.username, reader.password, reader.httpClient, reader.ch)
 }
 
 func (writer *Writer) Ping(ctx context.Context) error {
 	if writer == nil || writer.endpoint == nil || writer.httpClient == nil {
 		return errors.New("ClickHouse analytics writer is closed")
 	}
-	return pingAnalyticsClickHouse(ctx, writer.endpoint, writer.username, writer.password, writer.httpClient)
+	return pingAnalyticsClickHouse(ctx, writer.endpoint, writer.username, writer.password, writer.httpClient, writer.ch)
 }
 
-func pingAnalyticsClickHouse(ctx context.Context, endpoint *url.URL, username, password string, client *http.Client) error {
-	u := *endpoint
-	q := u.Query()
-	q.Set("query", "SELECT 1")
-	u.RawQuery = q.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return fmt.Errorf("create ClickHouse analytics ping: %w", err)
+func pingAnalyticsClickHouse(ctx context.Context, endpoint *url.URL, username, password string, client *http.Client, ch *clickhousehttp.Client) error {
+	if ch == nil {
+		ch = clickhousehttp.NewClient(endpoint, client, clickhousehttp.Credentials{Username: username, Password: password})
 	}
-	if username != "" {
-		request.SetBasicAuth(username, password)
-	}
-	response, err := client.Do(request)
-	if err != nil {
+	if err := ch.Ping(ctx, false); err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return clickHouseStatusError("ping", statusErr.StatusCode, []byte(statusErr.Body))
+		}
 		return fmt.Errorf("ClickHouse analytics ping: %w", err)
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 4096))
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
-	if err != nil {
-		return fmt.Errorf("read ClickHouse analytics ping response: %w", err)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return clickHouseStatusError("ping", response.StatusCode, body)
 	}
 	return nil
 }
@@ -700,59 +671,29 @@ FORMAT JSONEachRow`, reader.sourceDatabase, reader.analyticsDatabase, reader.ana
 
 // query runs a read whose values travel as ClickHouse query parameters, never as SQL text.
 func (reader *Reader) query(ctx context.Context, operation, sql string, parameters url.Values) ([]byte, error) {
-	endpoint := *reader.endpoint
-	queryParams := url.Values{}
-	for key, values := range parameters {
-		queryParams[key] = append([]string(nil), values...)
+	ch := reader.ch
+	if ch == nil {
+		ch = clickhousehttp.NewClient(reader.endpoint, reader.httpClient, clickhousehttp.Credentials{Username: reader.username, Password: reader.password})
 	}
-	trimmedUpper := strings.ToUpper(strings.TrimSpace(sql))
-	selectQuery := strings.HasPrefix(trimmedUpper, "SELECT") || strings.HasPrefix(trimmedUpper, "WITH")
-	if selectQuery {
-		queryParams.Set("enable_http_compression", "1")
-	}
-	endpoint.RawQuery = queryParams.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), strings.NewReader(sql))
+	payload, err := ch.Query(ctx, clickhousehttp.QueryRequest{
+		Method:           http.MethodPost,
+		SQL:              sql,
+		Params:           parameters,
+		Accept:           "application/x-ndjson",
+		CompressResponse: clickhousehttp.IsSelectQuery(sql),
+		MaxResponseBytes: maximumResponseBodySize,
+		PrepareHeader:    observability.InjectHTTP,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("create ClickHouse analytics %s: %w", operation, err)
-	}
-	request.Header.Set("Accept", "application/x-ndjson")
-	if selectQuery {
-		request.Header.Set("Accept-Encoding", "gzip")
-	}
-	request.Header.Set("Content-Type", "text/plain; charset=utf-8")
-	if reader.username != "" {
-		request.SetBasicAuth(reader.username, reader.password)
-	}
-	observability.InjectHTTP(ctx, request.Header)
-	response, err := reader.httpClient.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("ClickHouse analytics %s: %w", operation, err)
-	}
-	defer response.Body.Close()
-	const maxDrainBytes = 4096
-	bodyReader := io.Reader(io.LimitReader(response.Body, maximumResponseBodySize+1))
-	if strings.EqualFold(strings.TrimSpace(response.Header.Get("Content-Encoding")), "gzip") {
-		gz, gzErr := gzip.NewReader(bodyReader)
-		if gzErr != nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxDrainBytes))
-			if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-				return nil, clickHouseStatusError(operation, response.StatusCode, nil)
-			}
-			return nil, fmt.Errorf("decode ClickHouse analytics %s gzip response: %w", operation, gzErr)
+		var tooLargeErr *clickhousehttp.ResponseTooLargeError
+		if errors.As(err, &tooLargeErr) {
+			return nil, fmt.Errorf("ClickHouse analytics %s response exceeds 8 MiB", operation)
 		}
-		defer gz.Close()
-		bodyReader = io.LimitReader(gz, maximumResponseBodySize+1)
-	}
-	payload, err := io.ReadAll(bodyReader)
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxDrainBytes))
-	if err != nil {
-		return nil, fmt.Errorf("read ClickHouse analytics %s response: %w", operation, err)
-	}
-	if int64(len(payload)) > maximumResponseBodySize {
-		return nil, fmt.Errorf("ClickHouse analytics %s response exceeds 8 MiB", operation)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, clickHouseStatusError(operation, response.StatusCode, payload)
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return nil, clickHouseStatusError(operation, statusErr.StatusCode, []byte(statusErr.Body))
+		}
+		return nil, fmt.Errorf("ClickHouse analytics %s: %w", operation, err)
 	}
 	return payload, nil
 }
@@ -795,29 +736,21 @@ func (writer *Writer) AdvanceCheckpoint(ctx context.Context, cursor energy.Proje
 
 // insert posts JSONEachRow rows to one of the writer's tables and waits for the result.
 func (writer *Writer) insert(ctx context.Context, operation string, settings url.Values, body []byte) error {
-	endpoint := *writer.endpoint
-	endpoint.RawQuery = settings.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("create ClickHouse analytics %s request: %w", operation, err)
+	ch := writer.ch
+	if ch == nil {
+		ch = clickhousehttp.NewClient(writer.endpoint, writer.httpClient, clickhousehttp.Credentials{Username: writer.username, Password: writer.password})
 	}
-	request.Header.Set("Content-Type", "application/x-ndjson")
-	if writer.username != "" {
-		request.SetBasicAuth(writer.username, writer.password)
-	}
-	observability.InjectHTTP(ctx, request.Header)
-	response, err := writer.httpClient.Do(request)
-	if err != nil {
+	if err := ch.Insert(ctx, clickhousehttp.InsertRequest{
+		Params:        settings,
+		Body:          body,
+		MaxErrorBytes: 8 << 10,
+		PrepareHeader: observability.InjectHTTP,
+	}); err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return clickHouseStatusError(operation, statusErr.StatusCode, []byte(statusErr.Body))
+		}
 		return fmt.Errorf("ClickHouse analytics %s: %w", operation, err)
-	}
-	defer response.Body.Close()
-	payload, err := io.ReadAll(io.LimitReader(response.Body, 8<<10))
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
-	if err != nil {
-		return fmt.Errorf("read ClickHouse analytics %s response: %w", operation, err)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return clickHouseStatusError(operation, response.StatusCode, payload)
 	}
 	return nil
 }

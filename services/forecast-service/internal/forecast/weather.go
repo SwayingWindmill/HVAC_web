@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 )
 
 const (
@@ -387,7 +389,7 @@ func (p *OpenMeteoProvider) ForecastWeather(ctx context.Context, req WeatherFore
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	defer drainAndClose(resp.Body)
+	defer clickhousehttp.DrainAndClose(resp.Body)
 	payload, err := io.ReadAll(io.LimitReader(resp.Body, maxOpenMeteoResponseSize+1))
 	if err != nil {
 		return nil, time.Time{}, err

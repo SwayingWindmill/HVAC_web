@@ -344,6 +344,10 @@ for (const file of files) {
     selectTelemetry(file, 'shared schema gate library changed');
     selectAnalytics(file, 'shared schema gate library changed');
   });
+  match(file.startsWith('libs/clickhousehttp/'), () => {
+    selectTelemetry(file, 'shared ClickHouse HTTP client library changed', { integration: true });
+    selectAnalytics(file, 'shared ClickHouse HTTP client library changed', { integration: true });
+  });
   match(file.startsWith('libs/workloadtls/'), () => {
     selectPlatform(file, 'shared workload mTLS library changed');
     selectTelemetry(file, 'shared workload mTLS library changed');
@@ -427,6 +431,9 @@ for (const file of files) {
       'scripts/check-go-test-hygiene.ts',
       'scripts/go-test-sleep-baseline.json',
       'scripts/test-go-test-hygiene.ts',
+      'scripts/check-go-file-lines.ts',
+      'scripts/go-file-lines-baseline.json',
+      'scripts/test-go-file-lines.ts',
       'scripts/test-local-runtime-env.ts',
       'scripts/run-preflight.ts',
       'scripts/js-yaml.d.ts',
@@ -485,13 +492,13 @@ for (const file of files) {
         file === 'scripts/changelog-fragments.ts' ||
         file === 'scripts/test-changelog-fragments.ts' ||
         file === 'scripts/check-backend-architecture-v2.ts' ||
-        file === 'scripts/check-data-architecture-v2.mjs' ||
-        file === 'scripts/check-observability-phase1.mjs' ||
-        file === 'scripts/check-phase1-architecture-alignment.mjs' ||
+        file === 'scripts/check-data-architecture-v2.ts' ||
+        file === 'scripts/check-observability-phase1.ts' ||
+        file === 'scripts/check-phase1-architecture-alignment.ts' ||
         file === 'scripts/check-phase1-deployment.mjs' ||
         file === 'scripts/check-phase1-recovery-attainment.ts' ||
-        file === 'scripts/check-phase1-simulator-acceptance.mjs' ||
-        file === 'scripts/check-s16-notification.mjs' ||
+        file === 'scripts/check-phase1-simulator-acceptance.ts' ||
+        file === 'scripts/check-s16-notification.ts' ||
         file === 'scripts/generate-semantic-catalog.mjs',
       () => {
         add(contractProfiles, ['core']);
@@ -512,9 +519,9 @@ for (const file of files) {
     );
     scriptMatch(
       [
-        'scripts/check-npm-production-audit.mjs',
-        'scripts/check-production-licenses.mjs',
-        'scripts/test-npm-production-audit-retry.mjs',
+        'scripts/check-npm-production-audit.ts',
+        'scripts/check-production-licenses.ts',
+        'scripts/test-npm-production-audit-retry.ts',
         'scripts/run-phase1-process-failure-drill.ts',
         'scripts/run-phase1-simulator-acceptance.mjs',
         'scripts/verify-phase1-recovery-drill.mjs',

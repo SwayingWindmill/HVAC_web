@@ -373,6 +373,9 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
       'scripts/check-go-test-hygiene.ts',
       'scripts/go-test-sleep-baseline.json',
       'scripts/test-go-test-hygiene.ts',
+      'scripts/check-go-file-lines.ts',
+      'scripts/go-file-lines-baseline.json',
+      'scripts/test-go-file-lines.ts',
       'scripts/run-preflight.ts',
       'changelog.d/README.md',
       'scripts/changelog-fragments.ts',
@@ -380,7 +383,7 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
     ]).length,
     0,
   );
-  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 24);
+  assert.equal(findRequiredGuardrailFileViolations(['.agents/hooks.json']).length, 27);
 
   const verifyMapSandbox = mkdtempSync(join(tmpdir(), 'hvac-verify-map-'));
   try {
@@ -463,6 +466,9 @@ test('repository governance enforces 1:1 skill parity, required hook files, and 
     'scripts/check-go-test-hygiene.ts',
     'scripts/go-test-sleep-baseline.json',
     'scripts/test-go-test-hygiene.ts',
+    'scripts/check-go-file-lines.ts',
+    'scripts/go-file-lines-baseline.json',
+    'scripts/test-go-file-lines.ts',
     'scripts/run-preflight.ts',
   ]) {
     const classification = runClassification([file]);

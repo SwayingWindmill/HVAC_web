@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/schemagate"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
@@ -46,6 +47,14 @@ type PostgresStore struct {
 	newEventID      EventIDGenerator
 	metadataCache   *metadataCache
 	pipelineMetrics *PipelineMetrics
+}
+
+// VerifyProductSchema validates the database schema version against PHASE1_PRODUCT_VERSION when set.
+func (store *PostgresStore) VerifyProductSchema(ctx context.Context) error {
+	if store == nil {
+		return schemagate.VerifyEnvProductSchema(ctx, nil)
+	}
+	return schemagate.VerifyEnvProductSchema(ctx, store.pool)
 }
 
 // SetPipelineMetrics attaches bounded Prometheus pipeline counters to the store.

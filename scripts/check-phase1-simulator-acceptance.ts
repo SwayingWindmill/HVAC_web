@@ -1,0 +1,115 @@
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+
+type RequirementClass = 'SOFTWARE_REQUIRED' | 'DEFERRED_HARDWARE' | 'DEFERRED_FORMAL';
+
+interface AcceptanceGate {
+  id: string;
+  command: string;
+  evidence?: string[];
+}
+
+interface AcceptanceRequirement {
+  id: string;
+  class: RequirementClass;
+  title: string;
+  acceptance: string;
+  gateIds: string[];
+}
+
+interface AcceptanceMatrix {
+  schemaVersion?: number;
+  program?: string;
+  sourceDesign?: string;
+  hardGates?: Record<string, number>;
+  gates: AcceptanceGate[];
+  requirements: AcceptanceRequirement[];
+}
+
+const root = resolve(process.cwd());
+const matrixPath = resolve(root, 'deploy/acceptance/phase1-simulator-acceptance.v1.json');
+const reportPath = resolve(root, 'out/phase1-acceptance/traceability-static.json');
+const matrix = JSON.parse(await readFile(matrixPath, 'utf8')) as AcceptanceMatrix;
+const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) throw new Error(message);
+}
+
+assert(matrix.schemaVersion === 1, 'Phase 1 acceptance schemaVersion must be 1');
+assert(matrix.program === '智慧能源系统第一阶段 Simulator Acceptance', 'Phase 1 acceptance program name drifted');
+assert(matrix.sourceDesign === '智慧能源系统测试与验收体系设计', 'Phase 1 source design is missing');
+
+for (const [key, value] of Object.entries(matrix.hardGates ?? {})) {
+  assert(Number.isInteger(value) && value === 0, `hard gate ${key} must remain zero-tolerance`);
+}
+
+const gateIds = new Set<string>();
+for (const gate of matrix.gates) {
+  assert(/^GATE-[A-Z0-9-]+$/.test(gate.id), `invalid gate id ${gate.id}`);
+  assert(!gateIds.has(gate.id), `duplicate gate id ${gate.id}`);
+  gateIds.add(gate.id);
+  assert(typeof gate.command === 'string' && gate.command.trim(), `gate ${gate.id} has no command`);
+  // A gate may pass arguments to the npm script (for example the domain runner), so only
+  // the first token after "npm run" is the script name.
+  if (gate.command.startsWith('npm run ')) {
+    const script = gate.command.slice('npm run '.length).trim().split(/\s+/)[0];
+    assert(pkg.scripts?.[script], `gate ${gate.id} references missing npm script ${script}`);
+  } else if (gate.command.startsWith('node ')) {
+    const scriptPath = gate.command.trim().split(/\s+/)[1];
+    assert(scriptPath?.startsWith('scripts/'), `gate ${gate.id} node command must target scripts/`);
+    await access(resolve(root, scriptPath));
+  } else {
+    throw new Error(`gate ${gate.id} uses unsupported command form`);
+  }
+  for (const evidence of gate.evidence ?? []) {
+    assert(evidence.startsWith('out/'), `gate ${gate.id} evidence must stay under out/: ${evidence}`);
+  }
+}
+
+const requirementIds = new Set<string>();
+const classCounts: Record<RequirementClass, number> = {
+  SOFTWARE_REQUIRED: 0,
+  DEFERRED_HARDWARE: 0,
+  DEFERRED_FORMAL: 0,
+};
+for (const requirement of matrix.requirements) {
+  assert(/^REQ-[A-Z0-9-]+$/.test(requirement.id), `invalid requirement id ${requirement.id}`);
+  assert(!requirementIds.has(requirement.id), `duplicate requirement id ${requirement.id}`);
+  requirementIds.add(requirement.id);
+  assert(Object.hasOwn(classCounts, requirement.class), `invalid requirement class ${requirement.class}`);
+  classCounts[requirement.class] += 1;
+  assert(typeof requirement.title === 'string' && requirement.title.trim(), `${requirement.id} has no title`);
+  assert(typeof requirement.acceptance === 'string' && requirement.acceptance.trim(), `${requirement.id} has no acceptance text`);
+  assert(Array.isArray(requirement.gateIds), `${requirement.id} gateIds must be an array`);
+  if (requirement.class === 'SOFTWARE_REQUIRED') {
+    assert(requirement.gateIds.length > 0, `${requirement.id} is software-required but has no automated gate`);
+  } else {
+    assert(requirement.gateIds.length === 0, `${requirement.id} is deferred but still points at an automated PASS gate`);
+  }
+  for (const gateId of requirement.gateIds) assert(gateIds.has(gateId), `${requirement.id} references unknown gate ${gateId}`);
+}
+
+assert(matrix.requirements.some((item) => item.id === 'REQ-REC-001'), 'Backup/Destroy/Restore requirement is missing');
+assert(matrix.requirements.some((item) => item.id === 'REQ-METRIC-001'), 'Energy Golden Dataset requirement is missing');
+assert(matrix.requirements.some((item) => item.id === 'REQ-HW-001' && item.class === 'DEFERRED_HARDWARE'), 'Real meter must not be silently treated as tested');
+assert(matrix.requirements.some((item) => item.id === 'REQ-FORMAL-001' && item.class === 'DEFERRED_FORMAL'), 'Formal endurance must not be claimed by preflight');
+await access(resolve(root, 'modules/energy/internal/energy/testdata/phase1-golden.v1.json'));
+await access(resolve(root, 'scripts/run-phase1-postgres-restore-test.mjs'));
+await access(resolve(root, 'docs/operations/phase1-simulator-acceptance.md'));
+
+const mappedGateIds = new Set(matrix.requirements.flatMap((item) => item.gateIds));
+for (const gateId of gateIds) assert(mappedGateIds.has(gateId), `automated gate ${gateId} is not traceable to any requirement`);
+
+const report = {
+  schemaVersion: 1,
+  status: 'passed',
+  checkedAt: new Date().toISOString(),
+  requirementCount: matrix.requirements.length,
+  gateCount: matrix.gates.length,
+  classCounts,
+  hardGates: matrix.hardGates,
+  sourceDesign: matrix.sourceDesign,
+};
+await mkdir(dirname(reportPath), { recursive: true });
+await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+console.log(`Phase 1 Simulator Acceptance static check passed: requirements=${matrix.requirements.length}, gates=${matrix.gates.length}`);

@@ -46,4 +46,4 @@ npm --prefix services/operations-agent-service run check     # 接口定义、�
 npm run operations-agent-service:postgres                     # 会话存储，对着一个临时的 PostgreSQL
 ```
 
-模块之间只通过各自的 `index.ts` 引用；`agent` 和 `application` 不引用任何适配器或外部包（`scripts/check-operations-agent-service-boundaries.mjs` 检查）。
+模块之间只通过各自的 `index.ts` 引用；`agent` 和 `application` 不引用任何适配器或外部包（`scripts/check-operations-agent-service-boundaries.ts` 检查）。

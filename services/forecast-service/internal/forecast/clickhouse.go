@@ -3,7 +3,6 @@ package forecast
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 )
 
 type ClickHouseConfig struct {
@@ -37,11 +38,13 @@ type ClickHouseSink struct {
 	readerUsername string
 	readerPassword string
 	client         *http.Client
+	ch             *clickhousehttp.Client
+	readCh         *clickhousehttp.Client
 }
 
 func NewClickHouseSink(config ClickHouseConfig) (*ClickHouseSink, error) {
-	parsed, err := url.Parse(config.BaseURL)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+	parsed, err := clickhousehttp.ParseBaseURL(config.BaseURL, false)
+	if err != nil {
 		return nil, errors.New("forecast ClickHouse URL must be absolute http/https")
 	}
 	database := config.Database
@@ -57,77 +60,51 @@ func NewClickHouseSink(config ClickHouseConfig) (*ClickHouseSink, error) {
 	}
 	client := config.HTTPClient
 	if client == nil {
-		client = newDefaultClickHouseHTTPClient(10 * time.Second)
+		client = clickhousehttp.NewPooledHTTPClient(clickhousehttp.ServiceTransportConfig(10 * time.Second))
 	}
-	return &ClickHouseSink{baseURL: parsed, database: database, table: table, username: config.Username, password: config.Password, readerUsername: config.ReaderUsername, readerPassword: config.ReaderPassword, client: client}, nil
-}
-
-func newDefaultClickHouseHTTPClient(timeout time.Duration) *http.Client {
-	var transport *http.Transport
-	if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
-		transport = base.Clone()
-	} else {
-		transport = &http.Transport{}
+	writeClient := clickhousehttp.NewClient(parsed, client, clickhousehttp.Credentials{
+		Username: config.Username,
+		Password: config.Password,
+	})
+	readUser, readPass := config.ReaderUsername, config.ReaderPassword
+	if readUser == "" {
+		readClient := clickhousehttp.NewClient(parsed, client, clickhousehttp.Credentials{})
+		return &ClickHouseSink{
+			baseURL: parsed, database: database, table: table,
+			username: config.Username, password: config.Password,
+			readerUsername: config.ReaderUsername, readerPassword: config.ReaderPassword,
+			client: client, ch: writeClient, readCh: readClient,
+		}, nil
 	}
-	transport.MaxIdleConns = 64
-	transport.MaxIdleConnsPerHost = 32
-	transport.IdleConnTimeout = 90 * time.Second
-	transport.TLSHandshakeTimeout = 10 * time.Second
-	transport.ExpectContinueTimeout = 1 * time.Second
-	return &http.Client{
-		Timeout:   timeout,
-		Transport: transport,
-		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-}
-
-func drainAndClose(body io.ReadCloser) {
-	if body == nil {
-		return
-	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(body, 64<<10))
-	_ = body.Close()
+	readClient := writeClient.WithCredentials(readUser, readPass)
+	return &ClickHouseSink{
+		baseURL: parsed, database: database, table: table,
+		username: config.Username, password: config.Password,
+		readerUsername: config.ReaderUsername, readerPassword: config.ReaderPassword,
+		client: client, ch: writeClient, readCh: readClient,
+	}, nil
 }
 
 func (sink *ClickHouseSink) CloseIdleConnections() {
-	if sink != nil && sink.client != nil {
-		sink.client.CloseIdleConnections()
+	if sink != nil && sink.ch != nil {
+		sink.ch.CloseIdleConnections()
 	}
 }
 
 func (sink *ClickHouseSink) Ping(ctx context.Context) error {
-	if sink == nil || sink.baseURL == nil || sink.client == nil {
+	if sink == nil || sink.ch == nil {
 		return errors.New("forecast ClickHouse sink is unavailable")
 	}
-	user, pass := sink.readerUsername, sink.readerPassword
-	if user == "" {
-		user, pass = sink.username, sink.password
+	pingClient := sink.ch
+	if sink.readerUsername != "" && sink.readCh != nil {
+		pingClient = sink.readCh
 	}
-	return pingClickHouseHTTP(ctx, sink.baseURL, user, pass, sink.client, "forecast ClickHouse")
-}
-
-func pingClickHouseHTTP(ctx context.Context, baseURL *url.URL, username, password string, client *http.Client, label string) error {
-	endpoint := *baseURL
-	query := endpoint.Query()
-	query.Set("query", "SELECT 1")
-	endpoint.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return err
-	}
-	if username != "" {
-		request.SetBasicAuth(username, password)
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return fmt.Errorf("ping %s: %w", label, err)
-	}
-	defer drainAndClose(response.Body)
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		return fmt.Errorf("ping %s returned %d: %s", label, response.StatusCode, strings.TrimSpace(string(detail)))
+	if err := pingClient.Ping(ctx, false); err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return fmt.Errorf("ping forecast ClickHouse returned %d: %s", statusErr.StatusCode, statusErr.TrimmedBody(512))
+		}
+		return fmt.Errorf("ping forecast ClickHouse: %w", err)
 	}
 	return nil
 }
@@ -165,35 +142,29 @@ func (sink *ClickHouseSink) InsertForecastPoints(ctx context.Context, points []P
 			return fmt.Errorf("encode forecast result: %w", err)
 		}
 	}
-	token := fmt.Sprintf("%x", sha256.Sum256(body.Bytes()))
-	endpoint := *sink.baseURL
-	query := endpoint.Query()
-	query.Set("database", sink.database)
-	query.Set("query", fmt.Sprintf("INSERT INTO %s.%s FORMAT JSONEachRow", sink.database, sink.table))
-	query.Set("date_time_input_format", "best_effort")
-	query.Set("async_insert", "1")
-	query.Set("wait_for_async_insert", "1")
-	query.Set("async_insert_deduplicate", "1")
-	query.Set("insert_deduplicate", "1")
-	query.Set("insert_deduplication_token", token)
-	query.Set("wait_end_of_query", "1")
-	endpoint.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), &body)
-	if err != nil {
-		return fmt.Errorf("build forecast ClickHouse request: %w", err)
+	raw := body.Bytes()
+	token := clickhousehttp.SHA256Hex(raw)
+	params := url.Values{
+		"database":                   {sink.database},
+		"query":                      {fmt.Sprintf("INSERT INTO %s.%s FORMAT JSONEachRow", sink.database, sink.table)},
+		"date_time_input_format":     {"best_effort"},
+		"async_insert":               {"1"},
+		"wait_for_async_insert":      {"1"},
+		"async_insert_deduplicate":   {"1"},
+		"insert_deduplicate":         {"1"},
+		"insert_deduplication_token": {token},
+		"wait_end_of_query":          {"1"},
 	}
-	request.Header.Set("Content-Type", "application/x-ndjson")
-	if sink.username != "" {
-		request.SetBasicAuth(sink.username, sink.password)
-	}
-	response, err := sink.client.Do(request)
-	if err != nil {
+	if err := sink.ch.Insert(ctx, clickhousehttp.InsertRequest{
+		Params:        params,
+		Body:          raw,
+		MaxErrorBytes: 2048,
+	}); err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return fmt.Errorf("insert forecast ClickHouse result returned %d: %s", statusErr.StatusCode, statusErr.TrimmedBody(512))
+		}
 		return fmt.Errorf("insert forecast ClickHouse result: %w", err)
-	}
-	defer drainAndClose(response.Body)
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		return fmt.Errorf("insert forecast ClickHouse result returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
 	}
 	return nil
 }
@@ -245,34 +216,27 @@ func (sink *ClickHouseSink) ReadForecastJob(ctx context.Context, scope ForecastJ
 	if err != nil {
 		return nil, err
 	}
-	endpoint := *sink.baseURL
-	query := endpoint.Query()
-	query.Set("database", sink.database)
-	query.Set("query", fmt.Sprintf(`SELECT
+	sql := fmt.Sprintf(`SELECT
  toString(forecast_id) AS forecast_id,toString(tenant_id) AS tenant_id,toString(site_id) AS site_id,subject_type,toString(subject_id) AS subject_id,target,
  toString(forecast_job_id) AS forecast_job_id,toString(forecast_snapshot_id) AS forecast_snapshot_id,toString(deployment_id) AS deployment_id,toString(model_id) AS model_id,
  toString(model_version_id) AS model_version_id,model_version,toString(feature_set_version_id) AS feature_set_version_id,feature_set_version,toString(input_snapshot_id) AS input_snapshot_id,
  toString(topology_version_id) AS topology_version_id,formatDateTime(forecast_origin,'%%FT%%TZ','UTC') AS forecast_origin,formatDateTime(forecast_for,'%%FT%%TZ','UTC') AS forecast_for,
  horizon_minutes,value,unit,lower_bound,upper_bound,quantile,quality,formatDateTime(generated_at,'%%FT%%TZ','UTC') AS generated_at
- FROM %s.%s AS fact WHERE %s ORDER BY fact.forecast_for FORMAT JSONEachRow`, sink.database, sink.table, where))
-	endpoint.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+ FROM %s.%s AS fact WHERE %s ORDER BY fact.forecast_for FORMAT JSONEachRow`, sink.database, sink.table, where)
+	payload, err := sink.readCh.Query(ctx, clickhousehttp.QueryRequest{
+		Method:           http.MethodGet,
+		SQL:              sql,
+		Params:           url.Values{"database": {sink.database}},
+		MaxResponseBytes: 32 << 20,
+	})
 	if err != nil {
-		return nil, err
-	}
-	if sink.readerUsername != "" {
-		request.SetBasicAuth(sink.readerUsername, sink.readerPassword)
-	}
-	response, err := sink.client.Do(request)
-	if err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return nil, fmt.Errorf("query forecast ClickHouse result returned %d: %s", statusErr.StatusCode, statusErr.TrimmedBody(512))
+		}
 		return nil, fmt.Errorf("query forecast ClickHouse result: %w", err)
 	}
-	defer drainAndClose(response.Body)
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		detail, _ := io.ReadAll(io.LimitReader(response.Body, 2048))
-		return nil, fmt.Errorf("query forecast ClickHouse result returned %d: %s", response.StatusCode, strings.TrimSpace(string(detail)))
-	}
-	decoder := json.NewDecoder(response.Body)
+	decoder := json.NewDecoder(bytes.NewReader(payload))
 	points := make([]Point, 0)
 	for {
 		var point Point
@@ -295,29 +259,19 @@ func (sink *ClickHouseSink) HasForecastJob(ctx context.Context, scope ForecastJo
 	if err != nil {
 		return false, err
 	}
-	endpoint := *sink.baseURL
-	query := endpoint.Query()
-	query.Set("database", sink.database)
-	query.Set("query", fmt.Sprintf("SELECT count() FROM %s.%s WHERE %s FORMAT TabSeparated", sink.database, sink.table, where))
-	endpoint.RawQuery = query.Encode()
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	body, err := sink.readCh.Query(ctx, clickhousehttp.QueryRequest{
+		Method:           http.MethodGet,
+		SQL:              fmt.Sprintf("SELECT count() FROM %s.%s WHERE %s FORMAT TabSeparated", sink.database, sink.table, where),
+		Params:           url.Values{"database": {sink.database}},
+		MaxResponseBytes: 4096,
+		TruncateAtLimit:  true,
+	})
 	if err != nil {
+		var statusErr *clickhousehttp.StatusError
+		if errors.As(err, &statusErr) {
+			return false, fmt.Errorf("query forecast ClickHouse publication returned %d: %s", statusErr.StatusCode, statusErr.TrimmedBody(512))
+		}
 		return false, err
-	}
-	if sink.readerUsername != "" {
-		request.SetBasicAuth(sink.readerUsername, sink.readerPassword)
-	}
-	response, err := sink.client.Do(request)
-	if err != nil {
-		return false, err
-	}
-	defer drainAndClose(response.Body)
-	body, err := io.ReadAll(io.LimitReader(response.Body, 4096))
-	if err != nil {
-		return false, err
-	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return false, fmt.Errorf("query forecast ClickHouse publication returned %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
 	}
 	count, err := strconv.Atoi(strings.TrimSpace(string(body)))
 	if err != nil {

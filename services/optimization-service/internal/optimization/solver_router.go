@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
 	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
@@ -291,7 +292,7 @@ func newSafeRemoteSolverHTTPClient(timeout time.Duration) *http.Client {
 	if timeout <= 0 {
 		timeout = defaultRemoteSolverTimeout
 	}
-	return newPooledHTTPClient(timeout, true)
+	return clickhousehttp.NewPooledHTTPClient(clickhousehttp.ServiceTransportConfig(timeout))
 }
 
 func (adapter *RoutingSolverAdapter) ensureDefaults() {
@@ -469,7 +470,7 @@ func (adapter *RoutingSolverAdapter) invokeRemoteHTTP(ctx context.Context, endpo
 	if err != nil {
 		return Recommendation{}, fmt.Errorf("remote solver HTTP call failed: %w", err)
 	}
-	defer drainAndClose(resp.Body)
+	defer clickhousehttp.DrainAndClose(resp.Body)
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maximumRemoteSolverResponseBytes+1))
 	if err != nil {

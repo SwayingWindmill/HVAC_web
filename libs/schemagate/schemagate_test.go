@@ -28,6 +28,10 @@ type fakeQuerier struct{ row pgx.Row }
 
 func (db fakeQuerier) QueryRow(context.Context, string, ...any) pgx.Row { return db.row }
 
+type fakePtrQuerier struct{ row pgx.Row }
+
+func (db *fakePtrQuerier) QueryRow(context.Context, string, ...any) pgx.Row { return db.row }
+
 func TestVerifyProductSchemaAcceptsMatchingVersion(t *testing.T) {
 	err := VerifyProductSchema(context.Background(), fakeQuerier{row: fakeRow{value: "0.1.0"}}, "0.1.0")
 	if err != nil {
@@ -52,6 +56,21 @@ func TestVerifyProductSchemaRejectsMissingRow(t *testing.T) {
 func TestVerifyProductSchemaRejectsNilQuerier(t *testing.T) {
 	if err := VerifyProductSchema(context.Background(), nil, "0.1.0"); err == nil {
 		t.Fatal("nil querier was accepted")
+	}
+}
+
+func TestVerifyProductSchemaRejectsTypedNilQuerier(t *testing.T) {
+	var ptr *fakePtrQuerier
+	if err := VerifyProductSchema(context.Background(), ptr, "0.1.0"); err == nil {
+		t.Fatal("typed-nil querier was accepted")
+	}
+}
+
+func TestVerifyEnvProductSchemaRejectsTypedNilQuerier(t *testing.T) {
+	t.Setenv("PHASE1_PRODUCT_VERSION", "0.1.0")
+	var ptr *fakePtrQuerier
+	if err := VerifyEnvProductSchema(context.Background(), ptr); err == nil {
+		t.Fatal("typed-nil querier was accepted")
 	}
 }
 

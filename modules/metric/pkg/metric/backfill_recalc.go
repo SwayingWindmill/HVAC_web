@@ -17,6 +17,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/clickhousehttp"
 	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
@@ -977,12 +978,12 @@ type ClickHouseBackfillSource struct {
 
 // NewClickHouseBackfillSource constructs an HTTP reader for ClickHouse observation backfills.
 func NewClickHouseBackfillSource(baseURL, user, password string, client *http.Client) (*ClickHouseBackfillSource, error) {
-	u, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+	u, err := clickhousehttp.ParseBaseURL(baseURL, false)
+	if err != nil {
 		return nil, errors.New("metric ClickHouse URL must be absolute http/https")
 	}
 	if client == nil {
-		client = newDefaultClickHouseHTTPClient(15 * time.Second)
+		client = clickhousehttp.NewPooledHTTPClient(clickhousehttp.DataPlaneTransportConfig(15 * time.Second))
 	}
 	return &ClickHouseBackfillSource{base: u, user: user, password: password, client: client}, nil
 }

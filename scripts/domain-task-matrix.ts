@@ -57,12 +57,12 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       npmRun('analytics:history:check'),
     ]),
     web: Object.freeze([npmRun('web:principal:contract')]),
-    registry: Object.freeze([nodeRun('scripts/check-s1-registry-baseline.mjs')]),
+    registry: Object.freeze([nodeRun('--experimental-strip-types', 'scripts/check-s1-registry-baseline.ts')]),
     telemetry: Object.freeze([
       nodeRun('scripts/generate-s2-telemetry-contracts.mjs', '--check'),
-      nodeRun('scripts/check-s2-telemetry-public-contract.mjs'),
+      nodeRun('--experimental-strip-types', 'scripts/check-s2-telemetry-public-contract.ts'),
     ]),
-    command: Object.freeze([nodeRun('scripts/check-s3-command-gateway.mjs')]),
+    command: Object.freeze([nodeRun('--experimental-strip-types', 'scripts/check-s3-command-gateway.ts')]),
   }),
   unit: Object.freeze({
     // Every Go module, whatever the domain: selected by the classifier for any Go code, dependency or lint-rule change.
@@ -90,6 +90,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       nodeRun(
         'scripts/run-go.mjs',
         'test',
+        './libs/clickhousehttp/...',
         './libs/edgetunnel/...',
         './libs/limitpolicy/...',
         './libs/mqttclient/...',
