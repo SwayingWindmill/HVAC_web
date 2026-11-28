@@ -23,13 +23,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
+	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
 const (
@@ -54,7 +54,7 @@ func TestTelemetryGatewaySingleAndBatchPreserveOrder(t *testing.T) {
 	if singleRecorder.Code != http.StatusOK {
 		t.Fatalf("single status=%d body=%s", singleRecorder.Code, singleRecorder.Body.String())
 	}
-	var snapshot s2telemetryapi.DeviceObservationSnapshot
+	var snapshot telemetryapi.DeviceObservationSnapshot
 	if err := json.NewDecoder(singleRecorder.Body).Decode(&snapshot); err != nil {
 		t.Fatal(err)
 	}
@@ -62,12 +62,12 @@ func TestTelemetryGatewaySingleAndBatchPreserveOrder(t *testing.T) {
 		t.Fatalf("single key order drifted: %#v", snapshot.Values)
 	}
 
-	batchInput := s2telemetryapi.BatchGetObservationSnapshotsRequest{Requests: []s2telemetryapi.ObservationSnapshotTarget{
-		{RequestId: "second", DeviceId: telemetryTestDeviceTwo, Keys: []s2telemetryapi.TelemetryKey{"supplyTemp", "returnTemp"}},
-		{RequestId: "first", DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{}},
+	batchInput := telemetryapi.BatchGetObservationSnapshotsRequest{Requests: []telemetryapi.ObservationSnapshotTarget{
+		{RequestId: "second", DeviceId: telemetryTestDeviceTwo, Keys: []telemetryapi.TelemetryKey{"supplyTemp", "returnTemp"}},
+		{RequestId: "first", DeviceId: telemetryTestDeviceOne, Keys: []telemetryapi.TelemetryKey{}},
 	}}
 	body, _ := json.Marshal(batchInput)
-	batch := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, bytes.NewReader(body))
+	batch := httptest.NewRequest(http.MethodPost, telemetryapi.BatchGetDeviceObservationSnapshotsPath, bytes.NewReader(body))
 	fixture.authenticate(batch)
 	batch.Header.Set("Origin", "https://web.example.test")
 	batch.Header.Set("X-CSRF-Token", telemetryTestCSRF)
@@ -76,7 +76,7 @@ func TestTelemetryGatewaySingleAndBatchPreserveOrder(t *testing.T) {
 	if batchRecorder.Code != http.StatusOK {
 		t.Fatalf("batch status=%d body=%s", batchRecorder.Code, batchRecorder.Body.String())
 	}
-	var output s2telemetryapi.BatchGetObservationSnapshotsResponse
+	var output telemetryapi.BatchGetObservationSnapshotsResponse
 	if err := json.NewDecoder(batchRecorder.Body).Decode(&output); err != nil {
 		t.Fatal(err)
 	}
@@ -90,11 +90,11 @@ func TestTelemetryGatewaySingleAndBatchPreserveOrder(t *testing.T) {
 
 func TestTelemetryGatewayDeviceHistoryBindsExactScopeAndPreservesMetadata(t *testing.T) {
 	fixture := newTelemetryGatewayFixture(t, "")
-	input := s2telemetryapi.DeviceHistoryRequest{
+	input := telemetryapi.DeviceHistoryRequest{
 		DeviceId: telemetryTestDeviceOne,
-		Keys:     []s2telemetryapi.TelemetryKey{"temperature"},
-		From:     s2telemetryapi.HistoryInstant("2026-07-24T06:00:00Z"),
-		To:       s2telemetryapi.HistoryInstant("2026-07-24T12:00:00Z"),
+		Keys:     []telemetryapi.TelemetryKey{"temperature"},
+		From:     telemetryapi.HistoryInstant("2026-07-24T06:00:00Z"),
+		To:       telemetryapi.HistoryInstant("2026-07-24T12:00:00Z"),
 		PageSize: 100,
 	}
 	body, err := json.Marshal(input)
@@ -104,7 +104,7 @@ func TestTelemetryGatewayDeviceHistoryBindsExactScopeAndPreservesMetadata(t *tes
 	if bytes.Contains(body, []byte("organizationId")) || bytes.Contains(body, []byte("siteId")) {
 		t.Fatalf("public Device History request exposed authority fields: %s", body)
 	}
-	request := httptest.NewRequest(http.MethodPost, s2telemetryapi.QueryDeviceHistoryPath, bytes.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, telemetryapi.QueryDeviceHistoryPath, bytes.NewReader(body))
 	fixture.authenticate(request)
 	request.Header.Set("Origin", "https://web.example.test")
 	request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
@@ -117,7 +117,7 @@ func TestTelemetryGatewayDeviceHistoryBindsExactScopeAndPreservesMetadata(t *tes
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("history status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var response s2telemetryapi.DeviceHistoryResponse
+	var response telemetryapi.DeviceHistoryResponse
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
@@ -134,16 +134,16 @@ func TestTelemetryGatewayDeviceHistoryBindsExactScopeAndPreservesMetadata(t *tes
 
 func TestTelemetryGatewayDeviceHistoryAggregateBindsCalendarPolicy(t *testing.T) {
 	fixture := newTelemetryGatewayFixture(t, "")
-	input := s2telemetryapi.DeviceHistoryAggregateRequest{
-		DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{"temperature"},
-		From: s2telemetryapi.HistoryInstant("2026-07-24T00:00:00Z"), To: s2telemetryapi.HistoryInstant("2026-07-25T00:00:00Z"),
-		Granularity: s2telemetryapi.DeviceHistoryAggregateGranularityDay, Timezone: "Asia/Singapore", QualityPolicy: s2telemetryapi.DeviceHistoryAggregateQualityPolicyValidOnly,
+	input := telemetryapi.DeviceHistoryAggregateRequest{
+		DeviceId: telemetryTestDeviceOne, Keys: []telemetryapi.TelemetryKey{"temperature"},
+		From: telemetryapi.HistoryInstant("2026-07-24T00:00:00Z"), To: telemetryapi.HistoryInstant("2026-07-25T00:00:00Z"),
+		Granularity: telemetryapi.DeviceHistoryAggregateGranularityDay, Timezone: "Asia/Singapore", QualityPolicy: telemetryapi.DeviceHistoryAggregateQualityPolicyValidOnly,
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, s2telemetryapi.QueryDeviceHistoryAggregatePath, bytes.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, telemetryapi.QueryDeviceHistoryAggregatePath, bytes.NewReader(body))
 	fixture.authenticate(request)
 	request.Header.Set("Origin", "https://web.example.test")
 	request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
@@ -153,11 +153,11 @@ func TestTelemetryGatewayDeviceHistoryAggregateBindsCalendarPolicy(t *testing.T)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("aggregate status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var response s2telemetryapi.DeviceHistoryAggregateResponse
+	var response telemetryapi.DeviceHistoryAggregateResponse
 	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
 		t.Fatal(err)
 	}
-	if response.TenantId != telemetryTestTenant || response.SiteId != telemetryTestSite || response.DeviceId != telemetryTestDeviceOne || len(response.Buckets) != 1 || response.Buckets[0].PointRevision != 7 || response.Metadata.Timezone != "Asia/Singapore" || response.Metadata.QualityPolicy != s2telemetryapi.DeviceHistoryAggregateQualityPolicyValidOnly {
+	if response.TenantId != telemetryTestTenant || response.SiteId != telemetryTestSite || response.DeviceId != telemetryTestDeviceOne || len(response.Buckets) != 1 || response.Buckets[0].PointRevision != 7 || response.Metadata.Timezone != "Asia/Singapore" || response.Metadata.QualityPolicy != telemetryapi.DeviceHistoryAggregateQualityPolicyValidOnly {
 		t.Fatalf("aggregate response drifted: %+v", response)
 	}
 	if fixture.iamCalls.Load() != 1 || fixture.queryCalls.Load() != 1 || fixture.runtimeCalls.Load() != 0 {
@@ -167,13 +167,13 @@ func TestTelemetryGatewayDeviceHistoryAggregateBindsCalendarPolicy(t *testing.T)
 
 func TestTelemetryGatewayDeviceHistoryAggregateMinuteBucketLimitAndAuthGuard(t *testing.T) {
 	fixture := newTelemetryGatewayFixture(t, "")
-	exceeded := s2telemetryapi.DeviceHistoryAggregateRequest{
-		DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{"temperature"},
-		From: s2telemetryapi.HistoryInstant("2026-07-24T00:00:00Z"), To: s2telemetryapi.HistoryInstant("2026-07-24T12:01:00Z"),
-		Granularity: s2telemetryapi.DeviceHistoryAggregateGranularityMinute, Timezone: "Asia/Shanghai", QualityPolicy: s2telemetryapi.DeviceHistoryAggregateQualityPolicyUsable,
+	exceeded := telemetryapi.DeviceHistoryAggregateRequest{
+		DeviceId: telemetryTestDeviceOne, Keys: []telemetryapi.TelemetryKey{"temperature"},
+		From: telemetryapi.HistoryInstant("2026-07-24T00:00:00Z"), To: telemetryapi.HistoryInstant("2026-07-24T12:01:00Z"),
+		Granularity: telemetryapi.DeviceHistoryAggregateGranularityMinute, Timezone: "Asia/Shanghai", QualityPolicy: telemetryapi.DeviceHistoryAggregateQualityPolicyUsable,
 	}
 	body, _ := json.Marshal(exceeded)
-	request := httptest.NewRequest(http.MethodPost, s2telemetryapi.QueryDeviceHistoryAggregatePath, bytes.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, telemetryapi.QueryDeviceHistoryAggregatePath, bytes.NewReader(body))
 	fixture.authenticate(request)
 	request.Header.Set("Origin", "https://web.example.test")
 	request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
@@ -185,9 +185,9 @@ func TestTelemetryGatewayDeviceHistoryAggregateMinuteBucketLimitAndAuthGuard(t *
 	}
 
 	valid := exceeded
-	valid.To = s2telemetryapi.HistoryInstant("2026-07-24T01:00:00Z")
+	valid.To = telemetryapi.HistoryInstant("2026-07-24T01:00:00Z")
 	validBody, _ := json.Marshal(valid)
-	unauth := httptest.NewRequest(http.MethodPost, s2telemetryapi.QueryDeviceHistoryAggregatePath, bytes.NewReader(validBody))
+	unauth := httptest.NewRequest(http.MethodPost, telemetryapi.QueryDeviceHistoryAggregatePath, bytes.NewReader(validBody))
 	unauth.Header.Set("Origin", "https://web.example.test")
 	unauth = unauth.WithContext(context.WithValue(unauth.Context(), routeDecisionContextKey, ownershipregistry.Decision{RegistryRevision: 12, SelectedOwner: ownershipregistry.OwnerAnalyticsQuery}))
 	unauthRecorder := httptest.NewRecorder()
@@ -206,17 +206,17 @@ func TestTelemetryGatewayDeviceHistoryAggregateRateLimit(t *testing.T) {
 			{Dimension: limitpolicy.DimensionExpensiveQuery, Window: time.Minute, Burst: 1},
 		},
 	})
-	input := s2telemetryapi.DeviceHistoryAggregateRequest{
-		DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{"temperature"},
-		From: s2telemetryapi.HistoryInstant("2026-07-24T00:00:00Z"), To: s2telemetryapi.HistoryInstant("2026-07-25T00:00:00Z"),
-		Granularity: s2telemetryapi.DeviceHistoryAggregateGranularityDay, Timezone: "Asia/Singapore", QualityPolicy: s2telemetryapi.DeviceHistoryAggregateQualityPolicyValidOnly,
+	input := telemetryapi.DeviceHistoryAggregateRequest{
+		DeviceId: telemetryTestDeviceOne, Keys: []telemetryapi.TelemetryKey{"temperature"},
+		From: telemetryapi.HistoryInstant("2026-07-24T00:00:00Z"), To: telemetryapi.HistoryInstant("2026-07-25T00:00:00Z"),
+		Granularity: telemetryapi.DeviceHistoryAggregateGranularityDay, Timezone: "Asia/Singapore", QualityPolicy: telemetryapi.DeviceHistoryAggregateQualityPolicyValidOnly,
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
 	}
 	newRequest := func() *http.Request {
-		request := httptest.NewRequest(http.MethodPost, s2telemetryapi.QueryDeviceHistoryAggregatePath, bytes.NewReader(body))
+		request := httptest.NewRequest(http.MethodPost, telemetryapi.QueryDeviceHistoryAggregatePath, bytes.NewReader(body))
 		fixture.authenticate(request)
 		request.Header.Set("Origin", "https://web.example.test")
 		request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
@@ -242,15 +242,15 @@ func TestTelemetryGatewayDeviceHistoryAggregateRateLimit(t *testing.T) {
 
 func TestTelemetryGatewayDeviceHistoryRejectsRuntimeRouteOwner(t *testing.T) {
 	fixture := newTelemetryGatewayFixture(t, "")
-	input := s2telemetryapi.DeviceHistoryRequest{
-		DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{"temperature"},
-		From: s2telemetryapi.HistoryInstant("2026-07-24T06:00:00Z"), To: s2telemetryapi.HistoryInstant("2026-07-24T12:00:00Z"), PageSize: 100,
+	input := telemetryapi.DeviceHistoryRequest{
+		DeviceId: telemetryTestDeviceOne, Keys: []telemetryapi.TelemetryKey{"temperature"},
+		From: telemetryapi.HistoryInstant("2026-07-24T06:00:00Z"), To: telemetryapi.HistoryInstant("2026-07-24T12:00:00Z"), PageSize: 100,
 	}
 	body, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, s2telemetryapi.QueryDeviceHistoryPath, bytes.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, telemetryapi.QueryDeviceHistoryPath, bytes.NewReader(body))
 	fixture.authenticate(request)
 	request.Header.Set("Origin", "https://web.example.test")
 	request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
@@ -270,11 +270,11 @@ func TestTelemetryGatewayDeviceHistoryRejectsRuntimeRouteOwner(t *testing.T) {
 
 func TestTelemetryGatewayBootstrapCheckpointAndRecoveryUseExactScope(t *testing.T) {
 	fixture := newTelemetryGatewayFixture(t, "")
-	bootstrapInput := s2telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []s2telemetryapi.SubscriptionTargetRequest{
-		{ClientSubscriptionId: "zone-temperature", DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{"temperature"}},
+	bootstrapInput := telemetryapi.SubscriptionBootstrapRequest{Subscriptions: []telemetryapi.SubscriptionTargetRequest{
+		{ClientSubscriptionId: "zone-temperature", DeviceId: telemetryTestDeviceOne, Keys: []telemetryapi.TelemetryKey{"temperature"}},
 	}}
 	bootstrapBody, _ := json.Marshal(bootstrapInput)
-	bootstrapRequest := httptest.NewRequest(http.MethodPost, s2telemetryapi.BootstrapTelemetrySubscriptionsPath, bytes.NewReader(bootstrapBody))
+	bootstrapRequest := httptest.NewRequest(http.MethodPost, telemetryapi.BootstrapTelemetrySubscriptionsPath, bytes.NewReader(bootstrapBody))
 	fixture.authenticate(bootstrapRequest)
 	bootstrapRequest.Header.Set("Origin", "https://web.example.test")
 	bootstrapRequest.Header.Set("X-CSRF-Token", telemetryTestCSRF)
@@ -283,16 +283,16 @@ func TestTelemetryGatewayBootstrapCheckpointAndRecoveryUseExactScope(t *testing.
 	if bootstrapRecorder.Code != http.StatusOK {
 		t.Fatalf("bootstrap status=%d body=%s", bootstrapRecorder.Code, bootstrapRecorder.Body.String())
 	}
-	var bootstrap s2telemetryapi.SubscriptionBootstrapResponse
+	var bootstrap telemetryapi.SubscriptionBootstrapResponse
 	if err := json.NewDecoder(bootstrapRecorder.Body).Decode(&bootstrap); err != nil || len(bootstrap.Subscriptions) != 1 {
 		t.Fatalf("bootstrap decode=%v output=%+v", err, bootstrap)
 	}
 
-	checkpointInput := s2telemetryapi.RecoveryCursorCheckpointRequest{Checkpoints: []s2telemetryapi.RecoveryCursorCheckpoint{
-		{SubscriptionId: bootstrap.Subscriptions[0].SubscriptionId, BusinessRevision: 9, TransportPosition: s2telemetryapi.TransportPosition{Epoch: "epoch-a", Offset: 42}},
+	checkpointInput := telemetryapi.RecoveryCursorCheckpointRequest{Checkpoints: []telemetryapi.RecoveryCursorCheckpoint{
+		{SubscriptionId: bootstrap.Subscriptions[0].SubscriptionId, BusinessRevision: 9, TransportPosition: telemetryapi.TransportPosition{Epoch: "epoch-a", Offset: 42}},
 	}}
 	checkpointBody, _ := json.Marshal(checkpointInput)
-	checkpointRequest := httptest.NewRequest(http.MethodPost, s2telemetryapi.CheckpointTelemetryRecoveryCursorsPath, bytes.NewReader(checkpointBody))
+	checkpointRequest := httptest.NewRequest(http.MethodPost, telemetryapi.CheckpointTelemetryRecoveryCursorsPath, bytes.NewReader(checkpointBody))
 	fixture.authenticate(checkpointRequest)
 	checkpointRequest.Header.Set("Origin", "https://web.example.test")
 	checkpointRequest.Header.Set("X-CSRF-Token", telemetryTestCSRF)
@@ -301,7 +301,7 @@ func TestTelemetryGatewayBootstrapCheckpointAndRecoveryUseExactScope(t *testing.
 	if checkpointRecorder.Code != http.StatusOK {
 		t.Fatalf("checkpoint status=%d body=%s", checkpointRecorder.Code, checkpointRecorder.Body.String())
 	}
-	var checkpoint s2telemetryapi.RecoveryCursorCheckpointResponse
+	var checkpoint telemetryapi.RecoveryCursorCheckpointResponse
 	if err := json.NewDecoder(checkpointRecorder.Body).Decode(&checkpoint); err != nil || len(checkpoint.Items) != 1 {
 		t.Fatalf("checkpoint decode=%v output=%+v", err, checkpoint)
 	}
@@ -309,7 +309,7 @@ func TestTelemetryGatewayBootstrapCheckpointAndRecoveryUseExactScope(t *testing.
 	cursor := checkpoint.Items[0].RecoveryCursor
 	bootstrapInput.Subscriptions[0].RecoveryCursor = &cursor
 	recoveryBody, _ := json.Marshal(bootstrapInput)
-	recoveryRequest := httptest.NewRequest(http.MethodPost, s2telemetryapi.BootstrapTelemetrySubscriptionsPath, bytes.NewReader(recoveryBody))
+	recoveryRequest := httptest.NewRequest(http.MethodPost, telemetryapi.BootstrapTelemetrySubscriptionsPath, bytes.NewReader(recoveryBody))
 	fixture.authenticate(recoveryRequest)
 	recoveryRequest.Header.Set("Origin", "https://web.example.test")
 	recoveryRequest.Header.Set("X-CSRF-Token", telemetryTestCSRF)
@@ -338,7 +338,7 @@ func TestTelemetryGatewayRejectsCSRFAndForgedIdentityBeforeUpstream(t *testing.T
 	fixture := newTelemetryGatewayFixture(t, "")
 	body := `{"requests":[{"requestId":"one","deviceId":"` + telemetryTestDeviceOne + `","keys":[]}]}`
 
-	missingCSRF := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
+	missingCSRF := httptest.NewRequest(http.MethodPost, telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
 	fixture.authenticate(missingCSRF)
 	missingCSRF.Header.Set("Origin", "https://web.example.test")
 	missingRecorder := httptest.NewRecorder()
@@ -361,7 +361,7 @@ func TestTelemetryGatewayWorkloadMTLSUsesExactIAMScopeWithoutCSRF(t *testing.T) 
 	fixture := newTelemetryGatewayFixture(t, "")
 	body := `{"requests":[{"requestId":"workload-one","deviceId":"` + telemetryTestDeviceOne + `","keys":["temperature"]}]}`
 
-	request := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
 	request.TLS = verifiedWorkloadTLSState(t, "spiffe://hvac.local/automation-service")
 	request.Header.Set("X-Tenant-ID", telemetryTestTenant)
 	recorder := httptest.NewRecorder()
@@ -373,7 +373,7 @@ func TestTelemetryGatewayWorkloadMTLSUsesExactIAMScopeWithoutCSRF(t *testing.T) 
 		t.Fatalf("workload upstream calls IAM=%d runtime=%d", fixture.iamCalls.Load(), fixture.runtimeCalls.Load())
 	}
 
-	legacyOrganization := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
+	legacyOrganization := httptest.NewRequest(http.MethodPost, telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
 	legacyOrganization.TLS = verifiedWorkloadTLSState(t, "spiffe://hvac.local/automation-service")
 	legacyOrganization.Header.Set("X-Tenant-ID", telemetryTestTenant)
 	legacyOrganization.Header.Set("X-Organization-ID", telemetryTestLegacyOrganization)
@@ -381,14 +381,14 @@ func TestTelemetryGatewayWorkloadMTLSUsesExactIAMScopeWithoutCSRF(t *testing.T) 
 	fixture.handler.ServeHTTP(legacyOrganizationRecorder, legacyOrganization)
 	assertTelemetryProblem(t, legacyOrganizationRecorder, http.StatusBadRequest, "FORGED_IDENTITY_HEADER")
 
-	unverified := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
+	unverified := httptest.NewRequest(http.MethodPost, telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
 	unverified.TLS = &tls.ConnectionState{PeerCertificates: verifiedWorkloadTLSState(t, "spiffe://hvac.local/automation-service").VerifiedChains[0]}
 	unverified.Header.Set("X-Organization-ID", telemetryTestLegacyOrganization)
 	unverifiedRecorder := httptest.NewRecorder()
 	fixture.handler.ServeHTTP(unverifiedRecorder, unverified)
 	assertTelemetryProblem(t, unverifiedRecorder, http.StatusBadRequest, "FORGED_IDENTITY_HEADER")
 
-	forgedRole := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
+	forgedRole := httptest.NewRequest(http.MethodPost, telemetryapi.BatchGetDeviceObservationSnapshotsPath, strings.NewReader(body))
 	forgedRole.TLS = verifiedWorkloadTLSState(t, "spiffe://hvac.local/automation-service")
 	forgedRole.Header.Set("X-Tenant-ID", telemetryTestTenant)
 	forgedRole.Header.Set("X-Roles", "admin")
@@ -419,7 +419,7 @@ func TestTelemetryGatewayIAMUnavailableIsStableAndDoesNotReachRuntime(t *testing
 
 func TestTelemetryGatewayNondiscoveryLimitsAndTimeout(t *testing.T) {
 	denied := newTelemetryGatewayFixture(t, telemetryauth.ReasonResourceNotFound)
-	problems := make([]s2telemetryapi.ProblemDetails, 0, 2)
+	problems := make([]telemetryapi.ProblemDetails, 0, 2)
 	for _, deviceID := range []string{telemetryTestDeviceOne, telemetryTestDeviceTwo} {
 		request := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/observation-snapshot", nil)
 		denied.authenticate(request)
@@ -503,7 +503,7 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 			if err != nil || len(claims.Actions) != 1 || claims.Actions[0] != telemetryCheckpointResolveAction {
 				t.Fatalf("checkpoint context grant invalid: claims=%+v err=%v", claims, err)
 			}
-			var input s2telemetryapi.RecoveryCursorCheckpointRequest
+			var input telemetryapi.RecoveryCursorCheckpointRequest
 			if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
 				t.Fatal(err)
 			}
@@ -511,7 +511,7 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 			for _, checkpoint := range input.Checkpoints {
 				target, ok := subscriptionScopes[string(checkpoint.SubscriptionId)]
 				if !ok {
-					return telemetryJSONResponse(http.StatusNotFound, s2telemetryapi.ProblemDetails{Status: http.StatusNotFound, Code: "RESOURCE_NOT_FOUND"}), nil
+					return telemetryJSONResponse(http.StatusNotFound, telemetryapi.ProblemDetails{Status: http.StatusNotFound, Code: "RESOURCE_NOT_FOUND"}), nil
 				}
 				targets = append(targets, target)
 			}
@@ -530,29 +530,29 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 		}
 		switch request.URL.Path {
 		case internalTelemetryBatchPath:
-			var input s2telemetryapi.BatchGetObservationSnapshotsRequest
+			var input telemetryapi.BatchGetObservationSnapshotsRequest
 			if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
 				t.Fatal(err)
 			}
-			output := s2telemetryapi.BatchGetObservationSnapshotsResponse{SchemaVersion: 1, Items: make([]s2telemetryapi.BatchObservationResult, 0, len(input.Requests))}
+			output := telemetryapi.BatchGetObservationSnapshotsResponse{SchemaVersion: 1, Items: make([]telemetryapi.BatchObservationResult, 0, len(input.Requests))}
 			for _, item := range input.Requests {
 				keys := make([]string, len(item.Keys))
 				for index, key := range item.Keys {
 					keys[index] = string(key)
 				}
-				output.Items = append(output.Items, s2telemetryapi.BatchObservationResult{Success: &s2telemetryapi.BatchObservationSuccess{RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: telemetrySnapshot(string(item.DeviceId), keys, now)}})
+				output.Items = append(output.Items, telemetryapi.BatchObservationResult{Success: &telemetryapi.BatchObservationSuccess{RequestId: item.RequestId, DeviceId: item.DeviceId, Status: "OK", Snapshot: telemetrySnapshot(string(item.DeviceId), keys, now)}})
 			}
 			return telemetryJSONResponse(http.StatusOK, output), nil
 		case internalTelemetryBootstrapPath:
-			var input s2telemetryapi.SubscriptionBootstrapRequest
+			var input telemetryapi.SubscriptionBootstrapRequest
 			if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
 				t.Fatal(err)
 			}
-			output := s2telemetryapi.SubscriptionBootstrapResponse{
+			output := telemetryapi.SubscriptionBootstrapResponse{
 				SchemaVersion: 1, TransportProtocol: "CENTRIFUGO_JSON_V1", Endpoint: "wss://realtime.example.test/connection/websocket",
-				ConnectionToken: strings.Repeat("t", 32), ExpiresAt: s2telemetryapi.Instant(now.Add(5 * time.Minute).Format("2006-01-02T15:04:05.000Z")),
-				Limits:        s2telemetryapi.SubscriptionLimits{MaxSubscriptions: 100, MaxKeysPerSubscription: 64, MaxTotalKeySelections: 2048},
-				Subscriptions: make([]s2telemetryapi.SubscriptionDescriptor, 0, len(input.Subscriptions)),
+				ConnectionToken: strings.Repeat("t", 32), ExpiresAt: telemetryapi.Instant(now.Add(5 * time.Minute).Format("2006-01-02T15:04:05.000Z")),
+				Limits:        telemetryapi.SubscriptionLimits{MaxSubscriptions: 100, MaxKeysPerSubscription: 64, MaxTotalKeySelections: 2048},
+				Subscriptions: make([]telemetryapi.SubscriptionDescriptor, 0, len(input.Subscriptions)),
 			}
 			for index, item := range input.Subscriptions {
 				subscriptionID := base64.RawURLEncoding.EncodeToString([]byte("subscription-" + strconv.Itoa(index) + "-" + strings.Repeat("x", 16)))
@@ -562,10 +562,10 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 					keys[keyIndex] = string(key)
 				}
 				subscriptionScopes[subscriptionID] = telemetryauth.Target{DeviceID: string(item.DeviceId), Keys: keys}
-				descriptor := s2telemetryapi.SubscriptionDescriptor{ClientSubscriptionId: item.ClientSubscriptionId, SubscriptionId: s2telemetryapi.OpaqueSubscriptionId(subscriptionID), DeviceId: item.DeviceId, Keys: append([]s2telemetryapi.TelemetryKey(nil), item.Keys...), Channel: s2telemetryapi.OpaqueChannel(channel), RecoveryMode: "SNAPSHOT_THEN_LIVE"}
+				descriptor := telemetryapi.SubscriptionDescriptor{ClientSubscriptionId: item.ClientSubscriptionId, SubscriptionId: telemetryapi.OpaqueSubscriptionId(subscriptionID), DeviceId: item.DeviceId, Keys: append([]telemetryapi.TelemetryKey(nil), item.Keys...), Channel: telemetryapi.OpaqueChannel(channel), RecoveryMode: "SNAPSHOT_THEN_LIVE"}
 				if item.RecoveryCursor != nil {
 					descriptor.RecoveryMode = "ATTEMPT_RECOVERY"
-					descriptor.TransportPosition = &s2telemetryapi.TransportPosition{Epoch: "epoch-a", Offset: 42}
+					descriptor.TransportPosition = &telemetryapi.TransportPosition{Epoch: "epoch-a", Offset: 42}
 					cursor := *item.RecoveryCursor
 					descriptor.RecoveryCursor = &cursor
 				}
@@ -577,13 +577,13 @@ func newTelemetryGatewayFixture(t *testing.T, denyReason telemetryauth.ReasonCod
 			if err != nil || len(claims.Actions) != 1 || claims.Actions[0] != telemetryCheckpointResolveAction {
 				t.Fatalf("final checkpoint context grant invalid: claims=%+v err=%v", claims, err)
 			}
-			var input s2telemetryapi.RecoveryCursorCheckpointRequest
+			var input telemetryapi.RecoveryCursorCheckpointRequest
 			if err := json.NewDecoder(request.Body).Decode(&input); err != nil {
 				t.Fatal(err)
 			}
-			output := s2telemetryapi.RecoveryCursorCheckpointResponse{SchemaVersion: 1, Items: make([]s2telemetryapi.RecoveryCursorCheckpointResult, 0, len(input.Checkpoints))}
+			output := telemetryapi.RecoveryCursorCheckpointResponse{SchemaVersion: 1, Items: make([]telemetryapi.RecoveryCursorCheckpointResult, 0, len(input.Checkpoints))}
 			for _, checkpoint := range input.Checkpoints {
-				output.Items = append(output.Items, s2telemetryapi.RecoveryCursorCheckpointResult{SubscriptionId: checkpoint.SubscriptionId, BusinessRevision: checkpoint.BusinessRevision, RecoveryCursor: s2telemetryapi.OpaqueRecoveryCursor(strings.Repeat("c", 32) + "." + strings.Repeat("s", 43)), ExpiresAt: s2telemetryapi.Instant(now.Add(2 * time.Minute).Format("2006-01-02T15:04:05.000Z"))})
+				output.Items = append(output.Items, telemetryapi.RecoveryCursorCheckpointResult{SubscriptionId: checkpoint.SubscriptionId, BusinessRevision: checkpoint.BusinessRevision, RecoveryCursor: telemetryapi.OpaqueRecoveryCursor(strings.Repeat("c", 32) + "." + strings.Repeat("s", 43)), ExpiresAt: telemetryapi.Instant(now.Add(2 * time.Minute).Format("2006-01-02T15:04:05.000Z"))})
 			}
 			return telemetryJSONResponse(http.StatusOK, output), nil
 		default:
@@ -715,16 +715,16 @@ func (fixture *telemetryGatewayFixture) authenticate(request *http.Request) {
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: fixture.sessionID})
 }
 
-func telemetrySnapshot(deviceID string, keys []string, now time.Time) s2telemetryapi.DeviceObservationSnapshot {
-	state := s2telemetryapi.DevicePresenceStateOnline
-	policy := s2telemetryapi.PolicyRevision(7)
-	display := s2telemetryapi.DeviceDisplayStateOnline
-	values := make([]s2telemetryapi.TelemetryKeyState, 0, len(keys))
+func telemetrySnapshot(deviceID string, keys []string, now time.Time) telemetryapi.DeviceObservationSnapshot {
+	state := telemetryapi.DevicePresenceStateOnline
+	policy := telemetryapi.PolicyRevision(7)
+	display := telemetryapi.DeviceDisplayStateOnline
+	values := make([]telemetryapi.TelemetryKeyState, 0, len(keys))
 	for _, key := range keys {
-		values = append(values, s2telemetryapi.TelemetryKeyState{Missing: &s2telemetryapi.TelemetryMissingState{Key: s2telemetryapi.TelemetryKey(key), State: "MISSING", Freshness: "MISSING", MissingReason: "NEVER_OBSERVED", PolicyRevision: &policy}})
+		values = append(values, telemetryapi.TelemetryKeyState{Missing: &telemetryapi.TelemetryMissingState{Key: telemetryapi.TelemetryKey(key), State: "MISSING", Freshness: "MISSING", MissingReason: "NEVER_OBSERVED", PolicyRevision: &policy}})
 	}
-	instant := s2telemetryapi.Instant(now.Format(time.RFC3339Nano))
-	return s2telemetryapi.DeviceObservationSnapshot{SchemaVersion: 1, DeviceId: s2telemetryapi.UUIDv7(deviceID), TenantId: telemetryTestTenant, SiteId: telemetryTestSite, BusinessRevision: 9, EvaluatedAt: instant, EvaluationAvailability: s2telemetryapi.EvaluationAvailabilityAvailable, AvailabilityReasons: []s2telemetryapi.AvailabilityReasonCode{}, Presence: s2telemetryapi.PresenceSnapshot{Applicability: s2telemetryapi.PresenceApplicabilityApplicable, CurrentState: &state, LastSeenAt: &instant, PolicyRevision: &policy}, TelemetryReadiness: s2telemetryapi.TelemetryReadinessIncomplete, DisplayState: &display, Values: values}
+	instant := telemetryapi.Instant(now.Format(time.RFC3339Nano))
+	return telemetryapi.DeviceObservationSnapshot{SchemaVersion: 1, DeviceId: telemetryapi.UUIDv7(deviceID), TenantId: telemetryTestTenant, SiteId: telemetryTestSite, BusinessRevision: 9, EvaluatedAt: instant, EvaluationAvailability: telemetryapi.EvaluationAvailabilityAvailable, AvailabilityReasons: []telemetryapi.AvailabilityReasonCode{}, Presence: telemetryapi.PresenceSnapshot{Applicability: telemetryapi.PresenceApplicabilityApplicable, CurrentState: &state, LastSeenAt: &instant, PolicyRevision: &policy}, TelemetryReadiness: telemetryapi.TelemetryReadinessIncomplete, DisplayState: &display, Values: values}
 }
 
 func verifiedWorkloadTLSState(t *testing.T, spiffeID string) *tls.ConnectionState {
@@ -756,12 +756,12 @@ func traceIDFromTraceparent(value string) string {
 	return ""
 }
 
-func assertTelemetryProblem(t *testing.T, recorder *httptest.ResponseRecorder, status int, code string) s2telemetryapi.ProblemDetails {
+func assertTelemetryProblem(t *testing.T, recorder *httptest.ResponseRecorder, status int, code string) telemetryapi.ProblemDetails {
 	t.Helper()
 	if recorder.Code != status {
 		t.Fatalf("status=%d want=%d body=%s", recorder.Code, status, recorder.Body.String())
 	}
-	var problem s2telemetryapi.ProblemDetails
+	var problem telemetryapi.ProblemDetails
 	if err := json.NewDecoder(recorder.Body).Decode(&problem); err != nil {
 		t.Fatal(err)
 	}
@@ -773,36 +773,36 @@ func assertTelemetryProblem(t *testing.T, recorder *httptest.ResponseRecorder, s
 
 func TestTelemetryGatewayNotApplicableDisplayStateContract(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
-	onlinePresence := s2telemetryapi.DevicePresenceStateOnline
-	onlineDisplay := s2telemetryapi.DeviceDisplayStateOnline
+	onlinePresence := telemetryapi.DevicePresenceStateOnline
+	onlineDisplay := telemetryapi.DeviceDisplayStateOnline
 
 	cases := []struct {
 		name          string
-		applicability s2telemetryapi.PresenceApplicability
-		currentState  *s2telemetryapi.DevicePresenceState
-		displayState  *s2telemetryapi.DeviceDisplayState
+		applicability telemetryapi.PresenceApplicability
+		currentState  *telemetryapi.DevicePresenceState
+		displayState  *telemetryapi.DeviceDisplayState
 		wantStatus    int
 	}{
 		{
 			name:          "not_applicable_with_nil_display_and_presence_allows_200",
-			applicability: s2telemetryapi.PresenceApplicabilityNotApplicable,
+			applicability: telemetryapi.PresenceApplicabilityNotApplicable,
 			wantStatus:    http.StatusOK,
 		},
 		{
 			name:          "applicable_with_nil_display_fails_503",
-			applicability: s2telemetryapi.PresenceApplicabilityApplicable,
+			applicability: telemetryapi.PresenceApplicabilityApplicable,
 			currentState:  &onlinePresence,
 			wantStatus:    http.StatusServiceUnavailable,
 		},
 		{
 			name:          "not_applicable_with_non_nil_display_fails_503",
-			applicability: s2telemetryapi.PresenceApplicabilityNotApplicable,
+			applicability: telemetryapi.PresenceApplicabilityNotApplicable,
 			displayState:  &onlineDisplay,
 			wantStatus:    http.StatusServiceUnavailable,
 		},
 		{
 			name:          "not_applicable_with_non_nil_current_state_fails_503",
-			applicability: s2telemetryapi.PresenceApplicabilityNotApplicable,
+			applicability: telemetryapi.PresenceApplicabilityNotApplicable,
 			currentState:  &onlinePresence,
 			wantStatus:    http.StatusServiceUnavailable,
 		},
@@ -816,15 +816,15 @@ func TestTelemetryGatewayNotApplicableDisplayStateContract(t *testing.T) {
 					t.Fatalf("unexpected runtime path %s", request.URL.Path)
 				}
 				snapshot := telemetrySnapshot(telemetryTestDeviceOne, []string{"cooling_tower_leaving_temperature"}, now)
-				snapshot.Presence = s2telemetryapi.PresenceSnapshot{
+				snapshot.Presence = telemetryapi.PresenceSnapshot{
 					Applicability: tc.applicability,
 					CurrentState:  tc.currentState,
 				}
 				snapshot.DisplayState = tc.displayState
-				return telemetryJSONResponse(http.StatusOK, s2telemetryapi.BatchGetObservationSnapshotsResponse{
+				return telemetryJSONResponse(http.StatusOK, telemetryapi.BatchGetObservationSnapshotsResponse{
 					SchemaVersion: 1,
-					Items: []s2telemetryapi.BatchObservationResult{{
-						Success: &s2telemetryapi.BatchObservationSuccess{
+					Items: []telemetryapi.BatchObservationResult{{
+						Success: &telemetryapi.BatchObservationSuccess{
 							RequestId: "copy-only",
 							DeviceId:  telemetryTestDeviceOne,
 							Status:    "OK",
@@ -834,14 +834,14 @@ func TestTelemetryGatewayNotApplicableDisplayStateContract(t *testing.T) {
 				}), nil
 			})
 
-			body, _ := json.Marshal(s2telemetryapi.BatchGetObservationSnapshotsRequest{
-				Requests: []s2telemetryapi.ObservationSnapshotTarget{{
+			body, _ := json.Marshal(telemetryapi.BatchGetObservationSnapshotsRequest{
+				Requests: []telemetryapi.ObservationSnapshotTarget{{
 					RequestId: "copy-only",
 					DeviceId:  telemetryTestDeviceOne,
-					Keys:      []s2telemetryapi.TelemetryKey{"cooling_tower_leaving_temperature"},
+					Keys:      []telemetryapi.TelemetryKey{"cooling_tower_leaving_temperature"},
 				}},
 			})
-			request := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, bytes.NewReader(body))
+			request := httptest.NewRequest(http.MethodPost, telemetryapi.BatchGetDeviceObservationSnapshotsPath, bytes.NewReader(body))
 			fixture.authenticate(request)
 			request.Header.Set("Origin", "https://web.example.test")
 			request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
@@ -852,7 +852,7 @@ func TestTelemetryGatewayNotApplicableDisplayStateContract(t *testing.T) {
 				if recorder.Code != http.StatusOK {
 					t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 				}
-				var output s2telemetryapi.BatchGetObservationSnapshotsResponse
+				var output telemetryapi.BatchGetObservationSnapshotsResponse
 				if err := json.NewDecoder(recorder.Body).Decode(&output); err != nil {
 					t.Fatal(err)
 				}
@@ -860,7 +860,7 @@ func TestTelemetryGatewayNotApplicableDisplayStateContract(t *testing.T) {
 					t.Fatalf("unexpected batch output: %#v", output.Items)
 				}
 				got := output.Items[0].Success.Snapshot
-				if got.Presence.Applicability != s2telemetryapi.PresenceApplicabilityNotApplicable || got.Presence.CurrentState != nil || got.DisplayState != nil {
+				if got.Presence.Applicability != telemetryapi.PresenceApplicabilityNotApplicable || got.Presence.CurrentState != nil || got.DisplayState != nil {
 					t.Fatalf("unexpected NOT_APPLICABLE snapshot fields: presence=%+v displayState=%v", got.Presence, got.DisplayState)
 				}
 				return
@@ -872,13 +872,13 @@ func TestTelemetryGatewayNotApplicableDisplayStateContract(t *testing.T) {
 
 func TestTelemetryGatewaySleepingDisplayStateContract(t *testing.T) {
 	now := time.Date(2026, 7, 24, 12, 0, 0, 0, time.UTC)
-	sleepingPresence := s2telemetryapi.DevicePresenceStateSleeping
-	sleepingDisplay := s2telemetryapi.DeviceDisplayStateSleeping
+	sleepingPresence := telemetryapi.DevicePresenceStateSleeping
+	sleepingDisplay := telemetryapi.DeviceDisplayStateSleeping
 
 	for _, tc := range []struct {
 		name         string
-		currentState *s2telemetryapi.DevicePresenceState
-		displayState *s2telemetryapi.DeviceDisplayState
+		currentState *telemetryapi.DevicePresenceState
+		displayState *telemetryapi.DeviceDisplayState
 		wantStatus   int
 	}{
 		{
@@ -901,13 +901,13 @@ func TestTelemetryGatewaySleepingDisplayStateContract(t *testing.T) {
 					t.Fatalf("unexpected runtime path %s", request.URL.Path)
 				}
 				snapshot := telemetrySnapshot(telemetryTestDeviceOne, []string{"valve_position"}, now)
-				snapshot.Presence.Applicability = s2telemetryapi.PresenceApplicabilityApplicable
+				snapshot.Presence.Applicability = telemetryapi.PresenceApplicabilityApplicable
 				snapshot.Presence.CurrentState = tc.currentState
 				snapshot.DisplayState = tc.displayState
-				return telemetryJSONResponse(http.StatusOK, s2telemetryapi.BatchGetObservationSnapshotsResponse{
+				return telemetryJSONResponse(http.StatusOK, telemetryapi.BatchGetObservationSnapshotsResponse{
 					SchemaVersion: 1,
-					Items: []s2telemetryapi.BatchObservationResult{{
-						Success: &s2telemetryapi.BatchObservationSuccess{
+					Items: []telemetryapi.BatchObservationResult{{
+						Success: &telemetryapi.BatchObservationSuccess{
 							RequestId: "sleeping-device",
 							DeviceId:  telemetryTestDeviceOne,
 							Status:    "OK",
@@ -917,14 +917,14 @@ func TestTelemetryGatewaySleepingDisplayStateContract(t *testing.T) {
 				}), nil
 			})
 
-			body, _ := json.Marshal(s2telemetryapi.BatchGetObservationSnapshotsRequest{
-				Requests: []s2telemetryapi.ObservationSnapshotTarget{{
+			body, _ := json.Marshal(telemetryapi.BatchGetObservationSnapshotsRequest{
+				Requests: []telemetryapi.ObservationSnapshotTarget{{
 					RequestId: "sleeping-device",
 					DeviceId:  telemetryTestDeviceOne,
-					Keys:      []s2telemetryapi.TelemetryKey{"valve_position"},
+					Keys:      []telemetryapi.TelemetryKey{"valve_position"},
 				}},
 			})
-			request := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, bytes.NewReader(body))
+			request := httptest.NewRequest(http.MethodPost, telemetryapi.BatchGetDeviceObservationSnapshotsPath, bytes.NewReader(body))
 			fixture.authenticate(request)
 			request.Header.Set("Origin", "https://web.example.test")
 			request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
@@ -935,7 +935,7 @@ func TestTelemetryGatewaySleepingDisplayStateContract(t *testing.T) {
 				if recorder.Code != http.StatusOK {
 					t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 				}
-				var output s2telemetryapi.BatchGetObservationSnapshotsResponse
+				var output telemetryapi.BatchGetObservationSnapshotsResponse
 				if err := json.NewDecoder(recorder.Body).Decode(&output); err != nil {
 					t.Fatal(err)
 				}
@@ -957,11 +957,11 @@ func TestTelemetryGatewayBatchAllowsPerItemUnavailableFailure(t *testing.T) {
 		if request.URL.Path != internalTelemetryBatchPath {
 			t.Fatalf("unexpected runtime path %s", request.URL.Path)
 		}
-		return telemetryJSONResponse(http.StatusOK, s2telemetryapi.BatchGetObservationSnapshotsResponse{
+		return telemetryJSONResponse(http.StatusOK, telemetryapi.BatchGetObservationSnapshotsResponse{
 			SchemaVersion: 1,
-			Items: []s2telemetryapi.BatchObservationResult{
+			Items: []telemetryapi.BatchObservationResult{
 				{
-					Success: &s2telemetryapi.BatchObservationSuccess{
+					Success: &telemetryapi.BatchObservationSuccess{
 						RequestId: "healthy",
 						DeviceId:  telemetryTestDeviceOne,
 						Status:    "OK",
@@ -969,11 +969,11 @@ func TestTelemetryGatewayBatchAllowsPerItemUnavailableFailure(t *testing.T) {
 					},
 				},
 				{
-					Failure: &s2telemetryapi.BatchObservationFailure{
+					Failure: &telemetryapi.BatchObservationFailure{
 						RequestId: "incomplete",
 						DeviceId:  telemetryTestDeviceTwo,
 						Status:    "ERROR",
-						Problem: s2telemetryapi.ProblemDetails{
+						Problem: telemetryapi.ProblemDetails{
 							Type:      "https://api.quanlaihe.com/problems/telemetry-runtime-unavailable",
 							Title:     "Service Unavailable",
 							Status:    http.StatusServiceUnavailable,
@@ -989,13 +989,13 @@ func TestTelemetryGatewayBatchAllowsPerItemUnavailableFailure(t *testing.T) {
 		}), nil
 	})
 
-	body, _ := json.Marshal(s2telemetryapi.BatchGetObservationSnapshotsRequest{
-		Requests: []s2telemetryapi.ObservationSnapshotTarget{
-			{RequestId: "healthy", DeviceId: telemetryTestDeviceOne, Keys: []s2telemetryapi.TelemetryKey{"temperature"}},
-			{RequestId: "incomplete", DeviceId: telemetryTestDeviceTwo, Keys: []s2telemetryapi.TelemetryKey{"new_key"}},
+	body, _ := json.Marshal(telemetryapi.BatchGetObservationSnapshotsRequest{
+		Requests: []telemetryapi.ObservationSnapshotTarget{
+			{RequestId: "healthy", DeviceId: telemetryTestDeviceOne, Keys: []telemetryapi.TelemetryKey{"temperature"}},
+			{RequestId: "incomplete", DeviceId: telemetryTestDeviceTwo, Keys: []telemetryapi.TelemetryKey{"new_key"}},
 		},
 	})
-	request := httptest.NewRequest(http.MethodPost, s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, bytes.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, telemetryapi.BatchGetDeviceObservationSnapshotsPath, bytes.NewReader(body))
 	fixture.authenticate(request)
 	request.Header.Set("Origin", "https://web.example.test")
 	request.Header.Set("X-CSRF-Token", telemetryTestCSRF)
@@ -1004,7 +1004,7 @@ func TestTelemetryGatewayBatchAllowsPerItemUnavailableFailure(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected 200 OK with partial item problem, got %d body=%s", recorder.Code, recorder.Body.String())
 	}
-	var output s2telemetryapi.BatchGetObservationSnapshotsResponse
+	var output telemetryapi.BatchGetObservationSnapshotsResponse
 	if err := json.NewDecoder(recorder.Body).Decode(&output); err != nil {
 		t.Fatal(err)
 	}

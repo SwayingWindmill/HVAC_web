@@ -300,7 +300,6 @@ for (const file of files) {
   });
   match(
     file.startsWith('libs/identitycontext/') ||
-      file.startsWith('libs/oidctest/') ||
       file.startsWith('libs/sessionevent/') ||
       file.startsWith('libs/sessionstore/') ||
       file.startsWith('libs/observability/') ||

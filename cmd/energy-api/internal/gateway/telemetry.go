@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
 const (
@@ -123,7 +123,7 @@ func newTelemetryController(config *TelemetryConfig) *telemetryController {
 	}
 }
 
-func (h *handler) GetDeviceObservationSnapshot(writer http.ResponseWriter, request *http.Request, deviceID string, params s2telemetryapi.GetDeviceObservationSnapshotParams) {
+func (h *handler) GetDeviceObservationSnapshot(writer http.ResponseWriter, request *http.Request, deviceID string, params telemetryapi.GetDeviceObservationSnapshotParams) {
 	keys := make([]string, len(params.Keys))
 	for index, key := range params.Keys {
 		keys[index] = string(key)
@@ -143,7 +143,7 @@ func (h *handler) GetDeviceObservationSnapshot(writer http.ResponseWriter, reque
 		h.writeTelemetryFailure(writer, request, *failure)
 		return
 	}
-	var snapshot s2telemetryapi.DeviceObservationSnapshot
+	var snapshot telemetryapi.DeviceObservationSnapshot
 	if len(authorization.targets) != 1 || decodeStrictTelemetryJSON(response, &snapshot) != nil || !validateTelemetrySnapshot(snapshot, authorization.targets[0], keys) {
 		h.writeTelemetryFailure(writer, request, telemetryUnavailable("Telemetry Runtime returned an invalid Snapshot response."))
 		return
@@ -152,7 +152,7 @@ func (h *handler) GetDeviceObservationSnapshot(writer http.ResponseWriter, reque
 	writeJSON(writer, http.StatusOK, snapshot)
 }
 
-func (h *handler) BatchGetDeviceObservationSnapshots(writer http.ResponseWriter, request *http.Request, input s2telemetryapi.BatchGetObservationSnapshotsRequest) {
+func (h *handler) BatchGetDeviceObservationSnapshots(writer http.ResponseWriter, request *http.Request, input telemetryapi.BatchGetObservationSnapshotsRequest) {
 	targets := make([]telemetryauth.Target, len(input.Requests))
 	for index, item := range input.Requests {
 		keys := make([]string, len(item.Keys))
@@ -180,7 +180,7 @@ func (h *handler) BatchGetDeviceObservationSnapshots(writer http.ResponseWriter,
 		h.writeTelemetryFailure(writer, request, *failure)
 		return
 	}
-	var output s2telemetryapi.BatchGetObservationSnapshotsResponse
+	var output telemetryapi.BatchGetObservationSnapshotsResponse
 	if decodeStrictTelemetryJSON(response, &output) != nil || !validateTelemetryBatchResponse(output, input, authorization.targets) {
 		h.writeTelemetryFailure(writer, request, telemetryUnavailable("Telemetry Runtime returned an invalid batch response."))
 		return
@@ -189,7 +189,7 @@ func (h *handler) BatchGetDeviceObservationSnapshots(writer http.ResponseWriter,
 	writeJSON(writer, http.StatusOK, output)
 }
 
-func (h *handler) BootstrapTelemetrySubscriptions(writer http.ResponseWriter, request *http.Request, input s2telemetryapi.SubscriptionBootstrapRequest) {
+func (h *handler) BootstrapTelemetrySubscriptions(writer http.ResponseWriter, request *http.Request, input telemetryapi.SubscriptionBootstrapRequest) {
 	targets := subscriptionTargets(input)
 	caller, ok := h.telemetryCaller(writer, request, true)
 	if !ok {
@@ -217,7 +217,7 @@ func (h *handler) BootstrapTelemetrySubscriptions(writer http.ResponseWriter, re
 		h.writeTelemetryFailure(writer, request, *failure)
 		return
 	}
-	var output s2telemetryapi.SubscriptionBootstrapResponse
+	var output telemetryapi.SubscriptionBootstrapResponse
 	if decodeStrictTelemetryJSON(response, &output) != nil || !validateSubscriptionBootstrapResponse(output, input, h.now().UTC()) {
 		h.writeTelemetryFailure(writer, request, telemetryUnavailable("Telemetry Runtime returned an invalid subscription bootstrap response."))
 		return
@@ -226,7 +226,7 @@ func (h *handler) BootstrapTelemetrySubscriptions(writer http.ResponseWriter, re
 	writeJSON(writer, http.StatusOK, output)
 }
 
-func (h *handler) CheckpointTelemetryRecoveryCursors(writer http.ResponseWriter, request *http.Request, input s2telemetryapi.RecoveryCursorCheckpointRequest) {
+func (h *handler) CheckpointTelemetryRecoveryCursors(writer http.ResponseWriter, request *http.Request, input telemetryapi.RecoveryCursorCheckpointRequest) {
 	caller, ok := h.telemetryCaller(writer, request, true)
 	if !ok {
 		return
@@ -256,7 +256,7 @@ func (h *handler) CheckpointTelemetryRecoveryCursors(writer http.ResponseWriter,
 		h.writeTelemetryFailure(writer, request, *failure)
 		return
 	}
-	var output s2telemetryapi.RecoveryCursorCheckpointResponse
+	var output telemetryapi.RecoveryCursorCheckpointResponse
 	if decodeStrictTelemetryJSON(response, &output) != nil || !validateRecoveryCheckpointResponse(output, input, h.now().UTC()) {
 		h.writeTelemetryFailure(writer, request, telemetryUnavailable("Telemetry Runtime returned an invalid recovery checkpoint response."))
 		return
@@ -265,7 +265,7 @@ func (h *handler) CheckpointTelemetryRecoveryCursors(writer http.ResponseWriter,
 	writeJSON(writer, http.StatusOK, output)
 }
 
-func subscriptionTargets(input s2telemetryapi.SubscriptionBootstrapRequest) []telemetryauth.Target {
+func subscriptionTargets(input telemetryapi.SubscriptionBootstrapRequest) []telemetryauth.Target {
 	targets := make([]telemetryauth.Target, len(input.Subscriptions))
 	for index, subscription := range input.Subscriptions {
 		keys := make([]string, len(subscription.Keys))
@@ -568,13 +568,13 @@ func validateTelemetryGrantStructure(grant string, h *handler, publicRequest *ht
 func telemetryPublicRoute(action telemetryauth.Action) string {
 	switch action {
 	case telemetryauth.ActionSnapshotRead:
-		return s2telemetryapi.GetDeviceObservationSnapshotPathTemplate
+		return telemetryapi.GetDeviceObservationSnapshotPathTemplate
 	case telemetryauth.ActionBatchRead:
-		return s2telemetryapi.BatchGetDeviceObservationSnapshotsPath
+		return telemetryapi.BatchGetDeviceObservationSnapshotsPath
 	case telemetryauth.ActionSubscribe, telemetryauth.ActionRecoveryUse, telemetryauth.ActionResubscribe:
-		return s2telemetryapi.BootstrapTelemetrySubscriptionsPath
+		return telemetryapi.BootstrapTelemetrySubscriptionsPath
 	case telemetryauth.ActionRecoveryCheckpoint:
-		return s2telemetryapi.CheckpointTelemetryRecoveryCursorsPath
+		return telemetryapi.CheckpointTelemetryRecoveryCursorsPath
 	default:
 		return ""
 	}
@@ -710,7 +710,7 @@ func (h *handler) executeTelemetryRuntimeWithContext(ctx context.Context, public
 		outcome = "success"
 		return raw, nil
 	}
-	var problem s2telemetryapi.ProblemDetails
+	var problem telemetryapi.ProblemDetails
 	_ = decodeStrictTelemetryJSON(raw, &problem)
 	if response.StatusCode >= 400 && response.StatusCode < 500 {
 		outcome = "rejected"
@@ -762,7 +762,7 @@ func (h *handler) resolveTelemetryCheckpointTargets(ctx context.Context, publicR
 // validateTelemetrySnapshot checks a Runtime Snapshot for the authorized Device.
 // Values follow the caller's requested key order; the authorized target holds the
 // same keys in canonical (sorted) order and is used only for scope identity.
-func validateTelemetrySnapshot(snapshot s2telemetryapi.DeviceObservationSnapshot, target telemetryauth.AuthorizedTarget, requestedKeys []string) bool {
+func validateTelemetrySnapshot(snapshot telemetryapi.DeviceObservationSnapshot, target telemetryauth.AuthorizedTarget, requestedKeys []string) bool {
 	if snapshot.SchemaVersion != 1 || string(snapshot.TenantId) != target.TenantID || string(snapshot.SiteId) != target.SiteID || string(snapshot.DeviceId) != target.DeviceID || snapshot.BusinessRevision < 1 {
 		return false
 	}
@@ -796,47 +796,47 @@ func validateTelemetrySnapshot(snapshot s2telemetryapi.DeviceObservationSnapshot
 	return true
 }
 
-func validEvaluationAvailability(value s2telemetryapi.EvaluationAvailability) bool {
-	return value == s2telemetryapi.EvaluationAvailabilityAvailable || value == s2telemetryapi.EvaluationAvailabilityUnavailable
+func validEvaluationAvailability(value telemetryapi.EvaluationAvailability) bool {
+	return value == telemetryapi.EvaluationAvailabilityAvailable || value == telemetryapi.EvaluationAvailabilityUnavailable
 }
 
-func validTelemetryReadiness(value s2telemetryapi.TelemetryReadiness) bool {
+func validTelemetryReadiness(value telemetryapi.TelemetryReadiness) bool {
 	switch value {
-	case s2telemetryapi.TelemetryReadinessCurrent, s2telemetryapi.TelemetryReadinessDegraded, s2telemetryapi.TelemetryReadinessIncomplete, s2telemetryapi.TelemetryReadinessNotApplicable:
+	case telemetryapi.TelemetryReadinessCurrent, telemetryapi.TelemetryReadinessDegraded, telemetryapi.TelemetryReadinessIncomplete, telemetryapi.TelemetryReadinessNotApplicable:
 		return true
 	default:
 		return false
 	}
 }
 
-func validSnapshotDisplayState(applicability s2telemetryapi.PresenceApplicability, value *s2telemetryapi.DeviceDisplayState) bool {
-	if applicability == s2telemetryapi.PresenceApplicabilityNotApplicable {
+func validSnapshotDisplayState(applicability telemetryapi.PresenceApplicability, value *telemetryapi.DeviceDisplayState) bool {
+	if applicability == telemetryapi.PresenceApplicabilityNotApplicable {
 		return value == nil
 	}
 	return value != nil && validDisplayState(*value)
 }
 
-func validDisplayState(value s2telemetryapi.DeviceDisplayState) bool {
+func validDisplayState(value telemetryapi.DeviceDisplayState) bool {
 	switch value {
-	case s2telemetryapi.DeviceDisplayStateOnline, s2telemetryapi.DeviceDisplayStateSleeping, s2telemetryapi.DeviceDisplayStateOffline, s2telemetryapi.DeviceDisplayStateStale, s2telemetryapi.DeviceDisplayStateUnknown, s2telemetryapi.DeviceDisplayStateUnavailable:
+	case telemetryapi.DeviceDisplayStateOnline, telemetryapi.DeviceDisplayStateSleeping, telemetryapi.DeviceDisplayStateOffline, telemetryapi.DeviceDisplayStateStale, telemetryapi.DeviceDisplayStateUnknown, telemetryapi.DeviceDisplayStateUnavailable:
 		return true
 	default:
 		return false
 	}
 }
 
-func validPresenceSnapshot(value s2telemetryapi.PresenceSnapshot) bool {
-	if value.Applicability != s2telemetryapi.PresenceApplicabilityApplicable && value.Applicability != s2telemetryapi.PresenceApplicabilityNotApplicable {
+func validPresenceSnapshot(value telemetryapi.PresenceSnapshot) bool {
+	if value.Applicability != telemetryapi.PresenceApplicabilityApplicable && value.Applicability != telemetryapi.PresenceApplicabilityNotApplicable {
 		return false
 	}
-	if value.Applicability == s2telemetryapi.PresenceApplicabilityNotApplicable && value.CurrentState != nil {
+	if value.Applicability == telemetryapi.PresenceApplicabilityNotApplicable && value.CurrentState != nil {
 		return false
 	}
 	if value.CurrentState != nil &&
-		*value.CurrentState != s2telemetryapi.DevicePresenceStateOnline &&
-		*value.CurrentState != s2telemetryapi.DevicePresenceStateSleeping &&
-		*value.CurrentState != s2telemetryapi.DevicePresenceStateOffline &&
-		*value.CurrentState != s2telemetryapi.DevicePresenceStateUnknown {
+		*value.CurrentState != telemetryapi.DevicePresenceStateOnline &&
+		*value.CurrentState != telemetryapi.DevicePresenceStateSleeping &&
+		*value.CurrentState != telemetryapi.DevicePresenceStateOffline &&
+		*value.CurrentState != telemetryapi.DevicePresenceStateUnknown {
 		return false
 	}
 	if value.LastSeenAt != nil {
@@ -863,21 +863,21 @@ func validPresenceSnapshot(value s2telemetryapi.PresenceSnapshot) bool {
 	return true
 }
 
-func validTelemetryQuality(value s2telemetryapi.TelemetryQuality) bool {
+func validTelemetryQuality(value telemetryapi.TelemetryQuality) bool {
 	switch value {
-	case s2telemetryapi.TelemetryQualityGood,
-		s2telemetryapi.TelemetryQualityPartial,
-		s2telemetryapi.TelemetryQualityEstimated,
-		s2telemetryapi.TelemetryQualityManual,
-		s2telemetryapi.TelemetryQualityStale,
-		s2telemetryapi.TelemetryQualityInvalid:
+	case telemetryapi.TelemetryQualityGood,
+		telemetryapi.TelemetryQualityPartial,
+		telemetryapi.TelemetryQualityEstimated,
+		telemetryapi.TelemetryQualityManual,
+		telemetryapi.TelemetryQualityStale,
+		telemetryapi.TelemetryQualityInvalid:
 		return true
 	default:
 		return false
 	}
 }
 
-func validPresentState(value s2telemetryapi.TelemetryPresentState) bool {
+func validPresentState(value telemetryapi.TelemetryPresentState) bool {
 	if value.State != "PRESENT" || (value.Freshness != "FRESH" && value.Freshness != "STALE") ||
 		!validTelemetryQuality(value.Quality) || value.PolicyRevision < 1 ||
 		len(value.QualityReasons) > 16 || !uniqueQualityReasons(value.QualityReasons) || !json.Valid(value.Value) {
@@ -908,7 +908,7 @@ func validPresentState(value s2telemetryapi.TelemetryPresentState) bool {
 	return true
 }
 
-func validPointHealth(health s2telemetryapi.TelemetryPointHealth) bool {
+func validPointHealth(health telemetryapi.TelemetryPointHealth) bool {
 	switch health.Status {
 	case "HEALTHY", "SUSPECT", "BAD", "STALE":
 	default:
@@ -917,7 +917,7 @@ func validPointHealth(health s2telemetryapi.TelemetryPointHealth) bool {
 	return health.Score >= 0 && health.Score <= 100 && len(health.Reasons) <= 16 && uniqueQualityReasons(health.Reasons)
 }
 
-func validMissingState(value s2telemetryapi.TelemetryMissingState) bool {
+func validMissingState(value telemetryapi.TelemetryMissingState) bool {
 	if value.State != "MISSING" || value.Freshness != "MISSING" {
 		return false
 	}
@@ -929,11 +929,11 @@ func validMissingState(value s2telemetryapi.TelemetryMissingState) bool {
 	return value.PolicyRevision == nil || *value.PolicyRevision >= 1
 }
 
-func uniqueAvailabilityReasons(values []s2telemetryapi.AvailabilityReasonCode) bool {
-	seen := make(map[s2telemetryapi.AvailabilityReasonCode]struct{}, len(values))
+func uniqueAvailabilityReasons(values []telemetryapi.AvailabilityReasonCode) bool {
+	seen := make(map[telemetryapi.AvailabilityReasonCode]struct{}, len(values))
 	for _, value := range values {
 		switch value {
-		case s2telemetryapi.AvailabilityReasonCodeSourceUnavailable, s2telemetryapi.AvailabilityReasonCodeObservationCoverageGap, s2telemetryapi.AvailabilityReasonCodePolicyUnavailable, s2telemetryapi.AvailabilityReasonCodeOwnerDependencyUnavailable:
+		case telemetryapi.AvailabilityReasonCodeSourceUnavailable, telemetryapi.AvailabilityReasonCodeObservationCoverageGap, telemetryapi.AvailabilityReasonCodePolicyUnavailable, telemetryapi.AvailabilityReasonCodeOwnerDependencyUnavailable:
 		default:
 			return false
 		}
@@ -945,11 +945,11 @@ func uniqueAvailabilityReasons(values []s2telemetryapi.AvailabilityReasonCode) b
 	return true
 }
 
-func uniqueQualityReasons(values []s2telemetryapi.QualityReasonCode) bool {
-	seen := make(map[s2telemetryapi.QualityReasonCode]struct{}, len(values))
+func uniqueQualityReasons(values []telemetryapi.QualityReasonCode) bool {
+	seen := make(map[telemetryapi.QualityReasonCode]struct{}, len(values))
 	for _, value := range values {
 		switch value {
-		case s2telemetryapi.QualityReasonCodeSourceUntrusted, s2telemetryapi.QualityReasonCodeTypeMismatch, s2telemetryapi.QualityReasonCodeUnitMismatch, s2telemetryapi.QualityReasonCodeOutOfRange, s2telemetryapi.QualityReasonCodeClockAhead, s2telemetryapi.QualityReasonCodeClockBehind, s2telemetryapi.QualityReasonCodeSourceLagExceeded, s2telemetryapi.QualityReasonCodeDuplicate, s2telemetryapi.QualityReasonCodeOutOfOrder, s2telemetryapi.QualityReasonCodeReplayed, s2telemetryapi.QualityReasonCodeSpike, s2telemetryapi.QualityReasonCodeSentinel, s2telemetryapi.QualityReasonCodeFlatline, s2telemetryapi.QualityReasonCodeDerivedInput, s2telemetryapi.QualityReasonCodePhysicsWetBulbDry, s2telemetryapi.QualityReasonCodePhysicsWetBulbCondenser, s2telemetryapi.QualityReasonCodePhysicsPower, s2telemetryapi.QualityReasonCodePhysicsCop, s2telemetryapi.QualityReasonCodePhysicsChwDirection, s2telemetryapi.QualityReasonCodePhysicsCwDirection, s2telemetryapi.QualityReasonCodePhysicsHeatBalance, s2telemetryapi.QualityReasonCodeLowConfidence, s2telemetryapi.QualityReasonCodeProbeOffset:
+		case telemetryapi.QualityReasonCodeSourceUntrusted, telemetryapi.QualityReasonCodeTypeMismatch, telemetryapi.QualityReasonCodeUnitMismatch, telemetryapi.QualityReasonCodeOutOfRange, telemetryapi.QualityReasonCodeClockAhead, telemetryapi.QualityReasonCodeClockBehind, telemetryapi.QualityReasonCodeSourceLagExceeded, telemetryapi.QualityReasonCodeDuplicate, telemetryapi.QualityReasonCodeOutOfOrder, telemetryapi.QualityReasonCodeReplayed, telemetryapi.QualityReasonCodeSpike, telemetryapi.QualityReasonCodeSentinel, telemetryapi.QualityReasonCodeFlatline, telemetryapi.QualityReasonCodeDerivedInput, telemetryapi.QualityReasonCodePhysicsWetBulbDry, telemetryapi.QualityReasonCodePhysicsWetBulbCondenser, telemetryapi.QualityReasonCodePhysicsPower, telemetryapi.QualityReasonCodePhysicsCop, telemetryapi.QualityReasonCodePhysicsChwDirection, telemetryapi.QualityReasonCodePhysicsCwDirection, telemetryapi.QualityReasonCodePhysicsHeatBalance, telemetryapi.QualityReasonCodeLowConfidence, telemetryapi.QualityReasonCodeProbeOffset:
 		default:
 			return false
 		}
@@ -961,7 +961,7 @@ func uniqueQualityReasons(values []s2telemetryapi.QualityReasonCode) bool {
 	return true
 }
 
-func validateTelemetryBatchResponse(response s2telemetryapi.BatchGetObservationSnapshotsResponse, request s2telemetryapi.BatchGetObservationSnapshotsRequest, targets []telemetryauth.AuthorizedTarget) bool {
+func validateTelemetryBatchResponse(response telemetryapi.BatchGetObservationSnapshotsResponse, request telemetryapi.BatchGetObservationSnapshotsRequest, targets []telemetryauth.AuthorizedTarget) bool {
 	if response.SchemaVersion != 1 || len(response.Items) != len(request.Requests) || len(targets) != len(request.Requests) {
 		return false
 	}
@@ -988,7 +988,7 @@ func validateTelemetryBatchResponse(response s2telemetryapi.BatchGetObservationS
 	return true
 }
 
-func validBatchFailureProblem(problem s2telemetryapi.ProblemDetails) bool {
+func validBatchFailureProblem(problem telemetryapi.ProblemDetails) bool {
 	if problem.Status == http.StatusNotFound && problem.Code == "RESOURCE_NOT_FOUND" && !problem.Retryable {
 		return true
 	}
@@ -997,7 +997,7 @@ func validBatchFailureProblem(problem s2telemetryapi.ProblemDetails) bool {
 		problem.Retryable
 }
 
-func telemetryKeyStrings(keys []s2telemetryapi.TelemetryKey) []string {
+func telemetryKeyStrings(keys []telemetryapi.TelemetryKey) []string {
 	values := make([]string, len(keys))
 	for index, key := range keys {
 		values[index] = string(key)
@@ -1014,7 +1014,7 @@ func authorizedTargetForDevice(targets []telemetryauth.AuthorizedTarget, deviceI
 	return telemetryauth.AuthorizedTarget{}, false
 }
 
-func validateSubscriptionBootstrapResponse(response s2telemetryapi.SubscriptionBootstrapResponse, request s2telemetryapi.SubscriptionBootstrapRequest, now time.Time) bool {
+func validateSubscriptionBootstrapResponse(response telemetryapi.SubscriptionBootstrapResponse, request telemetryapi.SubscriptionBootstrapRequest, now time.Time) bool {
 	if response.SchemaVersion != 1 || response.TransportProtocol != "CENTRIFUGO_JSON_V1" ||
 		len(response.ConnectionToken) < 16 || len(response.ConnectionToken) > 8192 || strings.ContainsAny(response.ConnectionToken, " \t\r\n") ||
 		response.Limits.MaxSubscriptions != telemetryauth.MaximumTargets || response.Limits.MaxKeysPerSubscription != telemetryauth.MaximumKeysPerTarget ||
@@ -1061,7 +1061,7 @@ func validateSubscriptionBootstrapResponse(response s2telemetryapi.SubscriptionB
 	return true
 }
 
-func validateRecoveryCheckpointResponse(response s2telemetryapi.RecoveryCursorCheckpointResponse, request s2telemetryapi.RecoveryCursorCheckpointRequest, now time.Time) bool {
+func validateRecoveryCheckpointResponse(response telemetryapi.RecoveryCursorCheckpointResponse, request telemetryapi.RecoveryCursorCheckpointRequest, now time.Time) bool {
 	if response.SchemaVersion != 1 || len(response.Items) != len(request.Checkpoints) {
 		return false
 	}
@@ -1083,7 +1083,7 @@ func validateRecoveryCheckpointResponse(response s2telemetryapi.RecoveryCursorCh
 	return true
 }
 
-func validTelemetryTransportPosition(position s2telemetryapi.TransportPosition) bool {
+func validTelemetryTransportPosition(position telemetryapi.TransportPosition) bool {
 	return telemetryTransportEpochPattern.MatchString(position.Epoch) && position.Offset >= 0
 }
 
@@ -1192,22 +1192,22 @@ func dispatchTelemetryRoute(h *handler, writer http.ResponseWriter, request *htt
 }
 
 func matchPublicTelemetryRoute(path string) (publicTelemetryRoute, string, bool) {
-	if path == s2telemetryapi.BatchGetDeviceObservationSnapshotsPath {
-		return publicTelemetryRoute{template: s2telemetryapi.BatchGetDeviceObservationSnapshotsPath, action: telemetryauth.ActionBatchRead, batch: true}, "", true
+	if path == telemetryapi.BatchGetDeviceObservationSnapshotsPath {
+		return publicTelemetryRoute{template: telemetryapi.BatchGetDeviceObservationSnapshotsPath, action: telemetryauth.ActionBatchRead, batch: true}, "", true
 	}
-	if path == s2telemetryapi.BootstrapTelemetrySubscriptionsPath {
-		return publicTelemetryRoute{template: s2telemetryapi.BootstrapTelemetrySubscriptionsPath, action: telemetryauth.ActionSubscribe, bootstrap: true}, "", true
+	if path == telemetryapi.BootstrapTelemetrySubscriptionsPath {
+		return publicTelemetryRoute{template: telemetryapi.BootstrapTelemetrySubscriptionsPath, action: telemetryauth.ActionSubscribe, bootstrap: true}, "", true
 	}
-	if path == s2telemetryapi.CheckpointTelemetryRecoveryCursorsPath {
-		return publicTelemetryRoute{template: s2telemetryapi.CheckpointTelemetryRecoveryCursorsPath, action: telemetryauth.ActionRecoveryCheckpoint, checkpoint: true}, "", true
+	if path == telemetryapi.CheckpointTelemetryRecoveryCursorsPath {
+		return publicTelemetryRoute{template: telemetryapi.CheckpointTelemetryRecoveryCursorsPath, action: telemetryauth.ActionRecoveryCheckpoint, checkpoint: true}, "", true
 	}
-	if path == s2telemetryapi.QueryDeviceHistoryPath {
-		return publicTelemetryRoute{template: s2telemetryapi.QueryDeviceHistoryPath, action: telemetryauth.ActionHistoryRead, history: true}, "", true
+	if path == telemetryapi.QueryDeviceHistoryPath {
+		return publicTelemetryRoute{template: telemetryapi.QueryDeviceHistoryPath, action: telemetryauth.ActionHistoryRead, history: true}, "", true
 	}
-	if path == s2telemetryapi.QueryDeviceHistoryAggregatePath {
-		return publicTelemetryRoute{template: s2telemetryapi.QueryDeviceHistoryAggregatePath, action: telemetryauth.ActionHistoryRead, historyAggregate: true}, "", true
+	if path == telemetryapi.QueryDeviceHistoryAggregatePath {
+		return publicTelemetryRoute{template: telemetryapi.QueryDeviceHistoryAggregatePath, action: telemetryauth.ActionHistoryRead, historyAggregate: true}, "", true
 	}
-	deviceID, matches := matchSinglePathParameter(path, s2telemetryapi.GetDeviceObservationSnapshotPathTemplate, "{deviceId}")
+	deviceID, matches := matchSinglePathParameter(path, telemetryapi.GetDeviceObservationSnapshotPathTemplate, "{deviceId}")
 	if !matches {
 		return publicTelemetryRoute{}, "", false
 	}
@@ -1215,53 +1215,53 @@ func matchPublicTelemetryRoute(path string) (publicTelemetryRoute, string, bool)
 	if err != nil || decoded == "" || decoded != deviceID {
 		return publicTelemetryRoute{}, "", false
 	}
-	return publicTelemetryRoute{template: s2telemetryapi.GetDeviceObservationSnapshotPathTemplate, action: telemetryauth.ActionSnapshotRead}, decoded, true
+	return publicTelemetryRoute{template: telemetryapi.GetDeviceObservationSnapshotPathTemplate, action: telemetryauth.ActionSnapshotRead}, decoded, true
 }
 
-func parseTelemetrySingleParams(request *http.Request) (s2telemetryapi.GetDeviceObservationSnapshotParams, *telemetryFailure) {
+func parseTelemetrySingleParams(request *http.Request) (telemetryapi.GetDeviceObservationSnapshotParams, *telemetryFailure) {
 	query, err := url.ParseQuery(request.URL.RawQuery)
 	if err != nil {
 		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The telemetry query string is malformed.", false}
-		return s2telemetryapi.GetDeviceObservationSnapshotParams{}, &failure
+		return telemetryapi.GetDeviceObservationSnapshotParams{}, &failure
 	}
 	for name := range query {
 		if name != "keys" {
 			failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The telemetry query contains an unsupported parameter.", false}
-			return s2telemetryapi.GetDeviceObservationSnapshotParams{}, &failure
+			return telemetryapi.GetDeviceObservationSnapshotParams{}, &failure
 		}
 	}
 	values, exists := query["keys"]
 	if !exists || (len(values) == 1 && values[0] == "") {
-		return s2telemetryapi.GetDeviceObservationSnapshotParams{Keys: []s2telemetryapi.TelemetryKey{}}, nil
+		return telemetryapi.GetDeviceObservationSnapshotParams{Keys: []telemetryapi.TelemetryKey{}}, nil
 	}
 	if len(values) != 1 {
 		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The keys parameter must be supplied at most once.", false}
-		return s2telemetryapi.GetDeviceObservationSnapshotParams{}, &failure
+		return telemetryapi.GetDeviceObservationSnapshotParams{}, &failure
 	}
 	parts := strings.Split(values[0], ",")
 	if len(parts) > telemetryauth.MaximumKeysPerTarget {
 		failure := telemetryLimitExceeded("The request exceeds the maximum number of telemetry keys per Device.")
-		return s2telemetryapi.GetDeviceObservationSnapshotParams{}, &failure
+		return telemetryapi.GetDeviceObservationSnapshotParams{}, &failure
 	}
-	keys := make([]s2telemetryapi.TelemetryKey, len(parts))
+	keys := make([]telemetryapi.TelemetryKey, len(parts))
 	plain := make([]string, len(parts))
 	for index, value := range parts {
 		if value == "" {
 			failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The telemetry key selection is invalid.", false}
-			return s2telemetryapi.GetDeviceObservationSnapshotParams{}, &failure
+			return telemetryapi.GetDeviceObservationSnapshotParams{}, &failure
 		}
-		keys[index], plain[index] = s2telemetryapi.TelemetryKey(value), value
+		keys[index], plain[index] = telemetryapi.TelemetryKey(value), value
 	}
 	if _, err := telemetryauth.CanonicalTargets([]telemetryauth.Target{{DeviceID: "018f2e00-3000-7000-8000-000000000001", Keys: plain}}); err != nil {
 		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The telemetry key selection is invalid.", false}
-		return s2telemetryapi.GetDeviceObservationSnapshotParams{}, &failure
+		return telemetryapi.GetDeviceObservationSnapshotParams{}, &failure
 	}
-	return s2telemetryapi.GetDeviceObservationSnapshotParams{Keys: keys}, nil
+	return telemetryapi.GetDeviceObservationSnapshotParams{Keys: keys}, nil
 }
 
-func parseTelemetryBatchRequest(writer http.ResponseWriter, request *http.Request) (s2telemetryapi.BatchGetObservationSnapshotsRequest, *telemetryFailure) {
+func parseTelemetryBatchRequest(writer http.ResponseWriter, request *http.Request) (telemetryapi.BatchGetObservationSnapshotsRequest, *telemetryFailure) {
 	request.Body = http.MaxBytesReader(writer, request.Body, maximumTelemetryRequestSize)
-	var input s2telemetryapi.BatchGetObservationSnapshotsRequest
+	var input telemetryapi.BatchGetObservationSnapshotsRequest
 	decoder := json.NewDecoder(request.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
@@ -1320,8 +1320,8 @@ func parseTelemetryBatchRequest(writer http.ResponseWriter, request *http.Reques
 	return input, nil
 }
 
-func parseTelemetrySubscriptionRequest(writer http.ResponseWriter, request *http.Request) (s2telemetryapi.SubscriptionBootstrapRequest, *telemetryFailure) {
-	var input s2telemetryapi.SubscriptionBootstrapRequest
+func parseTelemetrySubscriptionRequest(writer http.ResponseWriter, request *http.Request) (telemetryapi.SubscriptionBootstrapRequest, *telemetryFailure) {
+	var input telemetryapi.SubscriptionBootstrapRequest
 	if request.URL.RawQuery != "" {
 		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The telemetry subscription route does not accept query parameters.", false}
 		return input, &failure
@@ -1383,8 +1383,8 @@ func parseTelemetrySubscriptionRequest(writer http.ResponseWriter, request *http
 	return input, nil
 }
 
-func parseTelemetryCheckpointRequest(writer http.ResponseWriter, request *http.Request) (s2telemetryapi.RecoveryCursorCheckpointRequest, *telemetryFailure) {
-	var input s2telemetryapi.RecoveryCursorCheckpointRequest
+func parseTelemetryCheckpointRequest(writer http.ResponseWriter, request *http.Request) (telemetryapi.RecoveryCursorCheckpointRequest, *telemetryFailure) {
+	var input telemetryapi.RecoveryCursorCheckpointRequest
 	if request.URL.RawQuery != "" {
 		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_REQUEST_INVALID", "Telemetry request invalid", "The telemetry checkpoint route does not accept query parameters.", false}
 		return input, &failure
@@ -1426,8 +1426,8 @@ func parseTelemetryCheckpointRequest(writer http.ResponseWriter, request *http.R
 	return input, nil
 }
 
-func parseTelemetryHistoryRequest(writer http.ResponseWriter, request *http.Request) (s2telemetryapi.DeviceHistoryRequest, *telemetryFailure) {
-	var input s2telemetryapi.DeviceHistoryRequest
+func parseTelemetryHistoryRequest(writer http.ResponseWriter, request *http.Request) (telemetryapi.DeviceHistoryRequest, *telemetryFailure) {
+	var input telemetryapi.DeviceHistoryRequest
 	if request.URL.RawQuery != "" {
 		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_HISTORY_REQUEST_INVALID", "Device History request invalid", "The Device History route does not accept query parameters.", false}
 		return input, &failure
@@ -1451,8 +1451,8 @@ func parseTelemetryHistoryRequest(writer http.ResponseWriter, request *http.Requ
 	return input, nil
 }
 
-func parseTelemetryHistoryAggregateRequest(writer http.ResponseWriter, request *http.Request) (s2telemetryapi.DeviceHistoryAggregateRequest, *telemetryFailure) {
-	var input s2telemetryapi.DeviceHistoryAggregateRequest
+func parseTelemetryHistoryAggregateRequest(writer http.ResponseWriter, request *http.Request) (telemetryapi.DeviceHistoryAggregateRequest, *telemetryFailure) {
+	var input telemetryapi.DeviceHistoryAggregateRequest
 	if request.URL.RawQuery != "" {
 		failure := telemetryFailure{http.StatusBadRequest, "TELEMETRY_HISTORY_AGGREGATE_REQUEST_INVALID", "Device History aggregate request invalid", "The Device History aggregate route does not accept query parameters.", false}
 		return input, &failure
@@ -1511,4 +1511,4 @@ func telemetryLimitExceeded(detail string) telemetryFailure {
 	return telemetryFailure{http.StatusRequestEntityTooLarge, "TELEMETRY_BATCH_LIMIT_EXCEEDED", "Telemetry batch limit exceeded", detail, false}
 }
 
-var _ s2telemetryapi.ServerInterface = (*handler)(nil)
+var _ telemetryapi.ServerInterface = (*handler)(nil)

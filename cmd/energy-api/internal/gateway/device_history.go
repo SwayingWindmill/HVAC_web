@@ -9,12 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel"
+	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
 const (
@@ -22,7 +22,7 @@ const (
 	internalDeviceHistoryAggregatePath = "/internal/v1/telemetry/device-history:aggregate"
 )
 
-func (h *handler) QueryDeviceHistory(writer http.ResponseWriter, request *http.Request, input s2telemetryapi.DeviceHistoryRequest) {
+func (h *handler) QueryDeviceHistory(writer http.ResponseWriter, request *http.Request, input telemetryapi.DeviceHistoryRequest) {
 	caller, ok := h.telemetryCaller(writer, request, true)
 	if !ok {
 		return
@@ -69,7 +69,7 @@ func (h *handler) QueryDeviceHistory(writer http.ResponseWriter, request *http.R
 	writeJSON(writer, http.StatusOK, response)
 }
 
-func (h *handler) QueryDeviceHistoryAggregate(writer http.ResponseWriter, request *http.Request, input s2telemetryapi.DeviceHistoryAggregateRequest) {
+func (h *handler) QueryDeviceHistoryAggregate(writer http.ResponseWriter, request *http.Request, input telemetryapi.DeviceHistoryAggregateRequest) {
 	caller, ok := h.telemetryCaller(writer, request, true)
 	if !ok {
 		return
@@ -116,7 +116,7 @@ func (h *handler) QueryDeviceHistoryAggregate(writer http.ResponseWriter, reques
 	writeJSON(writer, http.StatusOK, response)
 }
 
-func historySelection(input s2telemetryapi.DeviceHistoryRequest) (telemetryhistorymodel.DeviceHistoryRequest, *telemetryFailure) {
+func historySelection(input telemetryapi.DeviceHistoryRequest) (telemetryhistorymodel.DeviceHistoryRequest, *telemetryFailure) {
 	from, to, failure := parseHistoryRange(input.From, input.To)
 	if failure != nil {
 		return telemetryhistorymodel.DeviceHistoryRequest{}, failure
@@ -136,7 +136,7 @@ func historySelection(input s2telemetryapi.DeviceHistoryRequest) (telemetryhisto
 	return selection, nil
 }
 
-func historyAggregateSelection(input s2telemetryapi.DeviceHistoryAggregateRequest) (telemetryhistorymodel.DeviceHistoryAggregateRequest, *telemetryFailure) {
+func historyAggregateSelection(input telemetryapi.DeviceHistoryAggregateRequest) (telemetryhistorymodel.DeviceHistoryAggregateRequest, *telemetryFailure) {
 	from, to, failure := parseHistoryRange(input.From, input.To)
 	if failure != nil {
 		return telemetryhistorymodel.DeviceHistoryAggregateRequest{}, failure
@@ -153,7 +153,7 @@ func historyAggregateSelection(input s2telemetryapi.DeviceHistoryAggregateReques
 	return selection, nil
 }
 
-func parseHistoryRange(fromValue, toValue s2telemetryapi.HistoryInstant) (time.Time, time.Time, *telemetryFailure) {
+func parseHistoryRange(fromValue, toValue telemetryapi.HistoryInstant) (time.Time, time.Time, *telemetryFailure) {
 	from, err := time.Parse(time.RFC3339Nano, string(fromValue))
 	if err != nil {
 		failure := telemetryFailure{http.StatusUnprocessableEntity, "TELEMETRY_HISTORY_QUERY_INVALID", "Device History query invalid", "The Device History from timestamp is invalid.", false}
@@ -173,7 +173,7 @@ func parseHistoryRange(fromValue, toValue s2telemetryapi.HistoryInstant) (time.T
 	return from.UTC(), to.UTC(), nil
 }
 
-func telemetryHistoryKeys(keys []s2telemetryapi.TelemetryKey) []string {
+func telemetryHistoryKeys(keys []telemetryapi.TelemetryKey) []string {
 	plain := make([]string, len(keys))
 	for index, key := range keys {
 		plain[index] = string(key)

@@ -28,11 +28,9 @@ import (
 
 const (
 	defaultRegistryTimeout           = 2 * time.Second
-	defaultRegistryShadowTimeout     = 750 * time.Millisecond
 	defaultRegistryAuditTimeout      = 500 * time.Millisecond
 	defaultRegistryAuthorizationBody = int64(1 << 20)
 	defaultRegistryBodyLimit         = int64(2 << 20)
-	defaultRegistryShadowConcurrency = 32
 )
 
 var (
@@ -41,21 +39,17 @@ var (
 )
 
 type RegistryConfig struct {
-	CoreBaseURL         string
-	CoreHTTPClient      *http.Client
-	CoreTimeout         time.Duration
-	ShadowTimeout       time.Duration
-	MaxResponseBytes    int64
-	MaxShadowConcurrent int
+	CoreBaseURL      string
+	CoreHTTPClient   *http.Client
+	CoreTimeout      time.Duration
+	MaxResponseBytes int64
 }
 
 type registryController struct {
 	coreBaseURL      string
 	coreHTTPClient   *http.Client
 	coreTimeout      time.Duration
-	shadowTimeout    time.Duration
 	maxResponseBytes int64
-	shadowSlots      chan struct{}
 }
 
 type publicRegistryRoute struct {
@@ -70,13 +64,11 @@ type publicRegistryRoute struct {
 }
 
 type registryBackendResult struct {
-	owner        string
-	status       int
-	code         string
-	body         []byte
-	bodySHA256   string
-	semanticHash string
-	retryable    bool
+	owner     string
+	status    int
+	code      string
+	body      []byte
+	retryable bool
 }
 
 type registryAuthorization struct {
@@ -106,22 +98,14 @@ func newRegistryController(config *RegistryConfig) *registryController {
 	if resolved.CoreTimeout <= 0 {
 		resolved.CoreTimeout = defaultRegistryTimeout
 	}
-	if resolved.ShadowTimeout <= 0 {
-		resolved.ShadowTimeout = defaultRegistryShadowTimeout
-	}
 	if resolved.MaxResponseBytes <= 0 || resolved.MaxResponseBytes > 16<<20 {
 		resolved.MaxResponseBytes = defaultRegistryBodyLimit
-	}
-	if resolved.MaxShadowConcurrent <= 0 || resolved.MaxShadowConcurrent > 1024 {
-		resolved.MaxShadowConcurrent = defaultRegistryShadowConcurrency
 	}
 	return &registryController{
 		coreBaseURL:      resolved.CoreBaseURL,
 		coreHTTPClient:   resolved.CoreHTTPClient,
 		coreTimeout:      resolved.CoreTimeout,
-		shadowTimeout:    resolved.ShadowTimeout,
 		maxResponseBytes: resolved.MaxResponseBytes,
-		shadowSlots:      make(chan struct{}, resolved.MaxShadowConcurrent),
 	}
 }
 
@@ -481,11 +465,11 @@ func (h *handler) decodeRegistryBackendResponse(owner string, response *http.Res
 	raw, err := readBoundedBody(response.Body, h.registry.maxResponseBytes)
 	if err != nil {
 		if errors.Is(err, errRegistryBodyTooLarge) {
-			return invalidRegistryResult(owner, "")
+			return invalidRegistryResult(owner)
 		}
 		return unavailableRegistryResult(owner, http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE")
 	}
-	result := registryBackendResult{owner: owner, status: response.StatusCode, bodySHA256: sha256Hex(raw)}
+	result := registryBackendResult{owner: owner, status: response.StatusCode}
 	if response.StatusCode == http.StatusOK || response.StatusCode == http.StatusCreated {
 		var canonical []byte
 		var err error
@@ -495,10 +479,9 @@ func (h *handler) decodeRegistryBackendResponse(owner string, response *http.Res
 			canonical, err = canonicalRegistrySuccessForRoute(route, raw)
 		}
 		if err != nil {
-			return invalidRegistryResult(owner, result.bodySHA256)
+			return invalidRegistryResult(owner)
 		}
 		result.body = canonical
-		result.semanticHash = sha256Hex(canonical)
 		return result
 	}
 	var problem platformapi.ProblemDetails
@@ -528,7 +511,6 @@ func (h *handler) decodeRegistryBackendResponse(owner string, response *http.Res
 		result.status = http.StatusServiceUnavailable
 		result.code = "REGISTRY_UNAVAILABLE"
 	}
-	result.semanticHash = sha256Hex([]byte(fmt.Sprintf("%d:%s", result.status, result.code)))
 	return result
 }
 
@@ -1566,20 +1548,14 @@ func readBoundedBody(reader io.Reader, limit int64) ([]byte, error) {
 }
 
 func unavailableRegistryResult(owner string, status int, code string) registryBackendResult {
-	emptyHash := sha256Hex(nil)
-	return registryBackendResult{owner: owner, status: status, code: code, bodySHA256: emptyHash, semanticHash: sha256Hex([]byte(fmt.Sprintf("%d:%s", status, code))), retryable: true}
+	return registryBackendResult{owner: owner, status: status, code: code, retryable: true}
 }
 
-func invalidRegistryResult(owner, bodySHA256 string) registryBackendResult {
-	if bodySHA256 == "" {
-		bodySHA256 = sha256Hex(nil)
-	}
+func invalidRegistryResult(owner string) registryBackendResult {
 	return registryBackendResult{
-		owner:        owner,
-		status:       http.StatusServiceUnavailable,
-		code:         "REGISTRY_UNAVAILABLE",
-		bodySHA256:   bodySHA256,
-		semanticHash: sha256Hex([]byte(fmt.Sprintf("%d:%s", http.StatusServiceUnavailable, "REGISTRY_UNAVAILABLE"))),
+		owner:  owner,
+		status: http.StatusServiceUnavailable,
+		code:   "REGISTRY_UNAVAILABLE",
 	}
 }
 
@@ -1624,9 +1600,4 @@ func isLowerUUID(value string) bool {
 		return false
 	}
 	return decoded[8]>>6 == 2
-}
-
-func sha256Hex(value []byte) string {
-	digest := sha256.Sum256(value)
-	return hex.EncodeToString(digest[:])
 }
