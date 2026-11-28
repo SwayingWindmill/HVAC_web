@@ -24,14 +24,14 @@ export function DailyPeaks({ bars, monthPeakKW }: { readonly bars: readonly Dail
         <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-[2px] border border-dashed border-chart-1 bg-chart-1/10" aria-hidden="true" />明天（预测）</span>
       </span>
       <ChartContainer config={config} className="aspect-auto h-[260px] w-full">
-        <BarChart data={bars as DailyPeakBar[]} margin={{ left: 4, right: 8, top: 12 }}>
+        <BarChart data={[...bars]} margin={{ left: 4, right: 8, top: 12 }}>
           <CartesianGrid vertical={false} />
           <XAxis dataKey="day" tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={16} />
           <YAxis tickLine={false} axisLine={false} width={44} domain={[0, 'auto']} />
           <ChartTooltip
             cursor={false}
             content={({ active, payload }) => {
-              const bar = payload?.[0]?.payload as DailyPeakBar | undefined;
+              const bar = bars.find((item) => Object.is(item, payload?.[0]?.payload));
               if (!active || !bar || bar.peak === null) return null;
               return (
                 <div className="grid min-w-32 gap-1 rounded-lg border bg-background px-2.5 py-1.5 text-xs shadow-xl">

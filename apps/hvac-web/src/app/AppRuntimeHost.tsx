@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { RouterProvider } from '@tanstack/react-router';
 import type { QueryClient } from '@tanstack/react-query';
-import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient } from '@/api/platform-client';
 import { fetchLoginContext, type LoginContextResponse } from '@/api/identity-sign-in';
 import { BrandMark } from '@/components/brand-mark';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -200,11 +200,10 @@ function PrincipalUnavailableState({ config, snapshot, retry }: { config: Runtim
 export function AppRuntimeHost({ config, queryClient }: { config: RuntimeConfig; queryClient: QueryClient }) {
   const observability = useObservability();
   const resources = useMemo(() => {
-    const client = createPlatformGatewayClient();
     let routerNavigate: (target: string) => void | Promise<unknown> = (target) => {
       window.location.assign(target);
     };
-    const runtime = createShellRuntime(client, createBrowserShellEnvironment({
+    const runtime = createShellRuntime(platformGatewayClient, createBrowserShellEnvironment({
       navigate: (target) => routerNavigate(target),
     }));
     const publishRealtimeStatus = (update: Parameters<typeof runtime.publishRealtimeStatus>[0]) => {

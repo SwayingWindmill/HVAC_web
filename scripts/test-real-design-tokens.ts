@@ -229,6 +229,19 @@ test('design system check passes on the repository and rejects violations across
       join(sandbox, 'apps/hvac-web/src/features/demo/BadLayerFeature.ts'),
       `import { Route } from '@/routes/index';\nexport const leakedRoute = Route;\n`,
     );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/BadFeatureCast.ts'),
+      `export const badCast = (v: unknown) => (v as string).trim();\n`,
+    );
+    mkdirSync(join(sandbox, 'apps/hvac-web/src/api'), { recursive: true });
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/api/bad-client.ts'),
+      `export const badFetch = () => fetch('/api/v1/health');\n`,
+    );
+    writeFileSync(
+      join(sandbox, 'apps/hvac-web/src/features/demo/BadGatewayClient.ts'),
+      `import { createPlatformGatewayClient } from '@/api/generated/platformGateway.gen';\nexport const badClient = createPlatformGatewayClient();\n`,
+    );
 
     const { errors } = await validateDesignSystem(sandbox);
     assert.equal(errors.some((entry: string) => entry.includes('AllowedClient.tsx')), false);
@@ -267,7 +280,10 @@ test('design system check passes on the repository and rejects violations across
     assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:5 avoid JSON.parse(JSON.stringify(...))')));
     assert.equal(errors.some((entry: string) => entry.includes('BadPatterns.tsx:6')), false);
     assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:7 avoid `as unknown as`')));
-    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:8 feature/route modules must use gatewayRequest instead of raw fetch()')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadFeatureCast.ts:1 avoid non-const `as` type assertions in features/')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:8 web modules must use gatewayRequest instead of raw fetch()')));
+    assert.ok(errors.some((entry: string) => entry.includes('bad-client.ts:1 web modules must use gatewayRequest instead of raw fetch()')));
+    assert.ok(errors.some((entry: string) => entry.includes('BadGatewayClient.ts:2 reuse platformGatewayClient from @/api/platform-client instead of calling createPlatformGatewayClient()')));
     assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:9 feature/route modules must use src/platform/telemetry-live/ instead of new WebSocket()')));
     assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:12 avoid <Button variant="secondary">')));
     assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:12 UI copy uses deprecated term "认领"')));
@@ -279,7 +295,7 @@ test('design system check passes on the repository and rejects violations across
     assert.ok(errors.some((entry: string) => entry.includes('BadPatterns.tsx:15 UI copy uses deprecated term "Registry "')));
     assert.equal(errors.some((entry: string) => entry.includes('BadPatterns.tsx:14')), false);
     assert.equal(errors.some((entry: string) => entry.includes('BadPatterns.tsx:16')), false);
-    assert.ok(errors.some((entry: string) => entry.includes('apps/hvac-web/src non-const `as` casts grew from 0 to 2')));
+    assert.ok(errors.some((entry: string) => entry.includes('apps/hvac-web/src non-const `as` casts grew from 0 to 3')));
     assert.ok(errors.some((entry: string) => entry.includes('apps/hvac-web/src/routeTree.gen.ts is stale')));
 
     writeFileSync(
@@ -287,7 +303,7 @@ test('design system check passes on the repository and rejects violations across
       JSON.stringify({ schemaVersion: 1, policy: 'web-non-const-as-cast-ratchet', maxNonConstAsCasts: 5 }),
     );
     const { errors: slackErrors } = await validateDesignSystem(sandbox);
-    assert.ok(slackErrors.some((entry: string) => entry.includes('non-const `as` casts dropped from 5 to 2; tighten scripts/web-as-cast-baseline.json')));
+    assert.ok(slackErrors.some((entry: string) => entry.includes('non-const `as` casts dropped from 5 to 3; tighten scripts/web-as-cast-baseline.json')));
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }

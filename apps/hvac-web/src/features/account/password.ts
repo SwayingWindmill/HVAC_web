@@ -1,6 +1,5 @@
-import { PlatformApiError, createPlatformGatewayClient, type OwnPasswordRequest } from '@/api/generated/platformGateway.gen';
-
-const client = createPlatformGatewayClient();
+import { PlatformApiError, type OwnPasswordRequest } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient as client } from '@/api/platform-client';
 
 /** The rule a new password must meet, as the identity directory enforces it. */
 export const PASSWORD_HINT = '至少 8 位，不能是常见密码，也不能和用户名相同';

@@ -1,6 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
 import {
-  createPlatformGatewayClient,
   type ApproveEdgeModelRequest,
   type CreateEdgeModelArtifactRequest,
   type DeployEdgeModelRequest,
@@ -11,8 +10,7 @@ import {
   type RecordEdgeModelEvaluationRequest,
   type RollbackEdgeModelRequest,
 } from '@/api/generated/platformGateway.gen';
-
-const client = createPlatformGatewayClient();
+import { platformGatewayClient as client } from '@/api/platform-client';
 
 export const edgeModelKeys = {
   all: ['edge-models'] as const,

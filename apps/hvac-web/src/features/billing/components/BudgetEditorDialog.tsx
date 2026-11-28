@@ -5,6 +5,7 @@ import { useForm } from 'react-hook-form';
 import { notifySuccess } from '@/lib/toast';
 import { z } from 'zod';
 import type { MonthlyElectricityBudget } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient } from '@/api/platform-client';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import {
@@ -21,7 +22,6 @@ import { Textarea } from '@/components/ui/textarea';
 import { formatDecimal } from '@/lib/operator-format';
 import { formatBillingMonthLabel } from '../billing-model';
 import {
-  billingGatewayClient,
   billingKeys,
   describeBillingApiError,
   isBillingRevisionConflict,
@@ -99,7 +99,7 @@ export function BudgetEditorDialog({
 
   const saveMutation = useMutation({
     mutationFn: async (values: BudgetFormValues) => {
-      const response = await billingGatewayClient.saveSiteMonthlyElectricityBudget(
+      const response = await platformGatewayClient.saveSiteMonthlyElectricityBudget(
         siteId,
         {
           billingMonth,

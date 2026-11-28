@@ -12,7 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { siteAssetModelQuery } from '@/api/site-asset-model';
 import { periodWindow, previousWindow, siteDayKey } from '@/features/energy-analysis/consumption/model';
-import { siteTariffQuery } from '@/features/tariff/query';
+import { siteTariffQuery } from '@/api/site-tariff';
 import { demandCharges, periodAt, periodRanges } from '@/features/tariff/tariff-model';
 import { useNow } from '@/hooks/use-now';
 import { formatDecimal, formatTime } from '@/lib/operator-format';

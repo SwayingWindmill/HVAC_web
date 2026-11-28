@@ -21,18 +21,16 @@ import {
 } from '@/api/accounting-recalc';
 import {
   PlatformApiError,
-  createPlatformGatewayClient,
   type EnergySeriesResponse,
   type UtilityBillMeterScope,
   type UtilityBillStatus,
 } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient } from '@/api/platform-client';
 import {
   describeBillingApiError,
   resolveBillingMonthWindow,
   resolveReadingDateWindow,
 } from './billing-model';
-
-export const billingGatewayClient = createPlatformGatewayClient();
 
 export const billingKeys = {
   budgetsRoot: (siteId: string) => ['electricity-budgets', siteId] as const,
@@ -179,7 +177,7 @@ export function siteMonthlyBudgetQuery(siteId: string, billingMonth: string) {
   return queryOptions({
     queryKey: billingKeys.budgetForMonth(siteId, billingMonth),
     queryFn: ({ signal }) =>
-      billingGatewayClient.listSiteMonthlyElectricityBudgets(
+      platformGatewayClient.listSiteMonthlyElectricityBudgets(
         siteId,
         { billingMonth },
         { signal },
@@ -202,7 +200,7 @@ export function siteUtilityBillsQuery(
   return queryOptions({
     queryKey: billingKeys.billsList(siteId, params),
     queryFn: ({ signal }) =>
-      billingGatewayClient.listSiteUtilityBills(siteId, params, { signal }),
+      platformGatewayClient.listSiteUtilityBills(siteId, params, { signal }),
     select: (response) => response.data.items,
     staleTime: 30_000,
     placeholderData: (previousData, previousQuery) =>
@@ -243,7 +241,7 @@ export function siteBillingMonthElectricityQuery(input: {
     ),
     queryFn: async ({ signal }): Promise<EnergySeriesResponse | null> => {
       if (!hasSpan) return null;
-      const response = await billingGatewayClient.queryEnergySeries(
+      const response = await platformGatewayClient.queryEnergySeries(
         {
           tenantId: input.tenantId,
           siteId: input.siteId,
@@ -288,7 +286,7 @@ export function siteReadingWindowElectricityQuery(input: {
     ),
     queryFn: async ({ signal }): Promise<EnergySeriesResponse | null> => {
       if (!window) return null;
-      const response = await billingGatewayClient.queryEnergySeries(
+      const response = await platformGatewayClient.queryEnergySeries(
         {
           tenantId: input.tenantId,
           siteId: input.siteId,

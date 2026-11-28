@@ -5,6 +5,7 @@ import { Controller, useForm, useWatch } from 'react-hook-form';
 import { notifySuccess } from '@/lib/toast';
 import { z } from 'zod';
 import type { UtilityBill } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient } from '@/api/platform-client';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -19,7 +20,7 @@ import {
 import { Field, FieldError, FieldLabel } from '@/components/ui/field';
 import { Input } from '@/components/ui/input';
 import { formatBillingMonthLabel, METER_SCOPE_LABEL } from '../billing-model';
-import { billingGatewayClient, billingKeys, describeBillingApiError } from '../query';
+import { billingKeys, describeBillingApiError } from '../query';
 import { preventImeSubmit } from './billing-form-helpers';
 
 const DEFAULT_CONFIRM_REASON = '已完成供电局抄表电量与电费核对，确认归档';
@@ -83,7 +84,7 @@ export function ConfirmArchiveBillDialog({
   const confirmMutation = useMutation({
     mutationFn: async (values: ConfirmFormValues) => {
       if (!bill) throw new Error('Missing bill');
-      const res = await billingGatewayClient.confirmSiteUtilityBill(
+      const res = await platformGatewayClient.confirmSiteUtilityBill(
         siteId,
         bill.id,
         {

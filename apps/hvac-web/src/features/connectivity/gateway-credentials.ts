@@ -1,12 +1,11 @@
 import {
   PlatformApiError,
-  createPlatformGatewayClient,
   type ConcentratorEidUpdateRequest,
   type ConcentratorParamsUpdateRequest,
   type GatewayConfigShadowUpdateRequest,
 } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient as client } from '@/api/platform-client';
 
-const client = createPlatformGatewayClient();
 export const gatewayCredentialKey = (gatewayId: string) => ['gateway-credential', gatewayId] as const;
 export const gatewayCredentialListKey = (gatewayId: string) => ['gateway-credential-list', gatewayId] as const;
 export const gatewayCredentialApi = {

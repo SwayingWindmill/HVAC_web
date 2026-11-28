@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { CurrentPrincipalResponse, Site } from '@/api/generated/platformGateway.gen';
 import { siteAssetModelEnvelopeQuery, siteAssetModelQueryKey } from '@/api/site-asset-model';
@@ -44,7 +44,12 @@ export function useSiteAssetsData({
     }),
     [queryClient],
   );
-  const telemetryRuntime = useMemo(() => createAssetsTelemetryRuntime(), []);
+  const csrfTokenRef = useRef(principal.session.csrfToken);
+  csrfTokenRef.current = principal.session.csrfToken;
+  const telemetryRuntime = useMemo(
+    () => createAssetsTelemetryRuntime('', undefined, { getCsrfToken: () => csrfTokenRef.current }),
+    [],
+  );
   const protectedGeneration = runtime.current().protectedScope?.generation ?? 0;
   const tenantId = site.tenantId;
   const queryRoot = useMemo(

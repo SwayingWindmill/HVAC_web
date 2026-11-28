@@ -1,13 +1,12 @@
 import { queryOptions } from '@tanstack/react-query';
 import {
   PlatformApiError,
-  createPlatformGatewayClient,
   type CreateOperatingExceptionRequest,
   type DecideOperatingExceptionRequest,
   type OperatingExceptionStatus,
   type OperatingScheduleMutation,
-  type SiteTariff,
 } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient as gatewayClient } from '@/api/platform-client';
 import {
   S2TelemetryClientError,
   createS2TelemetryClient,
@@ -21,7 +20,6 @@ import {
   type SchedulePlantMonitorTarget,
 } from './schedule-model';
 
-const gatewayClient = createPlatformGatewayClient();
 const telemetryClient = createS2TelemetryClient();
 
 export const scheduleKeys = {
@@ -31,7 +29,6 @@ export const scheduleKeys = {
     ['operating-exceptions', siteId, 'window', from, to] as const,
   exceptionsList: (siteId: string, status?: OperatingExceptionStatus) =>
     ['operating-exceptions', siteId, 'list', status ?? 'ALL'] as const,
-  tariff: (siteId: string) => ['site-tariff', siteId] as const,
   plantQuarterHour: (
     siteId: string,
     signature: string,
@@ -66,30 +63,6 @@ export function siteOperatingExceptionsListQuery(siteId: string, status?: Operat
       gatewayClient.listSiteOperatingExceptions(siteId, status ? { status } : {}, { signal }),
     select: (response) => response.data.items,
     staleTime: 15_000,
-  });
-}
-
-export function siteScheduleTariffQuery(siteId: string) {
-  return queryOptions({
-    queryKey: scheduleKeys.tariff(siteId),
-    queryFn: async ({ signal }): Promise<SiteTariff | null> => {
-      try {
-        const response = await gatewayClient.getSiteTariff(siteId, { signal });
-        return response.data;
-      } catch (error) {
-        if (error instanceof PlatformApiError && error.problem.status === 404) {
-          return null;
-        }
-        throw error;
-      }
-    },
-    staleTime: 5 * 60_000,
-    retry: (failureCount, error) => {
-      if (error instanceof PlatformApiError && (error.problem.status === 404 || error.problem.status === 403)) {
-        return false;
-      }
-      return failureCount < 1;
-    },
   });
 }
 

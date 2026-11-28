@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { gatewayRequest, ROUTE_MISSING_MESSAGE, type GatewayFailure, type GatewayRequest } from './gateway-client.ts';
 
 export const workOrderPrioritySchema = z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']);
 export const workOrderStatusSchema = z.enum(['DRAFT', 'OPEN', 'IN_PROGRESS', 'BLOCKED', 'COMPLETED', 'CANCELLED']);
@@ -64,13 +65,6 @@ const workOrderListSchema = z.object({
   hasMore: z.boolean(),
 }).strict();
 
-const problemSchema = z.object({
-  title: z.string().optional(),
-  detail: z.string().optional(),
-  code: z.string().optional(),
-  retryable: z.boolean().optional(),
-}).passthrough();
-
 export type WorkOrder = z.infer<typeof workOrderSchema>;
 export type WorkOrderPriority = z.infer<typeof workOrderPrioritySchema>;
 export type WorkOrderStatus = z.infer<typeof workOrderStatusSchema>;
@@ -81,9 +75,16 @@ export type WorkOrderEvidenceReference = z.infer<typeof evidenceReferenceSchema>
 export type WorkOrderList = z.infer<typeof workOrderListSchema>;
 
 export class WorkOrderApiError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string, readonly retryable = false) {
+  readonly status: number;
+  readonly code: string;
+  readonly retryable: boolean;
+
+  constructor(status: number, code: string, message: string, retryable = false) {
     super(message);
     this.name = 'WorkOrderApiError';
+    this.status = status;
+    this.code = code;
+    this.retryable = retryable;
   }
 }
 
@@ -159,27 +160,43 @@ function translateWorkOrderError(status: number, code: string, detail?: string):
   return '工单服务暂时不可用，请稍后再试。';
 }
 
-// Responses come from our own Work Order owner; their shape is the typed contract and
-// is not re-validated here.
-async function request<T>(path: string, init: RequestInit): Promise<T> {
-  const response = await fetch(path, { ...init, credentials: 'same-origin' });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const parsed = problemSchema.safeParse(payload);
-    const problem = parsed.success ? parsed.data : {};
-    const code = problem.code ?? 'WORK_ORDER_UNAVAILABLE';
-    const message = translateWorkOrderError(response.status, code, problem.detail);
-    throw new WorkOrderApiError(response.status, code, message, problem.retryable ?? false);
+function toWorkOrderError(failure: GatewayFailure): WorkOrderApiError {
+  if (failure.kind === 'routeMissing') {
+    return new WorkOrderApiError(
+      failure.status,
+      'ROUTE_NOT_FOUND',
+      ROUTE_MISSING_MESSAGE,
+      false,
+    );
   }
-  return payload as T;
+  if (failure.kind === 'unavailable') {
+    const status = failure.status ?? 503;
+    const code = failure.problem?.code ?? 'WORK_ORDER_UNAVAILABLE';
+    const message = translateWorkOrderError(status, code, failure.problem?.detail);
+    return new WorkOrderApiError(status, code, message, failure.problem?.retryable ?? false);
+  }
+  const code = failure.problem.code ?? (failure.kind === 'notPublished' ? 'RESOURCE_NOT_FOUND' : 'WORK_ORDER_UNAVAILABLE');
+  const message = translateWorkOrderError(failure.problem.status, code, failure.problem.detail);
+  return new WorkOrderApiError(failure.problem.status, code, message, failure.problem.retryable ?? false);
 }
 
-function mutationHeaders(options: WorkOrderRequestOptions): HeadersInit {
+async function sendWorkOrderRequest<T>(path: string, request: GatewayRequest<T>): Promise<T> {
+  const result = await gatewayRequest(path, request);
+  if (result.kind === 'ok') return result.value;
+  throw toWorkOrderError(result);
+}
+
+function workOrderMutationRequest(
+  body: unknown,
+  options: WorkOrderRequestOptions,
+): GatewayRequest<WorkOrder> {
   return {
-    Accept: 'application/json, application/problem+json',
-    'Content-Type': 'application/json',
-    'X-CSRF-Token': options.csrfToken ?? '',
-    'Idempotency-Key': options.idempotencyKey ?? `work-order-${crypto.randomUUID()}`,
+    method: 'POST',
+    csrfToken: options.csrfToken ?? '',
+    idempotencyKey: options.idempotencyKey ?? `work-order-${crypto.randomUUID()}`,
+    body,
+    signal: options.signal,
+    parse: (payload) => workOrderSchema.parse(payload),
   };
 }
 
@@ -192,27 +209,31 @@ export function listWorkOrders(filter: WorkOrderListFilter, options: WorkOrderRe
   if (filter.sourceRef) query.set('sourceRef', filter.sourceRef);
   if (filter.cursor) query.set('cursor', filter.cursor);
   query.set('limit', String(filter.limit ?? 50));
-  return request<WorkOrderList>(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders?${query.toString()}`, {
-    method: 'GET', signal: options.signal, headers: { Accept: 'application/json, application/problem+json' },
-  });
+  return sendWorkOrderRequest(
+    `/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders?${query.toString()}`,
+    { signal: options.signal, parse: (payload) => workOrderListSchema.parse(payload) },
+  );
 }
 
 export function getWorkOrder(workOrderId: string, options: WorkOrderRequestOptions): Promise<WorkOrder> {
-  return request<WorkOrder>(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders/${encodeURIComponent(workOrderId)}`, {
-    method: 'GET', signal: options.signal, headers: { Accept: 'application/json, application/problem+json' },
-  });
+  return sendWorkOrderRequest(
+    `/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders/${encodeURIComponent(workOrderId)}`,
+    { signal: options.signal, parse: (payload) => workOrderSchema.parse(payload) },
+  );
 }
 
 export function createWorkOrder(input: CreateWorkOrderInput, options: WorkOrderRequestOptions): Promise<WorkOrder> {
-  return request<WorkOrder>(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders`, {
-    method: 'POST', signal: options.signal, headers: mutationHeaders(options), body: JSON.stringify(input),
-  });
+  return sendWorkOrderRequest(
+    `/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders`,
+    workOrderMutationRequest(input, options),
+  );
 }
 
 export function assignWorkOrder(workOrderId: string, input: AssignWorkOrderInput, options: WorkOrderRequestOptions): Promise<WorkOrder> {
-  return request<WorkOrder>(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders/${encodeURIComponent(workOrderId)}:assign`, {
-    method: 'POST', signal: options.signal, headers: mutationHeaders(options), body: JSON.stringify(input),
-  });
+  return sendWorkOrderRequest(
+    `/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders/${encodeURIComponent(workOrderId)}:assign`,
+    workOrderMutationRequest(input, options),
+  );
 }
 
 export function transitionWorkOrder(
@@ -221,9 +242,10 @@ export function transitionWorkOrder(
   input: WorkOrderLifecycleInput,
   options: WorkOrderRequestOptions,
 ): Promise<WorkOrder> {
-  return request<WorkOrder>(`/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders/${encodeURIComponent(workOrderId)}:${operation}`, {
-    method: 'POST', signal: options.signal, headers: mutationHeaders(options), body: JSON.stringify(input),
-  });
+  return sendWorkOrderRequest(
+    `/api/v1/sites/${encodeURIComponent(options.siteId)}/work-orders/${encodeURIComponent(workOrderId)}:${operation}`,
+    workOrderMutationRequest(input, options),
+  );
 }
 
 export function workOrderErrorMessage(error: unknown): string {

@@ -1,6 +1,5 @@
 import { queryOptions } from '@tanstack/react-query';
 import {
-  createPlatformGatewayClient,
   type OTACampaignCreateRequest,
   type OTACampaignDetail,
   type OTACampaignList,
@@ -8,9 +7,8 @@ import {
   type OTAPackage,
   type OTAPackageList,
 } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient as gatewayClient } from '@/api/platform-client';
 import { isOTACampaignActive } from './ota-model';
-
-const gatewayClient = createPlatformGatewayClient();
 
 const OTA_POLL_INTERVAL_MS = 5_000;
 

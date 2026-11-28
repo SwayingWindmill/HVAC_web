@@ -25,11 +25,11 @@ import {
 } from '@/components/ui/select';
 import { Spinner } from '@/components/ui/spinner';
 import { Textarea } from '@/components/ui/textarea';
-import { siteTariffQuery } from '@/features/tariff/query';
+import { siteTariffQuery } from '@/api/site-tariff';
+import { platformGatewayClient } from '@/api/platform-client';
 import { isOneOf } from '@/lib/typed';
 import { formatBillingMonthLabel, METER_SCOPE_LABEL } from '../billing-model';
 import {
-  billingGatewayClient,
   billingKeys,
   describeBillingApiError,
   isBillingRevisionConflict,
@@ -117,7 +117,7 @@ export function UtilityBillDialog({
         idempotencyKey: crypto.randomUUID(),
       });
       if (editingBill) {
-        const res = await billingGatewayClient.updateSiteUtilityBill(
+        const res = await platformGatewayClient.updateSiteUtilityBill(
           siteId,
           editingBill.id,
           body,
@@ -125,7 +125,7 @@ export function UtilityBillDialog({
         );
         return res.data;
       }
-      const res = await billingGatewayClient.createSiteUtilityBill(siteId, body, csrfToken);
+      const res = await platformGatewayClient.createSiteUtilityBill(siteId, body, csrfToken);
       return res.data;
     },
     onSuccess: async (saved) => {

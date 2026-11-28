@@ -1,3 +1,4 @@
+import { gatewayRequest } from './gateway-client.ts';
 import {
   agentSessionEventSchema,
   agentSessionEventTypes,
@@ -8,15 +9,20 @@ import {
   type AgentSessionEvent,
   type AgentSessionSnapshot,
   type AgentUsage,
-} from '@/api/generated/operationsAgentSessions.gen';
+} from './generated/operationsAgentSessions.gen.ts';
 
 // The Agent Session routes behind the Gateway. Responses are parsed with the generated
 // contract; the event stream is a same-origin EventSource on the Browser Session cookie.
 
 export class AssistantRequestError extends Error {
-  constructor(readonly code: string, readonly status: number) {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(code: string, status: number) {
     super(code);
     this.name = 'AssistantRequestError';
+    this.code = code;
+    this.status = status;
   }
 }
 
@@ -37,37 +43,32 @@ export const assistantErrorText = (error: unknown): string => {
   }
 };
 
-const send = async (path: string, init: RequestInit): Promise<unknown> => {
-  const response = await fetch(path, { credentials: 'same-origin', ...init });
-  const payload: unknown = await response.json().catch(() => null);
-  if (!response.ok) {
-    const code = typeof payload === 'object' && payload !== null && 'code' in payload && typeof payload.code === 'string'
-      ? payload.code
-      : 'UNKNOWN';
-    throw new AssistantRequestError(code, response.status);
-  }
-  return payload;
+const send = async <T>(
+  path: string,
+  parse: (payload: unknown) => T,
+  post?: { readonly csrfToken: string; readonly body: unknown },
+): Promise<T> => {
+  const result = await gatewayRequest(
+    path,
+    post ? { method: 'POST', csrfToken: post.csrfToken, body: post.body, parse } : { parse },
+  );
+  if (result.kind === 'ok') return result.value;
+  if (result.kind === 'routeMissing') throw new AssistantRequestError('ROUTE_NOT_FOUND', result.status);
+  if (result.kind === 'unavailable') throw new AssistantRequestError(result.problem?.code ?? 'UNKNOWN', result.status ?? 503);
+  throw new AssistantRequestError(result.problem.code ?? 'UNKNOWN', result.problem.status);
 };
 
-const read = (path: string) => send(path, { headers: { Accept: 'application/json, application/problem+json' } });
-
-const post = (path: string, csrfToken: string, body: unknown) => send(path, {
-  method: 'POST',
-  headers: { Accept: 'application/json, application/problem+json', 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
-  body: JSON.stringify(body),
-});
-
 export const listAssistantSessions = async (siteId: string): Promise<readonly AgentSessionSnapshot[]> => (
-  agentSessionListSchema.parse(await read(agentSessionPaths.collection(siteId)))
+  send(agentSessionPaths.collection(siteId), (payload) => agentSessionListSchema.parse(payload))
 );
 
 /** The assistant's last 14 Site-local days on a Site; needs the audit.read capability. */
 export const getAssistantUsage = async (siteId: string, timezone: string): Promise<AgentUsage> => (
-  agentUsageSchema.parse(await read(agentSessionPaths.usage(siteId, timezone)))
+  send(agentSessionPaths.usage(siteId, timezone), (payload) => agentUsageSchema.parse(payload))
 );
 
 export const createAssistantSession = async (siteId: string, csrfToken: string, message: string): Promise<AgentSessionSnapshot> => (
-  agentSessionSnapshotSchema.parse(await post(agentSessionPaths.collection(siteId), csrfToken, { message }))
+  send(agentSessionPaths.collection(siteId), (payload) => agentSessionSnapshotSchema.parse(payload), { csrfToken, body: { message } })
 );
 
 export const askInAssistantSession = async (
@@ -77,7 +78,11 @@ export const askInAssistantSession = async (
   expectedRevision: number,
   message: string,
 ): Promise<AgentSessionSnapshot> => (
-  agentSessionSnapshotSchema.parse(await post(agentSessionPaths.run(siteId, sessionId), csrfToken, { expectedRevision, message }))
+  send(
+    agentSessionPaths.run(siteId, sessionId),
+    (payload) => agentSessionSnapshotSchema.parse(payload),
+    { csrfToken, body: { expectedRevision, message } },
+  )
 );
 
 export const cancelAssistantRun = async (
@@ -86,7 +91,11 @@ export const cancelAssistantRun = async (
   sessionId: string,
   expectedRevision: number,
 ): Promise<AgentSessionSnapshot> => (
-  agentSessionSnapshotSchema.parse(await post(agentSessionPaths.cancel(siteId, sessionId), csrfToken, { expectedRevision }))
+  send(
+    agentSessionPaths.cancel(siteId, sessionId),
+    (payload) => agentSessionSnapshotSchema.parse(payload),
+    { csrfToken, body: { expectedRevision } },
+  )
 );
 
 export const answerAssistantQuestion = async (
@@ -97,11 +106,11 @@ export const answerAssistantQuestion = async (
   requestArtifactId: string,
   value: string,
 ): Promise<AgentSessionSnapshot> => (
-  agentSessionSnapshotSchema.parse(await post(
+  send(
     agentSessionPaths.submitInput(siteId, sessionId),
-    csrfToken,
-    { expectedRevision, requestArtifactId, value },
-  ))
+    (payload) => agentSessionSnapshotSchema.parse(payload),
+    { csrfToken, body: { expectedRevision, requestArtifactId, value } },
+  )
 );
 
 /**
@@ -131,7 +140,12 @@ export const followAssistantSession = (
     onEvent(parsed.data);
     if (parsed.data.type === 'session.snapshot' && parsed.data.payload.snapshot.session.status !== 'ACTIVE') end(false);
   };
-  for (const type of agentSessionEventTypes) source.addEventListener(type, handle as EventListener);
+  const onMessageEvent: EventListener = (event) => {
+    if (event instanceof MessageEvent && typeof event.data === 'string') {
+      handle(event);
+    }
+  };
+  for (const type of agentSessionEventTypes) source.addEventListener(type, onMessageEvent);
   // The server closes the stream after the snapshot that ends the Run; a close before it is a failure.
   source.onerror = () => end(source.readyState !== EventSource.CLOSED);
   return () => end(false);

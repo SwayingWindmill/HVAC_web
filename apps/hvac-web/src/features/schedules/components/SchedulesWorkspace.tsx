@@ -14,6 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { wallTime } from '@/lib/site-time';
 import { siteAssetModelQuery } from '@/api/site-asset-model';
+import { siteTariffQuery } from '@/api/site-tariff';
 import { CreateWorkOrderDialog } from '@/features/work-orders/CreateWorkOrderDialog';
 import { workOrderKeys } from '@/features/work-orders/work-order-queries';
 import { useNow } from '@/hooks/use-now';
@@ -25,7 +26,6 @@ import {
   siteOperatingExceptionsListQuery,
   siteOperatingExceptionsWindowQuery,
   siteOperatingScheduleQuery,
-  siteScheduleTariffQuery,
 } from '../query';
 import {
   addCalendarDays,
@@ -102,7 +102,7 @@ export function SchedulesWorkspace() {
     ...siteOperatingExceptionsListQuery(site.id, search.status),
     enabled: activeView === 'exceptions',
   });
-  const tariffQuery = useQuery(siteScheduleTariffQuery(site.id));
+  const tariffQuery = useQuery(siteTariffQuery(site.id));
   const assetModelQuery = useQuery(siteAssetModelQuery(site.id));
 
   const monitorTargets = useMemo(

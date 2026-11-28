@@ -2,12 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { FileUp, LayoutTemplate, Network, Plus } from 'lucide-react';
 import type { Capability } from '@/api/generated/platformGateway.gen';
-import { invalidateSiteAssetModel } from '@/api/site-asset-model';
+import { invalidateSiteAssetModel, useSiteAssetModel } from '@/api/site-asset-model';
 import {
   flattenRegistryPages,
   presentRegistryError,
   registryAdminApi,
-  useRegistryAssetModel,
   useRegistrySite,
   useRegistrySites,
 } from '@/api/registry';
@@ -58,7 +57,7 @@ export function RegistryAdministration({ capabilities: capabilityList, initialSi
   const [mutationError, setMutationError] = useState<unknown>(null);
   const [createDraft, setCreateDraft] = useState({ code: '', displayName: '', timezone: 'Asia/Shanghai', reason: '创建首个站点' });
   const siteQuery = useRegistrySite(selectedSiteId);
-  const modelQuery = useRegistryAssetModel(selectedSiteId);
+  const modelQuery = useSiteAssetModel(selectedSiteId);
 
   useEffect(() => {
     if (initialSiteId && sites.some((site) => site.id === initialSiteId)) {

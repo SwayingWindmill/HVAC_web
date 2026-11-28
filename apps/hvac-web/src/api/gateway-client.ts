@@ -32,7 +32,7 @@ export type GatewayResult<T> =
   | { readonly kind: 'notPublished'; readonly problem: GatewayProblem }
   | { readonly kind: 'routeMissing'; readonly status: number }
   | { readonly kind: 'refused'; readonly problem: GatewayProblem }
-  | { readonly kind: 'unavailable'; readonly status: number | null };
+  | { readonly kind: 'unavailable'; readonly status: number | null; readonly problem?: GatewayProblem };
 
 export type GatewayFailure = Exclude<GatewayResult<unknown>, { kind: 'ok' }>;
 
@@ -100,7 +100,7 @@ export function classifyFailure(status: number, problem: GatewayProblem | null):
   }
   if (status >= 400 && status < 500) return { kind: 'refused', problem: problem ?? { status } };
   if (problem?.code?.endsWith('_REJECTED')) return { kind: 'refused', problem };
-  return { kind: 'unavailable', status };
+  return problem ? { kind: 'unavailable', status, problem } : { kind: 'unavailable', status };
 }
 
 function parseJSON(text: string | null): unknown {

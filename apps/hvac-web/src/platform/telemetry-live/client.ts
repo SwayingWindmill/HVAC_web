@@ -8,10 +8,8 @@ import {
   type SubscriptionBootstrapResponse,
   type SubscriptionDescriptor,
 } from '@/api/generated/s2Telemetry.gen';
-import {
-  createPlatformGatewayClient,
-  type PlatformGatewayClient,
-} from '@/api/generated/platformGateway.gen';
+import { type PlatformGatewayClient } from '@/api/generated/platformGateway.gen';
+import { platformGatewayClient } from '../../api/platform-client.ts';
 import { normalizeTarget } from './contract';
 import { CentrifugoTransportFactory } from './centrifugo-transport';
 import { SubscriptionStateMachine, type CheckpointCandidate } from './state-machine';
@@ -39,6 +37,7 @@ const checkpointIntervalMs = 30_000;
 interface LiveClientDependencies {
   telemetry: S2TelemetryClient;
   platform: Pick<PlatformGatewayClient, 'getCurrentPrincipal'>;
+  getCsrfToken?: () => string | undefined;
   transportFactory: TelemetryTransportFactory;
   recoveryStore: RecoveryStore;
   now: () => Date;
@@ -140,10 +139,16 @@ class LiveSession implements TelemetryLiveSession {
   private snapshotFlushScheduled = false;
   private snapshotBatchSeq = 0;
 
-  constructor(dependencies: LiveClientDependencies, targets: TelemetryLiveTarget[], onClosed: () => void) {
+  constructor(
+    dependencies: LiveClientDependencies,
+    targets: TelemetryLiveTarget[],
+    onClosed: () => void,
+    initialCsrfToken?: string,
+  ) {
     this.dependencies = dependencies;
     this.targets = targets;
     this.onClosed = onClosed;
+    this.csrfToken = initialCsrfToken ?? null;
   }
 
   async start(signal?: AbortSignal): Promise<void> {
@@ -455,7 +460,11 @@ class LiveSession implements TelemetryLiveSession {
   }
 
   private async csrf(signal?: AbortSignal): Promise<string> {
-    if (this.csrfToken) return this.csrfToken;
+    const provided = this.csrfToken || this.dependencies.getCsrfToken?.();
+    if (provided) {
+      this.csrfToken = provided;
+      return provided;
+    }
     const principal = await this.dependencies.platform.getCurrentPrincipal({ signal });
     const csrf = principal.data.session.csrfToken;
     if (!csrf) throw new Error('Authenticated Session omitted CSRF capability');
@@ -478,7 +487,10 @@ class DefaultTelemetryLiveClient implements TelemetryLiveClient {
     this.dependencies = dependencies;
   }
 
-  async open(targets: ReadonlyArray<TelemetryLiveTarget>, options?: { signal?: AbortSignal }): Promise<TelemetryLiveSession> {
+  async open(
+    targets: ReadonlyArray<TelemetryLiveTarget>,
+    options?: { signal?: AbortSignal; csrfToken?: string },
+  ): Promise<TelemetryLiveSession> {
     if (targets.length === 0 || targets.length > maximumSubscriptions) throw new Error('Telemetry live target count is out of bounds');
     const normalized = targets.map((target) => normalizeTarget(target));
     const seen = new Set<string>();
@@ -494,6 +506,7 @@ class DefaultTelemetryLiveClient implements TelemetryLiveClient {
       this.dependencies,
       normalized.map((target) => cloneTarget(target)),
       () => this.sessions.delete(session),
+      options?.csrfToken,
     );
     try {
       await session.start(options?.signal);
@@ -515,6 +528,7 @@ class DefaultTelemetryLiveClient implements TelemetryLiveClient {
 export interface TelemetryLiveClientDependencies {
   telemetry?: S2TelemetryClient;
   platform?: Pick<PlatformGatewayClient, 'getCurrentPrincipal'>;
+  getCsrfToken?: () => string | undefined;
   transportFactory?: TelemetryTransportFactory;
   recoveryStore?: RecoveryStore;
   now?: () => Date;
@@ -526,7 +540,8 @@ export function createTelemetryLiveClient(dependencies: TelemetryLiveClientDepen
   const now = dependencies.now ?? (() => new Date());
   return new DefaultTelemetryLiveClient({
     telemetry: dependencies.telemetry ?? createS2TelemetryClient(),
-    platform: dependencies.platform ?? createPlatformGatewayClient(),
+    platform: dependencies.platform ?? platformGatewayClient,
+    getCsrfToken: dependencies.getCsrfToken,
     transportFactory: dependencies.transportFactory ?? new CentrifugoTransportFactory(),
     recoveryStore: dependencies.recoveryStore ?? new BrowserRecoveryStore(undefined, now),
     now,

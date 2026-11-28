@@ -12,9 +12,22 @@ import {
   type SiteAlarmRoutingSummary,
 } from '@/api/generated/platformGateway.gen';
 
+import type {
+  AlarmCondition,
+  AlarmEdgeProjection,
+  AlarmOperation,
+  AlarmSeverity,
+  AlarmSuppression,
+} from '@/api/alarm-contract';
+
 export type {
+  AlarmCondition,
+  AlarmEdgeProjection,
+  AlarmOperation,
   AlarmRuleDeadLetter,
   AlarmRuleDeadLetterReplay,
+  AlarmSeverity,
+  AlarmSuppression,
   SiteAlarmRoutingReloadResult,
   SiteAlarmRoutingSummary,
 };
@@ -23,19 +36,8 @@ export type {
 // acknowledgement are independent, as in ThingsBoard's alarm model: an alarm clears
 // only when its condition returns to normal; acknowledging records that someone is on it.
 
-export type AlarmSeverity = 'CRITICAL' | 'MAJOR' | 'MINOR' | 'WARNING' | 'INFO';
-export type AlarmCondition = 'ACTIVE' | 'CLEARED';
-export type AlarmOperation = 'PUBLISH' | 'ACKNOWLEDGE' | 'ASSIGN' | 'UNASSIGN' | 'SUPPRESS' | 'UNSUPPRESS' | 'CLEAR';
 export type AlarmEvaluationStatus = 'MATCHED' | 'NOT_MATCHED' | 'INDETERMINATE';
 export type AlarmEvaluationEffect = 'NONE' | 'PUBLISH' | 'CLEAR';
-
-export interface AlarmSuppression {
-  readonly startsAt: string;
-  readonly expiresAt: string;
-  readonly reason: string;
-  readonly actorId: string;
-  readonly policyRevision: string;
-}
 
 export interface AlarmEvaluationRecord {
   readonly evaluatedAt: string;
@@ -66,19 +68,6 @@ export interface AlarmTimelineEntry {
   currentSeverity: AlarmSeverity;
   occurredAt: string;
   version: number;
-}
-
-export interface AlarmEdgeProjection {
-  readonly gatewayId: string;
-  readonly offline: boolean;
-  readonly bundleRevision: number;
-  readonly edgeBundleDigest?: string;
-  readonly occurredAt?: string;
-  readonly receivedAt?: string;
-  readonly triggeredActions?: readonly string[];
-  readonly clearOffline?: boolean;
-  readonly clearOccurredAt?: string;
-  readonly clearTriggeredActions?: readonly string[];
 }
 
 export interface Alarm {
