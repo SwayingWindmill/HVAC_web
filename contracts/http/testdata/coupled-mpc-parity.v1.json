@@ -1,0 +1,1319 @@
+{
+  "schemaVersion": 1,
+  "waterHeatCapacityKwPerM3hC": 1.163,
+  "chillerPoints": [
+    {
+      "name": "nominal-0.9-cop-scale",
+      "model": {
+        "baseCop": 5.8,
+        "tchwSlopeCopPerC": 0.17,
+        "tcwSlopeCopPerC": 0.145,
+        "condenserQuadLossPerC2": 0.0025,
+        "plrConstE0": 0.09,
+        "copScale": 0.9
+      },
+      "loadKw": 400.0,
+      "ratedCapKw": 600.0,
+      "tChwC": 7.5,
+      "cwEnteringC": 28.0,
+      "cwLeavingC": 32.5,
+      "expected": {
+        "liftCop": 5.293236094,
+        "powerKw": 70.404316011,
+        "cop": 5.681469868
+      }
+    },
+    {
+      "name": "projected-negative-slopes",
+      "model": {
+        "baseCop": 5.8,
+        "tchwSlopeCopPerC": -0.3,
+        "tcwSlopeCopPerC": -0.1,
+        "condenserQuadLossPerC2": -0.01,
+        "plrConstE0": -0.1,
+        "copScale": 0.85
+      },
+      "loadKw": 320.0,
+      "ratedCapKw": 600.0,
+      "tChwC": 6.5,
+      "cwEnteringC": 27.0,
+      "cwLeavingC": 31.5,
+      "expected": {
+        "liftCop": 4.938075,
+        "powerKw": 54.966059304,
+        "cop": 5.821774456
+      }
+    },
+    {
+      "name": "high-load-hot-condenser",
+      "model": {
+        "baseCop": 5.6,
+        "tchwSlopeCopPerC": 0.17,
+        "tcwSlopeCopPerC": 0.145,
+        "condenserQuadLossPerC2": 0.0025,
+        "plrConstE0": 0.09,
+        "copScale": 1.05
+      },
+      "loadKw": 560.0,
+      "ratedCapKw": 600.0,
+      "tChwC": 9.0,
+      "cwEnteringC": 33.5,
+      "cwLeavingC": 38.0,
+      "expected": {
+        "liftCop": 5.315688984,
+        "powerKw": 103.637866754,
+        "cop": 5.403430402
+      }
+    }
+  ],
+  "operatingPoints": [
+    {
+      "name": "single-chiller-part-load",
+      "loadKw": 360.0,
+      "zoneTempC": 24.0,
+      "tChwC": 7.5,
+      "dryBulbC": 31.0,
+      "wetBulbC": 26.0,
+      "rhPct": 65.0,
+      "copScale": 0.95,
+      "expected": {
+        "feasible": true,
+        "targetChillers": 1,
+        "supplyTempC": 7.5,
+        "chwpFreqHz": 28.0,
+        "cwpFreqHz": 28.0,
+        "towerFanPct": 35.0,
+        "totalPowerKw": 82.481542919,
+        "chillerPowerKw": 59.767787959,
+        "chwpPowerKw": 11.612448,
+        "cwpPowerKw": 10.15805696,
+        "towerPowerKw": 0.94325,
+        "predictedCop": 6.023311424,
+        "coilCapacityKw": 767.205395334,
+        "deliveredLoadKw": 360.0
+      }
+    },
+    {
+      "name": "dual-chiller-stull-wb-fallback",
+      "loadKw": 840.0,
+      "zoneTempC": 24.2,
+      "tChwC": 6.5,
+      "dryBulbC": 34.0,
+      "wetBulbC": -30.0,
+      "rhPct": 70.0,
+      "copScale": 0.9,
+      "expected": {
+        "feasible": true,
+        "targetChillers": 2,
+        "supplyTempC": 6.5,
+        "chwpFreqHz": 31.0,
+        "cwpFreqHz": 28.0,
+        "towerFanPct": 55.0,
+        "totalPowerKw": 213.286222371,
+        "chillerPowerKw": 185.315631411,
+        "chwpPowerKw": 14.152284,
+        "cwpPowerKw": 10.15805696,
+        "towerPowerKw": 3.66025,
+        "predictedCop": 4.532807047,
+        "coilCapacityKw": 885.579607724,
+        "deliveredLoadKw": 840.0
+      }
+    },
+    {
+      "name": "degraded-cop-scale-mid-load",
+      "loadKw": 540.0,
+      "zoneTempC": 23.8,
+      "tChwC": 8.5,
+      "dryBulbC": 30.0,
+      "wetBulbC": 25.0,
+      "rhPct": 60.0,
+      "copScale": 0.85,
+      "expected": {
+        "feasible": true,
+        "targetChillers": 2,
+        "supplyTempC": 8.5,
+        "chwpFreqHz": 28.0,
+        "cwpFreqHz": 28.0,
+        "towerFanPct": 43.0,
+        "totalPowerKw": 121.918326122,
+        "chillerPowerKw": 98.398667162,
+        "chwpPowerKw": 11.612448,
+        "cwpPowerKw": 10.15805696,
+        "towerPowerKw": 1.749154,
+        "predictedCop": 5.487879212,
+        "coilCapacityKw": 711.40863931,
+        "deliveredLoadKw": 540.0
+      }
+    },
+    {
+      "name": "high-load-coil-stressed",
+      "loadKw": 980.0,
+      "zoneTempC": 23.5,
+      "tChwC": 9.5,
+      "dryBulbC": 35.0,
+      "wetBulbC": 27.5,
+      "rhPct": 65.0,
+      "copScale": 1.0,
+      "expected": {
+        "feasible": true,
+        "targetChillers": 2,
+        "supplyTempC": 9.5,
+        "chwpFreqHz": 50.0,
+        "cwpFreqHz": 28.0,
+        "towerFanPct": 55.0,
+        "totalPowerKw": 231.852732348,
+        "chillerPowerKw": 173.034425388,
+        "chwpPowerKw": 45.0,
+        "cwpPowerKw": 10.15805696,
+        "towerPowerKw": 3.66025,
+        "predictedCop": 5.663612878,
+        "coilCapacityKw": 988.235294118,
+        "deliveredLoadKw": 980.0
+      }
+    }
+  ],
+  "mpcCases": [
+    {
+      "name": "no-storage-tou-0.85",
+      "request": {
+        "tenantId": "01990000-3000-7000-8000-000000000001",
+        "siteId": "01990000-5000-7000-8000-000000000001",
+        "subjectType": "SITE",
+        "subjectId": "01990000-5000-7000-8000-000000000001",
+        "optimizationRunId": "01990000-1000-7000-8000-000000000001",
+        "inputSnapshotId": "01990000-1100-7000-8000-000000000001",
+        "deploymentRevisionId": "01990000-1960-7000-8000-000000000001",
+        "objective": "COST",
+        "horizon": "DAY_AHEAD",
+        "horizonMinutes": 1440,
+        "granularity": "15MIN",
+        "validFrom": "2026-07-20T00:00:00Z",
+        "baseline": {
+          "dailyEnergyKWh": 4200.0,
+          "dailyCost": 3360.0,
+          "supplyTempC": 7.0,
+          "zoneTempC": 24.0
+        },
+        "constraints": {
+          "supplyTempMinC": 5.0,
+          "supplyTempMaxC": 11.0,
+          "zoneTempMinC": 21.0,
+          "zoneTempMaxC": 25.0,
+          "maxSupplyTempStepC": 1.5
+        },
+        "responseModel": {
+          "dailyEnergyDeltaKWhPerSupplyTempC": -180.0,
+          "zoneTempDeltaCPerSupplyTempC": 0.32,
+          "energyUncertaintyP90KWh": 90.0,
+          "zoneTempUncertaintyP90C": 0.2
+        },
+        "coupledContext": {
+          "precoolingEnabled": false,
+          "copScale": 0.85,
+          "horizon": [
+            {
+              "startAt": "2026-07-20T00:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T01:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T02:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T03:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T04:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T05:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T06:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T07:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T08:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.45
+            },
+            {
+              "startAt": "2026-07-20T09:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.45
+            },
+            {
+              "startAt": "2026-07-20T10:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.45
+            },
+            {
+              "startAt": "2026-07-20T11:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.45
+            },
+            {
+              "startAt": "2026-07-20T12:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.45
+            },
+            {
+              "startAt": "2026-07-20T13:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.45
+            },
+            {
+              "startAt": "2026-07-20T14:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.45
+            },
+            {
+              "startAt": "2026-07-20T15:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.45
+            },
+            {
+              "startAt": "2026-07-20T16:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.45
+            },
+            {
+              "startAt": "2026-07-20T17:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.45
+            },
+            {
+              "startAt": "2026-07-20T18:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.45
+            },
+            {
+              "startAt": "2026-07-20T19:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.45
+            },
+            {
+              "startAt": "2026-07-20T20:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.55
+            },
+            {
+              "startAt": "2026-07-20T21:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.55
+            },
+            {
+              "startAt": "2026-07-20T22:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.55
+            },
+            {
+              "startAt": "2026-07-20T23:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.55
+            }
+          ]
+        },
+        "inputChecksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "policyVersionId": "01990000-1920-7000-8000-000000000001",
+        "topologyVersionId": "01990000-1300-7000-8000-000000000001",
+        "loadForecastSnapshotId": "01990000-1890-7000-8000-000000000001",
+        "tariffVersionId": "01990000-1420-7000-8000-000000000001"
+      },
+      "expected": {
+        "candidate": {
+          "supplyTempC": 8.0,
+          "projectedZoneTempC": 24.32,
+          "dailyEnergyKWh": 2895.8652,
+          "dailyCost": 3398.5997
+        },
+        "expectedImpact": {
+          "energySavingKWhPerDay": 1304.1348,
+          "costSavingPerDay": -38.5997
+        },
+        "risk": {
+          "level": "MEDIUM",
+          "comfortMarginC": 0.48
+        },
+        "targetRunningChillers": 1,
+        "predictedCop": 5.4897,
+        "mpcSlots": [
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 8.0,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 29.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 24.32,
+            "predictedPowerKw": 66.0251,
+            "predictedCop": 5.4897,
+            "slotCostCny": 23.1088,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 8.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 29.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 24.48,
+            "predictedPowerKw": 65.4121,
+            "predictedCop": 5.5678,
+            "slotCostCny": 22.8942,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.0,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 29.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 24.64,
+            "predictedPowerKw": 64.8162,
+            "predictedCop": 5.6458,
+            "slotCostCny": 22.6857,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 25.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 64.2336,
+            "predictedCop": 5.6981,
+            "slotCostCny": 22.4818,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 25.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 64.2336,
+            "predictedCop": 5.6981,
+            "slotCostCny": 22.4818,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 25.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 64.2336,
+            "predictedCop": 5.6981,
+            "slotCostCny": 22.4818,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 25.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 64.2336,
+            "predictedCop": 5.6981,
+            "slotCostCny": 22.4818,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 25.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 64.2336,
+            "predictedCop": 5.6981,
+            "slotCostCny": 22.4818,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 34.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 176.7924,
+            "predictedCop": 5.352,
+            "slotCostCny": 256.349,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 34.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 176.7924,
+            "predictedCop": 5.352,
+            "slotCostCny": 256.349,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 34.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 176.7924,
+            "predictedCop": 5.352,
+            "slotCostCny": 256.349,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 34.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 176.7924,
+            "predictedCop": 5.352,
+            "slotCostCny": 256.349,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 34.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 176.7924,
+            "predictedCop": 5.352,
+            "slotCostCny": 256.349,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 34.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 176.7924,
+            "predictedCop": 5.352,
+            "slotCostCny": 256.349,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 34.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 176.7924,
+            "predictedCop": 5.352,
+            "slotCostCny": 256.349,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 34.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 176.7924,
+            "predictedCop": 5.352,
+            "slotCostCny": 256.349,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 34.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 176.7924,
+            "predictedCop": 5.352,
+            "slotCostCny": 256.349,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 34.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 176.7924,
+            "predictedCop": 5.352,
+            "slotCostCny": 256.349,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 34.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 176.7924,
+            "predictedCop": 5.352,
+            "slotCostCny": 256.349,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 34.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 176.7924,
+            "predictedCop": 5.352,
+            "slotCostCny": 256.349,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 25.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 64.2336,
+            "predictedCop": 5.6981,
+            "slotCostCny": 35.3285,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 25.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 64.2336,
+            "predictedCop": 5.6981,
+            "slotCostCny": 35.3285,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 25.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 64.2336,
+            "predictedCop": 5.6981,
+            "slotCostCny": 35.3285,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 25.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 24.8,
+            "predictedPowerKw": 64.2336,
+            "predictedCop": 5.6981,
+            "slotCostCny": 35.3285,
+            "operatingMode": "ECO"
+          }
+        ]
+      }
+    },
+    {
+      "name": "storage-precooling-tou-0.90",
+      "request": {
+        "tenantId": "01990000-3000-7000-8000-000000000001",
+        "siteId": "01990000-5000-7000-8000-000000000001",
+        "subjectType": "SITE",
+        "subjectId": "01990000-5000-7000-8000-000000000001",
+        "optimizationRunId": "01990000-1000-7000-8000-000000000001",
+        "inputSnapshotId": "01990000-1100-7000-8000-000000000001",
+        "deploymentRevisionId": "01990000-1960-7000-8000-000000000001",
+        "objective": "COST",
+        "horizon": "DAY_AHEAD",
+        "horizonMinutes": 1440,
+        "granularity": "15MIN",
+        "validFrom": "2026-07-20T00:00:00Z",
+        "baseline": {
+          "dailyEnergyKWh": 4200.0,
+          "dailyCost": 3360.0,
+          "supplyTempC": 7.0,
+          "zoneTempC": 24.0
+        },
+        "constraints": {
+          "supplyTempMinC": 5.0,
+          "supplyTempMaxC": 11.0,
+          "zoneTempMinC": 21.0,
+          "zoneTempMaxC": 25.0,
+          "maxSupplyTempStepC": 1.5
+        },
+        "responseModel": {
+          "dailyEnergyDeltaKWhPerSupplyTempC": -180.0,
+          "zoneTempDeltaCPerSupplyTempC": 0.32,
+          "energyUncertaintyP90KWh": 90.0,
+          "zoneTempUncertaintyP90C": 0.2
+        },
+        "coupledContext": {
+          "precoolingEnabled": true,
+          "copScale": 0.9,
+          "horizon": [
+            {
+              "startAt": "2026-07-20T00:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T01:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T02:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T03:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T04:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T05:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T06:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T07:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.35
+            },
+            {
+              "startAt": "2026-07-20T08:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.65
+            },
+            {
+              "startAt": "2026-07-20T09:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.65
+            },
+            {
+              "startAt": "2026-07-20T10:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.65
+            },
+            {
+              "startAt": "2026-07-20T11:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.65
+            },
+            {
+              "startAt": "2026-07-20T12:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.65
+            },
+            {
+              "startAt": "2026-07-20T13:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.65
+            },
+            {
+              "startAt": "2026-07-20T14:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.65
+            },
+            {
+              "startAt": "2026-07-20T15:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.65
+            },
+            {
+              "startAt": "2026-07-20T16:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.65
+            },
+            {
+              "startAt": "2026-07-20T17:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.65
+            },
+            {
+              "startAt": "2026-07-20T18:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.65
+            },
+            {
+              "startAt": "2026-07-20T19:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 780.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 1.65
+            },
+            {
+              "startAt": "2026-07-20T20:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.55
+            },
+            {
+              "startAt": "2026-07-20T21:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.55
+            },
+            {
+              "startAt": "2026-07-20T22:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.55
+            },
+            {
+              "startAt": "2026-07-20T23:00:00Z",
+              "durationHours": 1.0,
+              "coolingLoadKw": 240.0,
+              "ambientDryBulbC": 31.0,
+              "ambientWetBulbC": 26.0,
+              "tariffRateCny": 0.55
+            }
+          ]
+        },
+        "inputChecksum": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "policyVersionId": "01990000-1920-7000-8000-000000000001",
+        "topologyVersionId": "01990000-1300-7000-8000-000000000001",
+        "loadForecastSnapshotId": "01990000-1890-7000-8000-000000000001",
+        "tariffVersionId": "01990000-1420-7000-8000-000000000001"
+      },
+      "expected": {
+        "candidate": {
+          "supplyTempC": 7.0,
+          "projectedZoneTempC": 24.0,
+          "dailyEnergyKWh": 2854.2437,
+          "dailyCost": 3607.9984
+        },
+        "expectedImpact": {
+          "energySavingKWhPerDay": 1345.7563,
+          "costSavingPerDay": -247.9984
+        },
+        "risk": {
+          "level": "LOW",
+          "comfortMarginC": 0.8
+        },
+        "targetRunningChillers": 1,
+        "predictedCop": 5.6493,
+        "mpcSlots": [
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 7.0,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 29.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 24.0,
+            "predictedPowerKw": 64.7903,
+            "predictedCop": 5.6493,
+            "slotCostCny": 22.6766,
+            "operatingMode": "NORMAL"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 6.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 39.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 23.75,
+            "predictedPowerKw": 80.0839,
+            "predictedCop": 5.4466,
+            "slotCostCny": 28.0294,
+            "operatingMode": "PRE_COOL"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 6.0,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 39.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 23.4006,
+            "predictedPowerKw": 87.3803,
+            "predictedCop": 5.364,
+            "slotCostCny": 30.5831,
+            "operatingMode": "PRE_COOL"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 5.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 39.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 23.0116,
+            "predictedPowerKw": 91.6987,
+            "predictedCop": 5.2813,
+            "slotCostCny": 32.0945,
+            "operatingMode": "PRE_COOL"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 5.0,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 39.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 22.6068,
+            "predictedPowerKw": 94.8422,
+            "predictedCop": 5.1985,
+            "slotCostCny": 33.1948,
+            "operatingMode": "PRE_COOL"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 5.0,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 39.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 22.4458,
+            "predictedPowerKw": 81.4393,
+            "predictedCop": 5.1985,
+            "slotCostCny": 28.5037,
+            "operatingMode": "PRE_COOL"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 5.0,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 39.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 22.3818,
+            "predictedPowerKw": 76.2188,
+            "predictedCop": 5.1985,
+            "slotCostCny": 26.6766,
+            "operatingMode": "PRE_COOL"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 6.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 29.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 22.4573,
+            "predictedPowerKw": 65.4212,
+            "predictedCop": 5.5666,
+            "slotCostCny": 22.8974,
+            "operatingMode": "PRE_COOL"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 8.0,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 47.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 23.6993,
+            "predictedPowerKw": 99.7316,
+            "predictedCop": 5.6054,
+            "slotCostCny": 164.5572,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 8.5,
+            "chwpFreqHz": 33.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 23.9092,
+            "predictedPowerKw": 160.5406,
+            "predictedCop": 5.5052,
+            "slotCostCny": 264.892,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 36.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 23.9135,
+            "predictedPowerKw": 170.9309,
+            "predictedCop": 5.6729,
+            "slotCostCny": 282.036,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 36.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 23.9175,
+            "predictedPowerKw": 170.9309,
+            "predictedCop": 5.6729,
+            "slotCostCny": 282.036,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 36.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 23.9214,
+            "predictedPowerKw": 170.9309,
+            "predictedCop": 5.6729,
+            "slotCostCny": 282.036,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 36.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 23.925,
+            "predictedPowerKw": 170.9309,
+            "predictedCop": 5.6729,
+            "slotCostCny": 282.036,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 36.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 23.9285,
+            "predictedPowerKw": 170.9309,
+            "predictedCop": 5.6729,
+            "slotCostCny": 282.036,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 36.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 23.9319,
+            "predictedPowerKw": 170.9309,
+            "predictedCop": 5.6729,
+            "slotCostCny": 282.036,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 36.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 23.935,
+            "predictedPowerKw": 170.9309,
+            "predictedCop": 5.6729,
+            "slotCostCny": 282.036,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 36.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 23.9381,
+            "predictedPowerKw": 170.9309,
+            "predictedCop": 5.6729,
+            "slotCostCny": 282.036,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 36.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 23.941,
+            "predictedPowerKw": 170.9309,
+            "predictedCop": 5.6729,
+            "slotCostCny": 282.036,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 9.5,
+            "chwpFreqHz": 36.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 55.0,
+            "targetChillers": 2,
+            "projectedZoneTempC": 23.9437,
+            "predictedPowerKw": 170.9309,
+            "predictedCop": 5.6729,
+            "slotCostCny": 282.036,
+            "operatingMode": "PEAK_SHAVE"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 10.0,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 25.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 23.9464,
+            "predictedPowerKw": 61.3434,
+            "predictedCop": 6.1179,
+            "slotCostCny": 33.7389,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 10.5,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 25.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 23.9489,
+            "predictedPowerKw": 60.8208,
+            "predictedCop": 6.2005,
+            "slotCostCny": 33.4514,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 11.0,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 25.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 23.9512,
+            "predictedPowerKw": 60.3119,
+            "predictedCop": 6.2831,
+            "slotCostCny": 33.1715,
+            "operatingMode": "ECO"
+          },
+          {
+            "durationHours": 1.0,
+            "supplyTempC": 11.0,
+            "chwpFreqHz": 28.0,
+            "cwpFreqHz": 28.0,
+            "towerFanPct": 25.0,
+            "targetChillers": 1,
+            "projectedZoneTempC": 23.9535,
+            "predictedPowerKw": 60.3119,
+            "predictedCop": 6.2831,
+            "slotCostCny": 33.1715,
+            "operatingMode": "ECO"
+          }
+        ]
+      }
+    }
+  ]
+}

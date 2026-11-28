@@ -15,12 +15,12 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
 	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
+	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
 const (
@@ -563,20 +563,20 @@ func (h *handler) lookupDataGapSnapshotTimes(
 	slices.Sort(deviceIDs)
 
 	targets := make([]telemetryauth.Target, 0, len(deviceIDs))
-	batchReq := s2telemetryapi.BatchGetObservationSnapshotsRequest{
-		Requests: make([]s2telemetryapi.ObservationSnapshotTarget, 0, len(deviceIDs)),
+	batchReq := telemetryapi.BatchGetObservationSnapshotsRequest{
+		Requests: make([]telemetryapi.ObservationSnapshotTarget, 0, len(deviceIDs)),
 	}
 	for index, devID := range deviceIDs {
 		keys := keysByDevice[devID]
 		slices.Sort(keys)
 		targets = append(targets, telemetryauth.Target{DeviceID: devID, Keys: keys})
-		apiKeys := make([]s2telemetryapi.TelemetryKey, len(keys))
+		apiKeys := make([]telemetryapi.TelemetryKey, len(keys))
 		for keyIndex, key := range keys {
-			apiKeys[keyIndex] = s2telemetryapi.TelemetryKey(key)
+			apiKeys[keyIndex] = telemetryapi.TelemetryKey(key)
 		}
-		batchReq.Requests = append(batchReq.Requests, s2telemetryapi.ObservationSnapshotTarget{
+		batchReq.Requests = append(batchReq.Requests, telemetryapi.ObservationSnapshotTarget{
 			RequestId: "gap-" + strconv.Itoa(index+1),
-			DeviceId:  s2telemetryapi.UUIDv7(devID),
+			DeviceId:  telemetryapi.UUIDv7(devID),
 			Keys:      apiKeys,
 		})
 	}
@@ -599,7 +599,7 @@ func (h *handler) lookupDataGapSnapshotTimes(
 	if failure != nil {
 		return result
 	}
-	var batchResp s2telemetryapi.BatchGetObservationSnapshotsResponse
+	var batchResp telemetryapi.BatchGetObservationSnapshotsResponse
 	if decodeStrictTelemetryJSON(raw, &batchResp) != nil {
 		return result
 	}

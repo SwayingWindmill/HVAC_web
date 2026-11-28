@@ -753,6 +753,43 @@ const findGoFormatViolations = (root: string, trackedFiles: readonly string[]): 
   return unformatted.map((path) => `${path}: not gofmt-formatted (run ${gofmt} -w ${path})`);
 };
 
+const approvedGoWorkspaceModules = Object.freeze(['.', 'cmd/wecom-alert-adapter']);
+
+export const findGoWorkspaceModuleListViolations = (modules: readonly string[]): string[] => {
+  const violations: string[] = [];
+  const approved = new Set<string>(approvedGoWorkspaceModules);
+  for (const mod of modules) {
+    if (!approved.has(mod)) {
+      violations.push(`go.work: unapproved Go submodule "${mod}"; merge internal packages into root go.mod instead of spawning parallel submodules`);
+    }
+  }
+  for (const required of approvedGoWorkspaceModules) {
+    if (!modules.includes(required)) {
+      violations.push(`go.work: missing required workspace module "${required}"`);
+    }
+  }
+  return violations;
+};
+
+const findGoWorkspaceViolations = (root: string): string[] => {
+  const { goVersion, modules } = readGoWorkspace(root);
+  const violations = findGoWorkspaceModuleListViolations(modules);
+  for (const mod of modules) {
+    if (mod === '.') continue;
+    try {
+      execFileSync('go', ['vet', './...'], {
+        cwd: join(root, mod),
+        encoding: 'utf8',
+        env: { ...process.env, GOWORK: 'off', GOTOOLCHAIN: `go${goVersion}` },
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      violations.push(`${mod}: GOWORK=off go vet ./... failed (${detail})`);
+    }
+  }
+  return violations;
+};
+
 export const checkRepositoryGovernance = (root = repositoryRoot) => {
   const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
   const trackedFiles = listTrackedFiles(root);
@@ -767,6 +804,7 @@ export const checkRepositoryGovernance = (root = repositoryRoot) => {
     ...findPackageScriptViolations(packageJson.scripts ?? {}),
     ...findWorkflowViolations(readFileSync(join(root, '.github/workflows/pr-gates.yml'), 'utf8')),
     ...findHandoffBudgetViolations({ bytes: readFileSync(join(root, 'docs/HANDOFF.md')).byteLength }),
+    ...findGoWorkspaceViolations(root),
     ...findGoFormatViolations(root, trackedFiles),
     ...findGoTestHygieneViolations(root, trackedFiles),
     ...findChangelogFragmentViolations({ root, trackedFiles }),

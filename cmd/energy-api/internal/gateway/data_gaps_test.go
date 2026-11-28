@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/platformapi"
-	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/s2telemetryapi"
 	"github.com/quanlaihe/hvac-web/libs/alarmauth"
 	"github.com/quanlaihe/hvac-web/libs/alarmmodel"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
@@ -23,6 +22,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/telemetryauth"
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
+	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
 func TestListSiteDataGapsJoinsReadingGapAlarmsWithAssetModelAndSnapshotTime(t *testing.T) {
@@ -596,51 +596,51 @@ func newDataGapsTestHandler(
 			RuntimeAudience: "telemetry-runtime-service",
 			Timeout:         time.Second,
 			RuntimeHTTPClient: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
-				var batchReq s2telemetryapi.BatchGetObservationSnapshotsRequest
+				var batchReq telemetryapi.BatchGetObservationSnapshotsRequest
 				if err := json.NewDecoder(request.Body).Decode(&batchReq); err != nil {
 					t.Fatal(err)
 				}
-				items := make([]s2telemetryapi.BatchObservationResult, 0, len(batchReq.Requests))
+				items := make([]telemetryapi.BatchObservationResult, 0, len(batchReq.Requests))
 				for _, target := range batchReq.Requests {
-					values := make([]s2telemetryapi.TelemetryKeyState, 0, len(target.Keys))
+					values := make([]telemetryapi.TelemetryKeyState, 0, len(target.Keys))
 					for _, key := range target.Keys {
-						values = append(values, s2telemetryapi.TelemetryKeyState{
-							Present: &s2telemetryapi.TelemetryPresentState{
+						values = append(values, telemetryapi.TelemetryKeyState{
+							Present: &telemetryapi.TelemetryPresentState{
 								Key:            key,
 								State:          "PRESENT",
 								Value:          json.RawMessage(`12345.6`),
 								ValueType:      "NUMBER",
-								SampledAt:      s2telemetryapi.Instant(snapshotSampledAt),
-								ReceivedAt:     s2telemetryapi.Instant(snapshotSampledAt),
+								SampledAt:      telemetryapi.Instant(snapshotSampledAt),
+								ReceivedAt:     telemetryapi.Instant(snapshotSampledAt),
 								Freshness:      "STALE",
-								Quality:        s2telemetryapi.TelemetryQualityStale,
-								QualityReasons: []s2telemetryapi.QualityReasonCode{},
+								Quality:        telemetryapi.TelemetryQualityStale,
+								QualityReasons: []telemetryapi.QualityReasonCode{},
 								PolicyRevision: 1,
 							},
 						})
 					}
-					items = append(items, s2telemetryapi.BatchObservationResult{
-						Success: &s2telemetryapi.BatchObservationSuccess{
+					items = append(items, telemetryapi.BatchObservationResult{
+						Success: &telemetryapi.BatchObservationSuccess{
 							RequestId: target.RequestId,
 							DeviceId:  target.DeviceId,
 							Status:    "OK",
-							Snapshot: s2telemetryapi.DeviceObservationSnapshot{
+							Snapshot: telemetryapi.DeviceObservationSnapshot{
 								SchemaVersion:          1,
 								DeviceId:               target.DeviceId,
-								TenantId:               s2telemetryapi.UUIDv7(tenantID),
-								SiteId:                 s2telemetryapi.UUIDv7(siteID),
+								TenantId:               telemetryapi.UUIDv7(tenantID),
+								SiteId:                 telemetryapi.UUIDv7(siteID),
 								BusinessRevision:       1,
-								EvaluatedAt:            s2telemetryapi.Instant(now.Format(time.RFC3339)),
-								EvaluationAvailability: s2telemetryapi.EvaluationAvailabilityAvailable,
-								AvailabilityReasons:    []s2telemetryapi.AvailabilityReasonCode{},
-								Presence:               s2telemetryapi.PresenceSnapshot{Applicability: s2telemetryapi.PresenceApplicabilityApplicable},
-								TelemetryReadiness:     s2telemetryapi.TelemetryReadinessDegraded,
+								EvaluatedAt:            telemetryapi.Instant(now.Format(time.RFC3339)),
+								EvaluationAvailability: telemetryapi.EvaluationAvailabilityAvailable,
+								AvailabilityReasons:    []telemetryapi.AvailabilityReasonCode{},
+								Presence:               telemetryapi.PresenceSnapshot{Applicability: telemetryapi.PresenceApplicabilityApplicable},
+								TelemetryReadiness:     telemetryapi.TelemetryReadinessDegraded,
 								Values:                 values,
 							},
 						},
 					})
 				}
-				return telemetryJSONResponse(http.StatusOK, s2telemetryapi.BatchGetObservationSnapshotsResponse{
+				return telemetryJSONResponse(http.StatusOK, telemetryapi.BatchGetObservationSnapshotsResponse{
 					SchemaVersion: 1,
 					Items:         items,
 				}), nil

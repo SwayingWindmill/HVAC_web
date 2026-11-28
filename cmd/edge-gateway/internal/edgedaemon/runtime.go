@@ -22,9 +22,9 @@ import (
 
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+	"github.com/quanlaihe/hvac-web/libs/edgetunnel"
 	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 	"github.com/quanlaihe/hvac-web/libs/observability"
-	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
 )
 
 type mqttUplinkTelemetryEnvelope struct {
@@ -968,7 +968,7 @@ func (d *Daemon) Close() error {
 }
 
 func (d *Daemon) startHealthServer(listenAddr string) error {
-	if err := tunnel.ValidateLoopbackAddr(listenAddr); err != nil {
+	if err := edgetunnel.ValidateLoopbackAddr(listenAddr); err != nil {
 		return err
 	}
 	ln, err := net.Listen("tcp", listenAddr)

@@ -38,58 +38,22 @@ const (
 	shadowDriftReasonApplyFailed     = "EDGE_APPLY_FAILED"
 )
 
-type PointCopyTarget struct {
-	DeviceKey string `json:"deviceKey"`
-	PointCode string `json:"pointCode"`
-}
+type (
+	PointCopyTarget           = edgecontrol.PointCopyTarget
+	GatewayPointMapping       = edgecontrol.GatewayPointMapping
+	ConcentratorShadowParams  = edgecontrol.ConcentratorShadowParams
+	ConcentratorShadowEIDSlot = edgecontrol.ConcentratorShadowEIDSlot
+	ConcentratorUnitShadow    = edgecontrol.ConcentratorUnitShadow
+	ShadowDriftDetail         = edgecontrol.ShadowDriftDetail
+)
 
-type GatewayPointMapping struct {
-	SourceChannel    string            `json:"sourceChannel"`
-	PrimaryDeviceKey string            `json:"primaryDeviceKey"`
-	PrimaryPointCode string            `json:"primaryPointCode"`
-	CopyTargets      []PointCopyTarget `json:"copyTargets,omitempty"`
-}
-
+// GatewaySamplingPolicy extends the shared shadow contract with local simulator deadband filtering.
 type GatewaySamplingPolicy struct {
 	DeviceKey         string  `json:"deviceKey"`
 	PointCode         string  `json:"pointCode,omitempty"`
 	SampleIntervalMS  int     `json:"sampleIntervalMs"`
 	PublishIntervalMS int     `json:"publishIntervalMs"`
 	Deadband          float64 `json:"deadband,omitempty"`
-}
-
-type ConcentratorShadowParams struct {
-	ModbusID        int `json:"modbusId"`
-	BaudRateCode    int `json:"baudRateCode"`
-	OffLineTime     int `json:"offLineTime"`
-	DataUplinkCycle int `json:"dataUplinkCycle"`
-	LocalNet        int `json:"localNet"`
-	TimeMark        int `json:"timeMark"`
-	RfTxPower       int `json:"rfTxPower"`
-	RfFrequency     int `json:"rfFrequency"`
-	RfBandWidth     int `json:"rfBandWidth"`
-	RfSf            int `json:"rfSf"`
-	RfLeadCode      int `json:"rfLeadCode"`
-	TxTimeout       int `json:"txTimeout"`
-	RxTimeout       int `json:"rxTimeout"`
-	RssiOut         int `json:"rssiOut"`
-}
-
-type ConcentratorShadowEIDSlot struct {
-	Slot int    `json:"slot"`
-	EID  uint32 `json:"eid"`
-}
-
-type ConcentratorUnitShadow struct {
-	Params *ConcentratorShadowParams   `json:"params,omitempty"`
-	EIDs   []ConcentratorShadowEIDSlot `json:"eids,omitempty"`
-}
-
-type ShadowDriftDetail struct {
-	Section string `json:"section"`
-	Target  string `json:"target"`
-	Reason  string `json:"reason"`
-	Detail  string `json:"detail"`
 }
 
 type GatewayDesiredConfig struct {

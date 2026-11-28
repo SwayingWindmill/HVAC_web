@@ -14,6 +14,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
+	"github.com/quanlaihe/hvac-web/libs/measurement"
 )
 
 const (
@@ -23,7 +24,7 @@ const (
 	CoupledMPCSolverVersion = "coupled-plant-mpc-v1"
 
 	coupledHardMinSupplyTempC = 5.0
-	coupledWaterCapKWPerM3HC  = 1.163
+	coupledWaterCapKWPerM3HC  = measurement.WaterFactorKW
 	coupledFallbackRHPct      = 65.0
 	coupledZoneSetpointC      = 24.0
 	coupledDesignSupplyTempC  = 7.0
@@ -98,7 +99,7 @@ func (m MonotonicChillerModel) ProjectMonotonic() MonotonicChillerModel {
 		m.RefTcwC = 30.0
 	}
 	m.TchwSlopeCOPPerC = math.Max(0.02, finiteOr(m.TchwSlopeCOPPerC, 0.17))
-	m.TcwSlopeCOPPerC = math.Max(0.02, finiteOr(m.TcwSlopeCOPPerC, 0.13))
+	m.TcwSlopeCOPPerC = math.Max(0.02, finiteOr(m.TcwSlopeCOPPerC, 0.145))
 	m.CondenserQuadLossPerC2 = math.Max(0.0, finiteOr(m.CondenserQuadLossPerC2, 0.0025))
 	m.CondenserMeanWeight = clampFloat(finiteOr(m.CondenserMeanWeight, 0.45), 0.0, 1.0)
 	m.PLRConstE0 = math.Max(0.02, finiteOr(m.PLRConstE0, 0.09))
@@ -464,16 +465,18 @@ func EvaluateOptimalOperatingPoint(
 		fanLow := math.Max(spec.TowerMinFanPct, bestFan-10.0)
 		fanHigh := math.Min(spec.TowerMaxFanPct, bestFan+10.0)
 		for cwp := cwpLow; cwp <= cwpHigh+1e-9; cwp += 1.5 {
+			cwpClamped := math.Min(cwp, spec.CWPMaxHz)
 			for fan := fanLow; fan <= fanHigh+1e-9; fan += 4.0 {
-				tot, chKW, cwpKW, twrKW, cwIn, cwOut, cop := evalAux(math.Min(cwp, spec.CWPMaxHz), math.Min(fan, spec.TowerMaxFanPct), 2)
+				fanClamped := math.Min(fan, spec.TowerMaxFanPct)
+				tot, chKW, cwpKW, twrKW, cwIn, cwOut, cop := evalAux(cwpClamped, fanClamped, 2)
 				if tot < best.TotalPowerKW {
 					best = CoupledOperatingPoint{
 						Feasible:        coilCap >= loadKW*0.97 && deliveredKW <= availCap*1.02,
 						TargetChillers:  nChillers,
 						SupplyTempC:     tChwC,
 						CHWPFreqHz:      chwpHz,
-						CWPFreqHz:       round4(cwp),
-						TowerFanPct:     round4(fan),
+						CWPFreqHz:       round4(cwpClamped),
+						TowerFanPct:     round4(fanClamped),
 						TotalPowerKW:    tot,
 						ChillerPowerKW:  chKW,
 						CHWPPowerKW:     chwpKW,
@@ -1693,8 +1696,8 @@ func NewCoupledSolverHTTPHandler(solver *CoupledPlantMPCSolver) http.Handler {
 				DailyCost:          sol.DailyCostCNY,
 			},
 			ExpectedImpact: intelligencemodel.RecommendationExpectedImpact{
-				EnergySavingKWhPerDay: req.Baseline.DailyEnergyKWh - sol.DailyEnergyKWh,
-				CostSavingPerDay:      req.Baseline.DailyCost - sol.DailyCostCNY,
+				EnergySavingKWhPerDay: sol.EnergySavingKWhPerDay,
+				CostSavingPerDay:      sol.CostSavingPerDay,
 			},
 			Uncertainty: intelligencemodel.RecommendationUncertainty{
 				EnergyP90KWh: req.ResponseModel.EnergyUncertaintyP90KWh,

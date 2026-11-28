@@ -1,9 +1,17 @@
 package optimization
 
 import (
+	"bytes"
+	"encoding/json"
 	"math"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/measurement"
 )
 
 func TestEstimateWetBulbCAndAbsentRHFallback(t *testing.T) {
@@ -211,6 +219,180 @@ func TestCoupledPlantMPCRecommendContractAndResidualAdaptation(t *testing.T) {
 		})
 		if i == 11 && (st.COPScale >= 0.93 || st.COPScale < 0.70) {
 			t.Fatalf("expected online grey-box COPScale adaptation around ~0.85, got %.3f", st.COPScale)
+		}
+	}
+}
+
+func assertNearParity(t *testing.T, label string, got, want float64) {
+	t.Helper()
+	if math.Abs(got-want) > 1e-6 {
+		t.Fatalf("%s parity mismatch: got %.9f, want %.9f (diff %.9f > 1e-6)", label, got, want, math.Abs(got-want))
+	}
+}
+
+func TestCoupledMPCGoldenParity(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "contracts", "http", "testdata", "coupled-mpc-parity.v1.json"))
+	if err != nil {
+		t.Fatalf("read golden parity fixture: %v", err)
+	}
+	var fixture struct {
+		WaterHeatCapacityKWPerM3HC float64 `json:"waterHeatCapacityKwPerM3hC"`
+		ChillerPoints              []struct {
+			Name       string  `json:"name"`
+			LoadKW     float64 `json:"loadKw"`
+			RatedCapKW float64 `json:"ratedCapKw"`
+			TChwC      float64 `json:"tChwC"`
+			CWEntering float64 `json:"cwEnteringC"`
+			CWLeaving  float64 `json:"cwLeavingC"`
+			Model      struct {
+				BaseCOP                float64 `json:"baseCop"`
+				TchwSlopeCOPPerC       float64 `json:"tchwSlopeCopPerC"`
+				TcwSlopeCOPPerC        float64 `json:"tcwSlopeCopPerC"`
+				CondenserQuadLossPerC2 float64 `json:"condenserQuadLossPerC2"`
+				PLRConstE0             float64 `json:"plrConstE0"`
+				COPScale               float64 `json:"copScale"`
+			} `json:"model"`
+			Expected struct {
+				LiftCOP float64 `json:"liftCop"`
+				PowerKW float64 `json:"powerKw"`
+				COP     float64 `json:"cop"`
+			} `json:"expected"`
+		} `json:"chillerPoints"`
+		OperatingPoints []struct {
+			Name      string  `json:"name"`
+			LoadKW    float64 `json:"loadKw"`
+			ZoneTempC float64 `json:"zoneTempC"`
+			TChwC     float64 `json:"tChwC"`
+			DryBulbC  float64 `json:"dryBulbC"`
+			WetBulbC  float64 `json:"wetBulbC"`
+			RHPct     float64 `json:"rhPct"`
+			COPScale  float64 `json:"copScale"`
+			Expected  struct {
+				Feasible        bool    `json:"feasible"`
+				TargetChillers  int     `json:"targetChillers"`
+				SupplyTempC     float64 `json:"supplyTempC"`
+				CHWPFreqHz      float64 `json:"chwpFreqHz"`
+				CWPFreqHz       float64 `json:"cwpFreqHz"`
+				TowerFanPct     float64 `json:"towerFanPct"`
+				TotalPowerKW    float64 `json:"totalPowerKw"`
+				ChillerPowerKW  float64 `json:"chillerPowerKw"`
+				CHWPPowerKW     float64 `json:"chwpPowerKw"`
+				CWPPowerKW      float64 `json:"cwpPowerKw"`
+				TowerPowerKW    float64 `json:"towerPowerKw"`
+				PredictedCOP    float64 `json:"predictedCop"`
+				CoilCapacityKW  float64 `json:"coilCapacityKw"`
+				DeliveredLoadKW float64 `json:"deliveredLoadKw"`
+			} `json:"expected"`
+		} `json:"operatingPoints"`
+		MPCCases []struct {
+			Name     string          `json:"name"`
+			Request  json.RawMessage `json:"request"`
+			Expected struct {
+				Candidate struct {
+					SupplyTempC        float64 `json:"supplyTempC"`
+					ProjectedZoneTempC float64 `json:"projectedZoneTempC"`
+					DailyEnergyKWh     float64 `json:"dailyEnergyKWh"`
+					DailyCost          float64 `json:"dailyCost"`
+				} `json:"candidate"`
+				ExpectedImpact struct {
+					EnergySavingKWhPerDay float64 `json:"energySavingKWhPerDay"`
+					CostSavingPerDay      float64 `json:"costSavingPerDay"`
+				} `json:"expectedImpact"`
+				Risk struct {
+					Level          string  `json:"level"`
+					ComfortMarginC float64 `json:"comfortMarginC"`
+				} `json:"risk"`
+				TargetRunningChillers int                  `json:"targetRunningChillers"`
+				PredictedCOP          float64              `json:"predictedCop"`
+				MPCSlots              []CoupledPlannedSlot `json:"mpcSlots"`
+			} `json:"expected"`
+		} `json:"mpcCases"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("decode golden parity fixture: %v", err)
+	}
+
+	assertNearParity(t, "waterHeatCapacityKwPerM3hC", measurement.WaterFactorKW, fixture.WaterHeatCapacityKWPerM3HC)
+	assertNearParity(t, "coupledWaterCapKWPerM3HC", coupledWaterCapKWPerM3HC, measurement.WaterFactorKW)
+
+	for _, tc := range fixture.ChillerPoints {
+		m := DefaultMonotonicChillerModel()
+		m.BaseCOP = tc.Model.BaseCOP
+		m.TchwSlopeCOPPerC = tc.Model.TchwSlopeCOPPerC
+		m.TcwSlopeCOPPerC = tc.Model.TcwSlopeCOPPerC
+		m.CondenserQuadLossPerC2 = tc.Model.CondenserQuadLossPerC2
+		m.PLRConstE0 = tc.Model.PLRConstE0
+		m.COPScale = tc.Model.COPScale
+		assertNearParity(t, tc.Name+".liftCop", m.LiftCOP(tc.TChwC, tc.CWEntering, tc.CWLeaving), tc.Expected.LiftCOP)
+		pKW, cop := m.PowerKW(tc.LoadKW, tc.RatedCapKW, tc.TChwC, tc.CWEntering, tc.CWLeaving)
+		assertNearParity(t, tc.Name+".powerKw", pKW, tc.Expected.PowerKW)
+		assertNearParity(t, tc.Name+".cop", cop, tc.Expected.COP)
+	}
+
+	spec := DefaultPlantPhysicsSpec()
+	for _, tc := range fixture.OperatingPoints {
+		m := DefaultMonotonicChillerModel()
+		m.COPScale = tc.COPScale
+		got := EvaluateOptimalOperatingPoint(tc.LoadKW, tc.ZoneTempC, tc.TChwC, tc.DryBulbC, tc.WetBulbC, tc.RHPct, m, spec)
+		if got.Feasible != tc.Expected.Feasible || got.TargetChillers != tc.Expected.TargetChillers {
+			t.Fatalf("%s discrete mismatch: got (%v, %d), want (%v, %d)", tc.Name, got.Feasible, got.TargetChillers, tc.Expected.Feasible, tc.Expected.TargetChillers)
+		}
+		assertNearParity(t, tc.Name+".supplyTempC", got.SupplyTempC, tc.Expected.SupplyTempC)
+		assertNearParity(t, tc.Name+".chwpFreqHz", got.CHWPFreqHz, tc.Expected.CHWPFreqHz)
+		assertNearParity(t, tc.Name+".cwpFreqHz", got.CWPFreqHz, tc.Expected.CWPFreqHz)
+		assertNearParity(t, tc.Name+".towerFanPct", got.TowerFanPct, tc.Expected.TowerFanPct)
+		assertNearParity(t, tc.Name+".totalPowerKw", got.TotalPowerKW, tc.Expected.TotalPowerKW)
+		assertNearParity(t, tc.Name+".chillerPowerKw", got.ChillerPowerKW, tc.Expected.ChillerPowerKW)
+		assertNearParity(t, tc.Name+".chwpPowerKw", got.CHWPPowerKW, tc.Expected.CHWPPowerKW)
+		assertNearParity(t, tc.Name+".cwpPowerKw", got.CWPPowerKW, tc.Expected.CWPPowerKW)
+		assertNearParity(t, tc.Name+".towerPowerKw", got.TowerPowerKW, tc.Expected.TowerPowerKW)
+		assertNearParity(t, tc.Name+".predictedCop", got.PredictedCOP, tc.Expected.PredictedCOP)
+		assertNearParity(t, tc.Name+".coilCapacityKw", got.CoilCapacityKW, tc.Expected.CoilCapacityKW)
+		assertNearParity(t, tc.Name+".deliveredLoadKw", got.DeliveredLoadKW, tc.Expected.DeliveredLoadKW)
+	}
+
+	for _, tc := range fixture.MPCCases {
+		handler := NewCoupledSolverHTTPHandler(NewCoupledPlantMPCSolver())
+		req := httptest.NewRequest(http.MethodPost, "/v1/solve", bytes.NewReader(tc.Request))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s /v1/solve status = %d body=%s", tc.Name, rec.Code, rec.Body.String())
+		}
+		var resp coupledSolverHTTPResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("%s decode response: %v", tc.Name, err)
+		}
+		assertNearParity(t, tc.Name+".supplyTempC", resp.Candidate.SupplyTempC, tc.Expected.Candidate.SupplyTempC)
+		assertNearParity(t, tc.Name+".projectedZoneTempC", resp.Candidate.ProjectedZoneTempC, tc.Expected.Candidate.ProjectedZoneTempC)
+		assertNearParity(t, tc.Name+".dailyEnergyKWh", resp.Candidate.DailyEnergyKWh, tc.Expected.Candidate.DailyEnergyKWh)
+		assertNearParity(t, tc.Name+".dailyCost", resp.Candidate.DailyCost, tc.Expected.Candidate.DailyCost)
+		assertNearParity(t, tc.Name+".energySavingKWhPerDay", resp.ExpectedImpact.EnergySavingKWhPerDay, tc.Expected.ExpectedImpact.EnergySavingKWhPerDay)
+		assertNearParity(t, tc.Name+".costSavingPerDay", resp.ExpectedImpact.CostSavingPerDay, tc.Expected.ExpectedImpact.CostSavingPerDay)
+		if resp.Risk.Level != tc.Expected.Risk.Level {
+			t.Fatalf("%s risk.level = %q, want %q", tc.Name, resp.Risk.Level, tc.Expected.Risk.Level)
+		}
+		assertNearParity(t, tc.Name+".comfortMarginC", resp.Risk.ComfortMarginC, tc.Expected.Risk.ComfortMarginC)
+		if resp.VerificationPlan.TargetRunningChillers != tc.Expected.TargetRunningChillers {
+			t.Fatalf("%s targetRunningChillers = %d, want %d", tc.Name, resp.VerificationPlan.TargetRunningChillers, tc.Expected.TargetRunningChillers)
+		}
+		assertNearParity(t, tc.Name+".predictedCop", resp.VerificationPlan.PredictedCOP, tc.Expected.PredictedCOP)
+		if len(resp.VerificationPlan.MPCSlots) != len(tc.Expected.MPCSlots) {
+			t.Fatalf("%s mpcSlots len = %d, want %d", tc.Name, len(resp.VerificationPlan.MPCSlots), len(tc.Expected.MPCSlots))
+		}
+		for i := range tc.Expected.MPCSlots {
+			gotSl, wantSl := resp.VerificationPlan.MPCSlots[i], tc.Expected.MPCSlots[i]
+			if gotSl.TargetChillers != wantSl.TargetChillers || gotSl.OperatingMode != wantSl.OperatingMode {
+				t.Fatalf("%s slot %d discrete mismatch: got (%d, %q), want (%d, %q)", tc.Name, i, gotSl.TargetChillers, gotSl.OperatingMode, wantSl.TargetChillers, wantSl.OperatingMode)
+			}
+			assertNearParity(t, tc.Name+".slot.supplyTempC", gotSl.SupplyTempC, wantSl.SupplyTempC)
+			assertNearParity(t, tc.Name+".slot.chwpFreqHz", gotSl.CHWPFreqHz, wantSl.CHWPFreqHz)
+			assertNearParity(t, tc.Name+".slot.cwpFreqHz", gotSl.CWPFreqHz, wantSl.CWPFreqHz)
+			assertNearParity(t, tc.Name+".slot.towerFanPct", gotSl.TowerFanPct, wantSl.TowerFanPct)
+			assertNearParity(t, tc.Name+".slot.projectedZoneTempC", gotSl.ProjectedZoneTempC, wantSl.ProjectedZoneTempC)
+			assertNearParity(t, tc.Name+".slot.predictedPowerKw", gotSl.PredictedPowerKW, wantSl.PredictedPowerKW)
+			assertNearParity(t, tc.Name+".slot.predictedCop", gotSl.PredictedCOP, wantSl.PredictedCOP)
+			assertNearParity(t, tc.Name+".slot.slotCostCny", gotSl.SlotCostCNY, wantSl.SlotCostCNY)
 		}
 	}
 }

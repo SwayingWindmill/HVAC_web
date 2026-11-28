@@ -23,16 +23,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/edgetunnel"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/packettap"
-	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
 )
 
 func TestCredentialServerRejectsNonLoopbackTunnelAddressFailClosed(t *testing.T) {
 	t.Setenv("CONNECTIVITY_TUNNEL_LOOPBACK_ADDR", "0.0.0.0:18800")
 	_, _, err := credentialServer(nil)
-	if !errors.Is(err, tunnel.ErrNonLoopbackAddress) {
+	if !errors.Is(err, edgetunnel.ErrNonLoopbackAddress) {
 		t.Fatalf("expected ErrNonLoopbackAddress for 0.0.0.0:18800, got %v", err)
 	}
 }
@@ -40,7 +40,7 @@ func TestCredentialServerRejectsNonLoopbackTunnelAddressFailClosed(t *testing.T)
 func TestCredentialServerRejectsNonLoopbackSSHTunnelAddressFailClosed(t *testing.T) {
 	t.Setenv("CONNECTIVITY_TUNNEL_SSH_LOOPBACK_ADDR", "0.0.0.0:18822")
 	_, _, err := credentialServer(nil)
-	if !errors.Is(err, tunnel.ErrNonLoopbackAddress) {
+	if !errors.Is(err, edgetunnel.ErrNonLoopbackAddress) {
 		t.Fatalf("expected ErrNonLoopbackAddress for 0.0.0.0:18822, got %v", err)
 	}
 }

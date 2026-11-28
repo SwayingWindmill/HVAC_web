@@ -279,7 +279,8 @@ for (const file of files) {
     add(contractProfiles, ['core']);
     if (file.includes('operations-agent') || file.includes('operations-investigation')) {
       selectOperationsAgent(file, 'Operations Investigation contract changed', { integration: false });
-    } else if (file.includes('telemetry') || file.includes('s2-')) selectTelemetry(file, 'telemetry contract changed');
+    } else if (file.includes('coupled-mpc') || file.includes('ai-solver')) selectAnalytics(file, 'AI solver or optimization parity contract changed', { integration: false });
+    else if (file.includes('telemetry') || file.includes('s2-')) selectTelemetry(file, 'telemetry contract changed');
     else if (file.includes('command') || file.includes('s3-')) selectCommand(file, 'command contract changed');
     else if (file.includes('alarm') || file.includes('s4-')) selectAlarm(file, 'Alarm contract changed');
     else if (file.includes('work-order') || file.includes('workorder') || file.includes('s5-')) selectWorkOrder(file, 'Work Order contract changed');
@@ -300,7 +301,6 @@ for (const file of files) {
   });
   match(
     file.startsWith('libs/identitycontext/') ||
-      file.startsWith('libs/oidctest/') ||
       file.startsWith('libs/sessionevent/') ||
       file.startsWith('libs/sessionstore/') ||
       file.startsWith('libs/observability/') ||
@@ -344,12 +344,16 @@ for (const file of files) {
     selectTelemetry(file, 'Connectivity database schema changed', { integration: true });
     selectRegistry(file, 'Connectivity database schema changed', { integration: true });
   });
-  match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/telemetryauth/') || file.startsWith('libs/telemetryhistorymodel/') || file.startsWith('modules/connectivity/') || file.startsWith('cmd/connectivity/') || file.startsWith('cmd/telemetry-worker/') || file.startsWith('modules/telemetry/pkg/telemetry/') || file.startsWith('modules/telemetry/pkg/telemetryapi/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('infra/telemetry/'), () => {
+  match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/telemetryauth/') || file.startsWith('libs/telemetryhistorymodel/') || file.startsWith('modules/connectivity/') || file.startsWith('cmd/connectivity/') || file.startsWith('cmd/telemetry-worker/') || file.startsWith('modules/telemetry/pkg/telemetry/') || file.startsWith('modules/telemetry/pkg/telemetryapi/') || file.startsWith('infra/telemetry/'), () => {
     selectTelemetry(file, 'telemetry capability changed', { integration: true });
   });
   match(file.startsWith('libs/commandauth/') || file.startsWith('libs/commandmodel/') || file.startsWith('modules/command/') || file.startsWith('infra/command/'), () => selectCommand(file, 'command capability changed', { integration: true }));
-  match(file === 'modules/connectivity/pkg/connectivity/store.go' || file === 'modules/connectivity/pkg/connectivity/command_route.go' || file === 'cmd/connectivity/command_runtime.go', () => selectCommand(file, 'connectivity command correlation or runtime changed'));
-  match(file.startsWith('libs/edgecontrol/') || file.startsWith('tools/eg8200-simulator/') || file.startsWith('cmd/edge-gateway/') || file.startsWith('deploy/edge-gateway/'), () => selectCommand(file, 'Edge control, daemon, or plant simulator changed'));
+  match(file === 'modules/connectivity/pkg/connectivity/store.go' || file === 'modules/connectivity/pkg/connectivity/command_route.go' || file.startsWith('cmd/connectivity/command_runtime.go'), () => selectCommand(file, 'connectivity command correlation or runtime changed'));
+  match(file.startsWith('libs/edgetunnel/'), () => {
+    selectTelemetry(file, 'shared gateway reverse tunnel library changed');
+    selectCommand(file, 'shared gateway reverse tunnel library changed');
+  });
+  match(file.startsWith('libs/edgecontrol/') || file.startsWith('libs/measurement/') || file.startsWith('tools/eg8200-simulator/') || file.startsWith('cmd/edge-gateway/') || file.startsWith('deploy/edge-gateway/'), () => selectCommand(file, 'Edge control, daemon, or plant simulator changed'));
   match(file.startsWith('deploy/sites/') || file.startsWith('deploy/templates/'), () => {
     selectRegistry(file, 'site onboarding manifest or device template changed');
     selectTelemetry(file, 'site onboarding manifest or device template changed');
@@ -362,7 +366,7 @@ for (const file of files) {
   });
   match(file.startsWith('libs/alarmauth/') || file.startsWith('libs/alarmmodel/') || file.startsWith('modules/alarm/') || file.startsWith('infra/alarm/') || file.startsWith('cmd/wecom-alert-adapter/'), () => selectAlarm(file, 'Alarm or WeCom adapter capability changed', { integration: file.startsWith('cmd/wecom-alert-adapter/') ? false : true }));
   match(file.startsWith('libs/workorderauth/') || file.startsWith('libs/workordermodel/') || file.startsWith('modules/workorder/') || file.startsWith('infra/workorder/'), () => selectWorkOrder(file, 'Work Order capability changed', { integration: true }));
-  match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/analyticsmodel/') || file.startsWith('libs/energyseries/') || file.startsWith('modules/telemetry/internal/analytics/') || file.startsWith('modules/telemetry/internal/cube/') || file.startsWith('modules/telemetry/internal/history/') || file.startsWith('modules/telemetry/internal/query/') || file.startsWith('modules/telemetry/pkg/queryservice/') || file === 'modules/telemetry/go.mod' || file === 'modules/telemetry/go.sum' || file.startsWith('modules/energy/') || file.startsWith('libs/intelligencemodel/') || file.startsWith('modules/metric/') || file.startsWith('modules/scheduler/') || file.startsWith('cmd/scheduler/') || file.startsWith('cmd/metric-worker/') || file.startsWith('services/forecast-service/') || file.startsWith('services/optimization-service/') || file.startsWith('services/fdd-service/') || file.startsWith('services/mv-service/') || file.startsWith('services/report-service/') || file.startsWith('libs/schedulerjob/') || file.startsWith('libs/tariffmodel/'), () => selectAnalytics(file, 'analytics capability changed', { integration: !file.startsWith('cmd/scheduler/') }));
+  match(file.startsWith('libs/measurement/') || file.startsWith('libs/nameplate/') || file.startsWith('libs/analyticsmodel/') || file.startsWith('libs/energyseries/') || file.startsWith('modules/telemetry/internal/analytics/') || file.startsWith('modules/telemetry/internal/cube/') || file.startsWith('modules/telemetry/internal/history/') || file.startsWith('modules/telemetry/internal/query/') || file.startsWith('modules/telemetry/pkg/queryservice/') || file.startsWith('modules/energy/') || file.startsWith('libs/intelligencemodel/') || file.startsWith('modules/metric/') || file.startsWith('modules/scheduler/') || file.startsWith('cmd/scheduler/') || file.startsWith('cmd/metric-worker/') || file.startsWith('services/forecast-service/') || file.startsWith('services/optimization-service/') || file.startsWith('services/fdd-service/') || file.startsWith('services/mv-service/') || file.startsWith('services/report-service/') || file.startsWith('libs/schedulerjob/') || file.startsWith('libs/tariffmodel/'), () => selectAnalytics(file, 'analytics capability changed', { integration: !file.startsWith('cmd/scheduler/') }));
   match(file.startsWith('services/ai-solver-service/'), () => selectAnalytics(file, 'Python AI solver service changed', { integration: false }));
   match(file.startsWith('services/operations-agent-service/') || file.startsWith('infra/operations-agent/'), () => selectOperationsAgent(file, 'Operations Agent capability changed', { integration: true }));
 

@@ -115,7 +115,7 @@ CI 只运行 `scripts/domain-task-matrix.ts` 里登记的命令，按改动的�
 ## 依赖归属
 
 - 根目录 `package.json`：网页、接口代码生成、仓库检查。
-- 根目录 `go.mod`：平台主 Go 模块（涵盖 `cmd/`、`modules/`、`services/` 与大部分 `libs/`）；`go.work` 将其与 `cmd/wecom-alert-adapter/`、`tools/eg8200-simulator/` 及 7 个独立 `libs/*/go.mod`（共 9 个独立子模块）组成本地工作区。
+- 根目录 `go.mod`：平台主 Go 模块（涵盖 `cmd/`、`modules/`、`services/`、`tools/` 与全部 `libs/`）；`go.work` 仅将其与零外部依赖的独立告警推送入口 `cmd/wecom-alert-adapter/` 组成本地工作区。
 - `services/operations-agent-service/package.json`：AI 助手的 Node 依赖。
 
 设计规则见 `DESIGN.md`，产品背景见 `PRODUCT.md`，业务名词见 `GLOSSARY.md`，架构决定见 `docs/adr/`，功能规格见 `docs/specs/`。

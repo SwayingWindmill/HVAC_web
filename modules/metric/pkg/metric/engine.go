@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/measurement"
 )
 
 type Dependency struct {
@@ -726,7 +728,7 @@ func calculateThermalPower(binding Binding, byCode map[string]float64) (float64,
 		return 0, err
 	}
 	// Specific heat factor 1.163 kW per (m3/h * K) matches gateway BTU calculation.
-	q := 1.163 * flow * deltaT
+	q := measurement.WaterFactorKW * flow * deltaT
 	if math.IsNaN(q) || math.IsInf(q, 0) {
 		return 0, errors.New("thermal power calculation produced non-finite value")
 	}

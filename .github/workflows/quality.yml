@@ -32,8 +32,6 @@ jobs:
             go.sum
             go.work.sum
             cmd/*/go.mod
-            libs/*/go.mod
-            tools/*/go.mod
       - name: Export Go build cache
         run: echo "GOCACHE=$(go env GOCACHE)" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v7

@@ -6,6 +6,7 @@ package telemetryapi
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 )
 
 const (
@@ -26,6 +27,28 @@ var Operations = [...]OperationDescriptor{
 	{OperationID: "checkpointTelemetryRecoveryCursors", Method: "POST", Path: "/api/v1/telemetry/recovery-cursors:checkpoint"},
 	{OperationID: "queryDeviceHistory", Method: "POST", Path: "/api/v1/telemetry/device-series:query"},
 	{OperationID: "queryDeviceHistoryAggregate", Method: "POST", Path: "/api/v1/telemetry/device-series:aggregate"},
+}
+
+const (
+	GetDeviceObservationSnapshotPathTemplate = "/api/v1/devices/{deviceId}/observation-snapshot"
+	BatchGetDeviceObservationSnapshotsPath   = "/api/v1/telemetry/observation-snapshots:batchGet"
+	BootstrapTelemetrySubscriptionsPath      = "/api/v1/telemetry/subscriptions:bootstrap"
+	CheckpointTelemetryRecoveryCursorsPath   = "/api/v1/telemetry/recovery-cursors:checkpoint"
+	QueryDeviceHistoryPath                   = "/api/v1/telemetry/device-series:query"
+	QueryDeviceHistoryAggregatePath          = "/api/v1/telemetry/device-series:aggregate"
+)
+
+type GetDeviceObservationSnapshotParams struct {
+	Keys []TelemetryKey
+}
+
+type ServerInterface interface {
+	GetDeviceObservationSnapshot(http.ResponseWriter, *http.Request, string, GetDeviceObservationSnapshotParams)
+	BatchGetDeviceObservationSnapshots(http.ResponseWriter, *http.Request, BatchGetObservationSnapshotsRequest)
+	BootstrapTelemetrySubscriptions(http.ResponseWriter, *http.Request, SubscriptionBootstrapRequest)
+	CheckpointTelemetryRecoveryCursors(http.ResponseWriter, *http.Request, RecoveryCursorCheckpointRequest)
+	QueryDeviceHistory(http.ResponseWriter, *http.Request, DeviceHistoryRequest)
+	QueryDeviceHistoryAggregate(http.ResponseWriter, *http.Request, DeviceHistoryAggregateRequest)
 }
 
 type GetDeviceObservationSnapshotResponse = DeviceObservationSnapshot

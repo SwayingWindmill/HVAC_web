@@ -68,4 +68,4 @@ npm run lint
 npm run build
 ```
 
-接口测试走真实的跳转和回调，覆盖 PKCE、nonce、签发方、对象、签名、过期、生效时间、令牌类型、双向 TLS、授权的限制、CSRF、Origin、退出和管理员吊销。测试使用内置 `libs/oidctest` 测试夹具模拟 OIDC 签发与拒绝场景。
+接口测试走真实的跳转和回调，覆盖 PKCE、nonce、签发方、对象、签名、过期、生效时间、令牌类型、双向 TLS、授权的限制、CSRF、Origin、退出和管理员吊销。测试使用内置 `cmd/energy-api/internal/oidctest` 测试夹具模拟 OIDC 签发与拒绝场景。

@@ -10,6 +10,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/quanlaihe/hvac-web/libs/measurement"
 )
 
 const (
@@ -21,7 +23,7 @@ const (
 	defaultFlowFreshWindowSec    = 180
 	defaultConcPollSec           = 60
 	defaultConcLowBatteryMV      = 2700
-	defaultBTUSpecificHeatFactor = 1.163
+	defaultBTUSpecificHeatFactor = measurement.WaterFactorKW
 	defaultBTUMinPlantPowerKW    = 20.0
 	defaultBTUMaxGapSec          = 600
 	defaultDOPollSec             = 60

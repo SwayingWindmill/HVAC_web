@@ -59,58 +59,15 @@ var (
 	shadowPointCodePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,127}$`)
 )
 
-type PointCopyTarget struct {
-	DeviceKey string `json:"deviceKey"`
-	PointCode string `json:"pointCode"`
-}
-
-type GatewayPointMapping struct {
-	SourceChannel    string            `json:"sourceChannel"`
-	PrimaryDeviceKey string            `json:"primaryDeviceKey"`
-	PrimaryPointCode string            `json:"primaryPointCode"`
-	CopyTargets      []PointCopyTarget `json:"copyTargets,omitempty"`
-}
-
-type GatewaySamplingPolicy struct {
-	DeviceKey         string `json:"deviceKey"`
-	PointCode         string `json:"pointCode,omitempty"`
-	SampleIntervalMS  int    `json:"sampleIntervalMs"`
-	PublishIntervalMS int    `json:"publishIntervalMs"`
-}
-
-type ConcentratorShadowParams struct {
-	ModbusID        int `json:"modbusId"`
-	BaudRateCode    int `json:"baudRateCode"`
-	OffLineTime     int `json:"offLineTime"`
-	DataUplinkCycle int `json:"dataUplinkCycle"`
-	LocalNet        int `json:"localNet"`
-	TimeMark        int `json:"timeMark"`
-	RfTxPower       int `json:"rfTxPower"`
-	RfFrequency     int `json:"rfFrequency"`
-	RfBandWidth     int `json:"rfBandWidth"`
-	RfSf            int `json:"rfSf"`
-	RfLeadCode      int `json:"rfLeadCode"`
-	TxTimeout       int `json:"txTimeout"`
-	RxTimeout       int `json:"rxTimeout"`
-	RssiOut         int `json:"rssiOut"`
-}
-
-type ConcentratorShadowEIDSlot struct {
-	Slot int    `json:"slot"`
-	EID  uint32 `json:"eid"`
-}
-
-type ConcentratorUnitShadow struct {
-	Params *ConcentratorShadowParams   `json:"params,omitempty"`
-	EIDs   []ConcentratorShadowEIDSlot `json:"eids,omitempty"`
-}
-
-type DriftDetail struct {
-	Section string `json:"section"`
-	Target  string `json:"target"`
-	Reason  string `json:"reason"`
-	Detail  string `json:"detail"`
-}
+type (
+	PointCopyTarget           = edgecontrol.PointCopyTarget
+	GatewayPointMapping       = edgecontrol.GatewayPointMapping
+	GatewaySamplingPolicy     = edgecontrol.GatewaySamplingPolicy
+	ConcentratorShadowParams  = edgecontrol.ConcentratorShadowParams
+	ConcentratorShadowEIDSlot = edgecontrol.ConcentratorShadowEIDSlot
+	ConcentratorUnitShadow    = edgecontrol.ConcentratorUnitShadow
+	DriftDetail               = edgecontrol.ShadowDriftDetail
+)
 
 type GatewayDesiredConfig struct {
 	DesiredRevision     int64                             `json:"desiredRevision"`

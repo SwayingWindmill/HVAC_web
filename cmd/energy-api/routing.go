@@ -109,7 +109,7 @@ func loadRegistryConfig(snapshot *ownershipregistry.Snapshot, identityEnabled bo
 	clientKeyPath := os.Getenv("IAM_CLIENT_KEY")
 	configured := coreURL != "" && coreCAPath != "" && clientCertPath != "" && clientKeyPath != ""
 	if !configured {
-		if !snapshot.ContainsOwner(ownershipregistry.OwnerCore) || os.Getenv("S1_ALLOW_NO_CORE") == "true" {
+		if !snapshot.ContainsOwner(ownershipregistry.OwnerCore) {
 			return nil, nil
 		}
 		return nil, errors.New("CORE_URL, CORE_SERVER_CA and Gateway workload certificate are required for Core Registry routes")
@@ -126,12 +126,10 @@ func loadRegistryConfig(snapshot *ownershipregistry.Snapshot, identityEnabled bo
 		return nil, err
 	}
 	return &gateway.RegistryConfig{
-		CoreBaseURL:         coreURL,
-		CoreHTTPClient:      nonRedirectingClient(workloadTransport(roots, &certificate, envOr("CORE_SERVER_NAME", "localhost"))),
-		CoreTimeout:         durationEnv("CORE_REGISTRY_TIMEOUT", 750*time.Millisecond),
-		ShadowTimeout:       durationEnv("REGISTRY_SHADOW_TIMEOUT", 500*time.Millisecond),
-		MaxResponseBytes:    int64(intEnv("REGISTRY_MAX_RESPONSE_BYTES", 2<<20)),
-		MaxShadowConcurrent: intEnv("REGISTRY_MAX_SHADOW_CONCURRENT", 32),
+		CoreBaseURL:      coreURL,
+		CoreHTTPClient:   nonRedirectingClient(workloadTransport(roots, &certificate, envOr("CORE_SERVER_NAME", "localhost"))),
+		CoreTimeout:      durationEnv("CORE_REGISTRY_TIMEOUT", 750*time.Millisecond),
+		MaxResponseBytes: int64(intEnv("REGISTRY_MAX_RESPONSE_BYTES", 2<<20)),
 	}, nil
 }
 

@@ -47,6 +47,10 @@ def estimate_wet_bulb_c(dry_bulb_c: float, relative_humidity_pct: float | None =
     return clamp(min(tw, dry_bulb_c), -25.0, 45.0)
 
 
+def _finite_or(value: float, fallback: float) -> float:
+    return value if math.isfinite(value) else fallback
+
+
 @dataclass(frozen=True)
 class MonotonicChillerModel:
     base_cop: float = 5.7
@@ -62,43 +66,47 @@ class MonotonicChillerModel:
     cop_scale: float = 1.0
 
     def project_monotonic(self) -> MonotonicChillerModel:
-        e0 = max(0.02, self.plr_const_e0)
-        e1 = max(0.25, self.plr_linear_e1)
-        e2 = max(0.02, self.plr_quad_e2)
+        e0 = max(0.02, _finite_or(self.plr_const_e0, 0.09))
+        e1 = max(0.25, _finite_or(self.plr_linear_e1, 0.57))
+        e2 = max(0.02, _finite_or(self.plr_quad_e2, 0.34))
         total = e0 + e1 + e2
+        base_cop = self.base_cop if math.isfinite(self.base_cop) and self.base_cop > 0 else 5.7
+        cop_scale = _finite_or(self.cop_scale, 1.0)
         return MonotonicChillerModel(
-            base_cop=clamp(self.base_cop if self.base_cop > 0 else 5.7, 2.2, 9.5),
-            ref_tchw_c=self.ref_tchw_c,
-            ref_tcw_c=self.ref_tcw_c,
-            tchw_slope_cop_per_c=max(0.02, self.tchw_slope_cop_per_c),
-            tcw_slope_cop_per_c=max(0.02, self.tcw_slope_cop_per_c),
-            condenser_quad_loss_per_c2=max(0.0, self.condenser_quad_loss_per_c2),
-            condenser_mean_weight=clamp(self.condenser_mean_weight, 0.0, 1.0),
+            base_cop=clamp(base_cop, 2.2, 9.5),
+            ref_tchw_c=_finite_or(self.ref_tchw_c, 7.0),
+            ref_tcw_c=_finite_or(self.ref_tcw_c, 30.0),
+            tchw_slope_cop_per_c=max(0.02, _finite_or(self.tchw_slope_cop_per_c, 0.17)),
+            tcw_slope_cop_per_c=max(0.02, _finite_or(self.tcw_slope_cop_per_c, 0.145)),
+            condenser_quad_loss_per_c2=max(0.0, _finite_or(self.condenser_quad_loss_per_c2, 0.0025)),
+            condenser_mean_weight=clamp(_finite_or(self.condenser_mean_weight, 0.45), 0.0, 1.0),
             plr_const_e0=e0 / total,
             plr_linear_e1=e1 / total,
             plr_quad_e2=e2 / total,
-            cop_scale=clamp(self.cop_scale if self.cop_scale > 0 else 1.0, 0.55, 1.35),
+            cop_scale=clamp(cop_scale, 0.55, 1.35),
         )
 
     def lift_cop(self, t_chw_c: float, cw_in_c: float, cw_out_c: float) -> float:
-        cw_eff = (1.0 - self.condenser_mean_weight) * cw_in_c + self.condenser_mean_weight * cw_out_c
-        cw_over = max(0.0, cw_eff - self.ref_tcw_c)
+        proj = self.project_monotonic()
+        cw_eff = (1.0 - proj.condenser_mean_weight) * cw_in_c + proj.condenser_mean_weight * cw_out_c
+        cw_over = max(0.0, cw_eff - proj.ref_tcw_c)
         raw_cop = (
-            self.base_cop
-            + self.tchw_slope_cop_per_c * (t_chw_c - self.ref_tchw_c)
-            - self.tcw_slope_cop_per_c * (cw_eff - self.ref_tcw_c)
-            - self.condenser_quad_loss_per_c2 * cw_over * cw_over
+            proj.base_cop
+            + proj.tchw_slope_cop_per_c * (t_chw_c - proj.ref_tchw_c)
+            - proj.tcw_slope_cop_per_c * (cw_eff - proj.ref_tcw_c)
+            - proj.condenser_quad_loss_per_c2 * cw_over * cw_over
         )
-        return clamp(self.cop_scale * max(1.8, raw_cop), 1.5, 11.0)
+        return clamp(proj.cop_scale * max(1.8, raw_cop), 1.5, 11.0)
 
     def power_kw(
         self, load_kw: float, rated_cap_kw: float, t_chw_c: float, cw_in_c: float, cw_out_c: float
     ) -> tuple[float, float]:
         if load_kw <= 0.0 or rated_cap_kw <= 0.0:
             return 0.0, 0.0
-        lift_cop = self.lift_cop(t_chw_c, cw_in_c, cw_out_c)
+        proj = self.project_monotonic()
+        lift_cop = proj.lift_cop(t_chw_c, cw_in_c, cw_out_c)
         plr = load_kw / rated_cap_kw
-        eir_plr = self.plr_const_e0 + self.plr_linear_e1 * plr + self.plr_quad_e2 * plr * plr
+        eir_plr = proj.plr_const_e0 + proj.plr_linear_e1 * plr + proj.plr_quad_e2 * plr * plr
         p_kw = rated_cap_kw * eir_plr / lift_cop
         if p_kw <= 0.0:
             return 0.0, 0.0
@@ -291,7 +299,8 @@ def evaluate_optimal_operating_point(
             ff = cwp_hz * inv_cwp_max
             ff = 0.0 if ff < 0.0 else (1.0 if ff > 1.0 else ff)
             cwp_p = cwp_rated_kw * (cwp_stat + cwp_one_minus_stat * ff * ff * ff)
-            twr_p = twr_rated_kw * sf * sf * sf
+            fan_frac = clamp(fan_pct * 0.01, 0.0, 1.0)
+            twr_p = twr_rated_kw * fan_frac * fan_frac * fan_frac
             tot = ch_kw + chwp_kw + cwp_p + twr_p
             cop_v = delivered_kw / ch_kw if ch_kw > 0.0 else 0.0
             return tot, ch_kw, cwp_p, twr_p, cop_v
@@ -592,18 +601,16 @@ class HVACPhysicsSolver:
         cur_s_idx = min(range(len(candidates)), key=lambda i: abs(candidates[i] - cur_supply))
 
         if not ctx.precooling_enabled:
-            chosen_slots = self._solve_coupled_no_storage_dp(
+            chosen_slots, total_e, total_c = self._solve_coupled_no_storage_dp(
                 horizon, candidates, cur_s_idx, cur_zone, zone_floor, zone_ceiling, max_step, rm.zone_temp_delta_per_supply_c, model, plant
             )
         else:
-            chosen_slots = self._solve_coupled_storage_dp(
+            chosen_slots, total_e, total_c = self._solve_coupled_storage_dp(
                 horizon, candidates, cur_s_idx, cur_zone, cons.zone_temp_min_c, cons.zone_temp_max_c, zone_floor, zone_ceiling, max_step, model, plant
             )
 
         slot0 = chosen_slots[0]
         total_hours = sum(sl["durationHours"] for sl in chosen_slots)
-        total_e = sum(sl["predictedPowerKw"] * sl["durationHours"] for sl in chosen_slots)
-        total_c = sum(sl["slotCostCny"] for sl in chosen_slots)
         scale_day = (24.0 / total_hours) if total_hours > 0.0 and abs(total_hours - 24.0) > 1e-3 else 1.0
         daily_e = max(0.0, total_e * scale_day)
         daily_c = max(0.0, total_c * scale_day)
@@ -671,7 +678,7 @@ class HVACPhysicsSolver:
         zone_delta_per_c: float,
         model: MonotonicChillerModel,
         plant: CoupledPlantSpec,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], float, float]:
         h_len = len(horizon)
         s_len = len(candidates)
         z_slope = zone_delta_per_c if zone_delta_per_c > 0.0 else 0.32
@@ -741,12 +748,16 @@ class HVACPhysicsSolver:
             cur = parent[t][chosen[t]] if 0 <= cur < s_len else cur_s_idx
 
         slots: list[dict[str, Any]] = []
+        total_e = 0.0
+        total_c = 0.0
         for t in range(h_len):
             si = chosen[t]
             pt = table[t][si]
             sl = horizon[t]
             slot_e = pt.total_power_kw * sl.duration_hours
             slot_c = slot_e * sl.tariff_rate_cny
+            total_e += slot_e
+            total_c += slot_c
             mode = "ECO"
             if sl.tariff_rate_cny >= 1.0:
                 mode = "PEAK_SHAVE"
@@ -765,7 +776,7 @@ class HVACPhysicsSolver:
                 "slotCostCny": round(slot_c, 4),
                 "operatingMode": mode,
             })
-        return slots
+        return slots, total_e, total_c
 
     def _solve_coupled_storage_dp(
         self,
@@ -780,7 +791,7 @@ class HVACPhysicsSolver:
         max_step: float,
         model: MonotonicChillerModel,
         plant: CoupledPlantSpec,
-    ) -> list[dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], float, float]:
         h_len = len(horizon)
         s_len = len(candidates)
 
@@ -951,6 +962,8 @@ class HVACPhysicsSolver:
             )
 
         slots: list[dict[str, Any]] = []
+        total_e = 0.0
+        total_c = 0.0
         for t in range(h_len):
             sl = horizon[t]
             dt_h = sl.duration_hours
@@ -985,6 +998,8 @@ class HVACPhysicsSolver:
             cur_s = best_s
             slot_e = best_tot_p * dt_h
             slot_c = slot_e * tariff
+            total_e += slot_e
+            total_c += slot_c
             mode = "NORMAL"
             if sp <= plant.design_supply_temp_c - 0.4 and tariff <= min_tariff + 0.1:
                 mode = "PRE_COOL"
@@ -1005,4 +1020,4 @@ class HVACPhysicsSolver:
                 "slotCostCny": round(slot_c, 4),
                 "operatingMode": mode,
             })
-        return slots
+        return slots, total_e, total_c

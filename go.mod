@@ -40,13 +40,6 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/pquerna/otp v1.4.0
-	github.com/quanlaihe/hvac-web/libs/alarmexpr v0.0.0
-	github.com/quanlaihe/hvac-web/libs/commandmodel v0.0.0
-	github.com/quanlaihe/hvac-web/libs/edgecontrol v0.0.0
-	github.com/quanlaihe/hvac-web/libs/grant v0.0.0
-	github.com/quanlaihe/hvac-web/libs/identitycontext v0.0.0
-	github.com/quanlaihe/hvac-web/libs/observability v0.0.0
-	github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel v0.0.0
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/simonvetter/modbus v1.6.4
 	golang.org/x/crypto v0.58.0
@@ -79,17 +72,3 @@ require (
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 )
-
-replace github.com/quanlaihe/hvac-web/libs/alarmexpr => ./libs/alarmexpr
-
-replace github.com/quanlaihe/hvac-web/libs/commandmodel => ./libs/commandmodel
-
-replace github.com/quanlaihe/hvac-web/libs/edgecontrol => ./libs/edgecontrol
-
-replace github.com/quanlaihe/hvac-web/libs/grant => ./libs/grant
-
-replace github.com/quanlaihe/hvac-web/libs/identitycontext => ./libs/identitycontext
-
-replace github.com/quanlaihe/hvac-web/libs/observability => ./libs/observability
-
-replace github.com/quanlaihe/hvac-web/libs/telemetryhistorymodel => ./libs/telemetryhistorymodel

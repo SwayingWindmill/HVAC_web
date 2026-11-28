@@ -16,7 +16,7 @@ EG8200 侧 `hvac-edge-gateway` 守护进程（或在未退场网关上的 Node-R
 
 | 组件 | 仓库路径与关键符号 | 作用 |
 | --- | --- | --- |
-| 服务端隧道白名单与回环监听器 | `modules/connectivity/pkg/tunnel/tunnel.go`（`AllowedTargetPort = 1880`、`SSHTargetPort = 22`、`IsSupportedTargetPort`、`WithAllowedTargetPorts`、`StartLoopbackListenerForPort`） | 仅允许 `{1880, 22}`；`OpenStream` 按允许集合 fail-closed 拦截其他端口 |
+| 服务端隧道白名单与回环监听器 | `libs/edgetunnel/tunnel.go`（`AllowedTargetPort = 1880`、`SSHTargetPort = 22`、`IsSupportedTargetPort`、`WithAllowedTargetPorts`、`StartLoopbackListenerForPort`） | 仅允许 `{1880, 22}`；`OpenStream` 按允许集合 fail-closed 拦截其他端口 |
 | 运行时开关与回环地址校验 | `cmd/connectivity/credential_runtime.go`（`CONNECTIVITY_TUNNEL_SSH_LOOPBACK_ADDR`、`ValidateLoopbackAddr`） | 环境变量默认留空关闭；启用时拒绝 `0.0.0.0` 与 `:0` |
 | Compose 与主机 systemd 模板 | `deploy/platform/phase1/compose.yaml`、`deploy/platform/phase1/systemd/hvac-gateway-ssh-loopback.{socket,@.service}` | 透传环境变量并限定仅宿主机 `127.0.0.1:18822` 拉起 `-tunnel-stdio 127.0.0.1:18822` |
 | 网关侧隧道客户端 | `cmd/edge-gateway/internal/edgedaemon/tunnel_client.go`（`AllowedTargetPorts: [22]`） | 网关本机端口映射表，拒绝白名单外端口并避免发往本机无效建连 |
