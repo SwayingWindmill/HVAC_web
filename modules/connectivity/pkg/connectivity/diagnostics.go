@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -37,7 +38,7 @@ func (store *Store) resolveGatewayTenantForDiagnostics(ctx context.Context, clai
 	if store == nil || store.pool == nil {
 		return "", errors.New("connectivity store is closed")
 	}
-	if !gatewayIDPattern.MatchString(gatewayID) {
+	if !uuidv7.IsValid(gatewayID) {
 		return "", ErrEnrollmentRejected
 	}
 	var tenantID, siteID string

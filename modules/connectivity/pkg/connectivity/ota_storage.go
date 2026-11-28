@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -53,7 +54,7 @@ func (s *OTAArtifactStorage) SaveStream(tenantID, packageID string, reader io.Re
 	}
 	tID := strings.ToLower(strings.TrimSpace(tenantID))
 	pID := strings.ToLower(strings.TrimSpace(packageID))
-	if !gatewayIDPattern.MatchString(tID) || !gatewayIDPattern.MatchString(pID) {
+	if !uuidv7.IsValid(tID) || !uuidv7.IsValid(pID) {
 		return "", 0, "", fmt.Errorf("%w: tenantId and packageId must be UUIDv7", ErrOTAInvalid)
 	}
 	if maxBytes <= 0 {

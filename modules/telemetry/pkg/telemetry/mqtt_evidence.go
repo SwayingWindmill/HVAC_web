@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
@@ -203,7 +204,7 @@ func candidateTargetDeviceID(evidence RuntimeEventEvidence) string {
 	}
 	sourceType := strings.ToUpper(strings.TrimSpace(evidence.SourceType))
 	sourceID := strings.ToLower(strings.TrimSpace(evidence.SourceID))
-	if !uuidV7Pattern.MatchString(sourceID) {
+	if !uuidv7.IsValid(sourceID) {
 		return ""
 	}
 	if sourceType == "GATEWAY" && sourceID != strings.ToLower(strings.TrimSpace(evidence.GatewayID)) {
@@ -431,7 +432,7 @@ func validateAndNormalizeRuntimeEventEvidence(evidence RuntimeEventEvidence) (Ru
 	sourceID := strings.TrimSpace(evidence.SourceID)
 	severity := strings.ToUpper(strings.TrimSpace(evidence.Severity))
 
-	if !uuidV7Pattern.MatchString(tenantID) || !uuidV7Pattern.MatchString(siteID) || !uuidV7Pattern.MatchString(messageID) {
+	if !uuidv7.IsValid(tenantID) || !uuidv7.IsValid(siteID) || !uuidv7.IsValid(messageID) {
 		return RuntimeEventEvidence{}, fmt.Errorf("%w: scope is invalid", ErrRuntimeEventInvalid)
 	}
 	if evidence.Sequence < 0 || gatewayID == "" || eventType == "" || sourceType == "" || sourceID == "" || evidence.EventTime.IsZero() || evidence.ReceivedAt.IsZero() || !json.Valid(evidence.Data) {
@@ -446,7 +447,7 @@ func validateAndNormalizeRuntimeEventEvidence(evidence RuntimeEventEvidence) (Ru
 		devTenant := strings.ToLower(strings.TrimSpace(evidence.Device.TenantID))
 		devSite := strings.ToLower(strings.TrimSpace(evidence.Device.SiteID))
 		devID := strings.ToLower(strings.TrimSpace(evidence.Device.DeviceID))
-		if !uuidV7Pattern.MatchString(devTenant) || !uuidV7Pattern.MatchString(devSite) || !uuidV7Pattern.MatchString(devID) {
+		if !uuidv7.IsValid(devTenant) || !uuidv7.IsValid(devSite) || !uuidv7.IsValid(devID) {
 			return RuntimeEventEvidence{}, fmt.Errorf("%w: device scope must be UUIDv7", ErrRuntimeEventInvalid)
 		}
 		if devTenant != tenantID || devSite != siteID {

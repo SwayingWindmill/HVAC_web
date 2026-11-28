@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 func TestPrepareReconciliationRequestProducesStableHashForEquivalentOrdering(t *testing.T) {
@@ -142,7 +143,7 @@ func TestNewUUIDv7ProducesValidIdentifier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !isUUIDv7(value) {
+	if !uuidv7.IsValid(value) {
 		t.Fatalf("generated identifier is not UUIDv7: %s", value)
 	}
 }

@@ -16,6 +16,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -328,7 +329,7 @@ func normalizeSourceObservation(input sourceObservationRequest, receivedAt time.
 func normalizeHistoricalReplayObservation(input historicalReplayObservationRequest, receivedAt time.Time) (ObservationCandidate, error) {
 	datasetID := strings.ToLower(strings.TrimSpace(input.ReplayDatasetID))
 	deviceID := strings.ToLower(strings.TrimSpace(input.DeviceID))
-	if !uuidV7Pattern.MatchString(datasetID) || !uuidV7Pattern.MatchString(deviceID) || input.Offset < 0 || receivedAt.IsZero() {
+	if !uuidv7.IsValid(datasetID) || !uuidv7.IsValid(deviceID) || input.Offset < 0 || receivedAt.IsZero() {
 		return ObservationCandidate{}, errors.New("historical replay identity is invalid")
 	}
 	sampledAt, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.SampledAt))
@@ -367,13 +368,10 @@ func deterministicHistoricalReplayEventID(datasetID, partition string, offset in
 		return "", errors.New("historical replay dataset ID is invalid")
 	}
 	digest := sha256.Sum256([]byte(datasetID + "\x00" + partition + "\x00" + strconv.FormatInt(offset, 10)))
-	identifier := make([]byte, 16)
+	var identifier [16]byte
 	copy(identifier[:6], datasetBytes[:6])
 	copy(identifier[6:], digest[:10])
-	identifier[6] = (identifier[6] & 0x0f) | 0x70
-	identifier[8] = (identifier[8] & 0x3f) | 0x80
-	raw := hex.EncodeToString(identifier)
-	return raw[:8] + "-" + raw[8:12] + "-" + raw[12:16] + "-" + raw[16:20] + "-" + raw[20:], nil
+	return uuidv7.FormatRaw(identifier), nil
 }
 
 type mqttRuntimeEventRequest struct {

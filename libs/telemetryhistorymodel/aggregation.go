@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	_ "time/tzdata"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -96,14 +98,14 @@ type DeviceHistoryAggregateQuery struct {
 }
 
 func (query DeviceHistoryAggregateQuery) Validate() error {
-	if !validUUIDv7(query.TenantID) || !validUUIDv7(query.SiteID) {
+	if !uuidv7.IsValidAnyCase(query.TenantID) || !uuidv7.IsValidAnyCase(query.SiteID) {
 		return errors.New("history aggregate scope identifiers must be UUIDv7 values")
 	}
 	return validateAggregateSelection(query.DeviceID, query.Keys, query.From, query.To, query.Granularity, query.Timezone, query.QualityPolicy)
 }
 
 func validateAggregateSelection(deviceID string, keys []string, from, to time.Time, granularity AggregateGranularity, timezone string, qualityPolicy AggregateQualityPolicy) error {
-	if !validUUIDv7(deviceID) {
+	if !uuidv7.IsValidAnyCase(deviceID) {
 		return errors.New("history aggregate device identifier must be UUIDv7")
 	}
 	if len(keys) == 0 || len(keys) > MaximumHistoryKeys {
@@ -383,7 +385,7 @@ func (response DeviceHistoryAggregateResponse) ValidateFor(query DeviceHistoryAg
 		allowed[key] = struct{}{}
 	}
 	for _, bucket := range response.Buckets {
-		if _, ok := allowed[bucket.TelemetryKey]; !ok || !validUUIDv7(bucket.PointID) || bucket.PointRevision < 1 || !bucket.PointType.Valid() || bucket.PeriodStart.IsZero() || !bucket.PeriodStart.Before(bucket.PeriodEnd) || bucket.Completeness < 0 || bucket.Completeness > 1 {
+		if _, ok := allowed[bucket.TelemetryKey]; !ok || !uuidv7.IsValidAnyCase(bucket.PointID) || bucket.PointRevision < 1 || !bucket.PointType.Valid() || bucket.PeriodStart.IsZero() || !bucket.PeriodStart.Before(bucket.PeriodEnd) || bucket.Completeness < 0 || bucket.Completeness > 1 {
 			return errors.New("history aggregate bucket is invalid")
 		}
 		kindCount := 0

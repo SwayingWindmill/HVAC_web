@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -66,14 +68,14 @@ type DeviceHistoryQuery struct {
 }
 
 func (query DeviceHistoryQuery) Validate() error {
-	if !validUUIDv7(query.TenantID) || !validUUIDv7(query.SiteID) {
+	if !uuidv7.IsValidAnyCase(query.TenantID) || !uuidv7.IsValidAnyCase(query.SiteID) {
 		return errors.New("history scope identifiers must be UUIDv7 values")
 	}
 	return validateHistorySelection(query.DeviceID, query.Keys, query.From, query.To, query.PageSize, query.Cursor)
 }
 
 func validateHistorySelection(deviceID string, keys []string, from, to time.Time, pageSize int, cursor *string) error {
-	if !validUUIDv7(deviceID) {
+	if !uuidv7.IsValidAnyCase(deviceID) {
 		return errors.New("history device identifier must be a UUIDv7 value")
 	}
 	if len(keys) == 0 || len(keys) > MaximumHistoryKeys {
@@ -232,7 +234,7 @@ type SourcePosition struct {
 }
 
 func (position SourcePosition) validate() error {
-	if !sourcePartitionPattern.MatchString(position.Partition) || position.Offset < 0 || !validUUIDv7(position.EventID) {
+	if !sourcePartitionPattern.MatchString(position.Partition) || position.Offset < 0 || !uuidv7.IsValidAnyCase(position.EventID) {
 		return errors.New("history response source position is invalid")
 	}
 	return nil
@@ -333,10 +335,10 @@ func (response DeviceHistoryResponse) ValidateFor(query DeviceHistoryQuery) erro
 }
 
 func validateObservation(observation DeviceHistoryObservation, query DeviceHistoryQuery, allowedKeys map[string]struct{}) error {
-	if !validUUIDv7(observation.ObservationID) || !validUUIDv7(observation.PointID) {
+	if !uuidv7.IsValidAnyCase(observation.ObservationID) || !uuidv7.IsValidAnyCase(observation.PointID) {
 		return errors.New("history response observation identity is invalid")
 	}
-	if observation.SensorID != nil && !validUUIDv7(*observation.SensorID) {
+	if observation.SensorID != nil && !uuidv7.IsValidAnyCase(*observation.SensorID) {
 		return errors.New("history response sensor ID is invalid")
 	}
 	if _, allowed := allowedKeys[observation.TelemetryKey]; !allowed {
@@ -432,15 +434,6 @@ func compareObservationOrder(left, right DeviceHistoryObservation) int {
 		return 1
 	}
 	return strings.Compare(left.ObservationID, right.ObservationID)
-}
-
-func validUUIDv7(value string) bool {
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
-		return false
-	}
-	compact := strings.ReplaceAll(value, "-", "")
-	decoded, err := hex.DecodeString(compact)
-	return err == nil && len(decoded) == 16 && decoded[6]>>4 == 7 && decoded[8]>>6 == 2
 }
 
 func copyString(value *string) *string {

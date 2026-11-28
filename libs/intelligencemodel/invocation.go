@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -214,25 +215,10 @@ func NewDecisionUUIDv7(now time.Time) (string, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	millis := now.UTC().UnixMilli()
-	if millis < 0 {
+	if now.UTC().UnixMilli() < 0 {
 		return "", errors.New("decision UUIDv7 timestamp must be on or after unix epoch")
 	}
-	raw := make([]byte, 16)
-	if _, err := rand.Read(raw); err != nil {
-		return "", err
-	}
-	ts := uint64(millis)
-	raw[0] = byte(ts >> 40)
-	raw[1] = byte(ts >> 32)
-	raw[2] = byte(ts >> 24)
-	raw[3] = byte(ts >> 16)
-	raw[4] = byte(ts >> 8)
-	raw[5] = byte(ts)
-	raw[6] = (raw[6] & 0x0f) | 0x70
-	raw[8] = (raw[8] & 0x3f) | 0x80
-	encoded := hex.EncodeToString(raw)
-	return encoded[:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:], nil
+	return uuidv7.NewAt(now)
 }
 
 type InvocationFailure struct {

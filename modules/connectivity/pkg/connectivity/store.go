@@ -2,8 +2,6 @@ package connectivity
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/quanlaihe/hvac-web/libs/commandmodel"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 var (
@@ -489,21 +488,7 @@ func sameEdgeExecution(left, right *commandmodel.EdgeExecutionEvidence) bool {
 }
 
 func newUUIDv7(now time.Time) (string, error) {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	millis := uint64(now.UTC().UnixMilli())
-	raw[0] = byte(millis >> 40)
-	raw[1] = byte(millis >> 32)
-	raw[2] = byte(millis >> 24)
-	raw[3] = byte(millis >> 16)
-	raw[4] = byte(millis >> 8)
-	raw[5] = byte(millis)
-	raw[6] = (raw[6] & 0x0f) | 0x70
-	raw[8] = (raw[8] & 0x3f) | 0x80
-	encoded := hex.EncodeToString(raw[:])
-	return encoded[0:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:32], nil
+	return uuidv7.NewAt(now)
 }
 
 func (store *Store) clock() time.Time {

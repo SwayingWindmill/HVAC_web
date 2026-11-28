@@ -9,6 +9,8 @@ import (
 	"math"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -29,7 +31,7 @@ type CounterAuditQuery struct {
 }
 
 func (query CounterAuditQuery) Validate() error {
-	if !validUUIDv7(query.TenantID) || !validUUIDv7(query.SiteID) {
+	if !uuidv7.IsValidAnyCase(query.TenantID) || !uuidv7.IsValidAnyCase(query.SiteID) {
 		return errors.New("counter audit scope identifiers must be UUIDv7 values")
 	}
 	if query.From.IsZero() || query.To.IsZero() {
@@ -46,10 +48,10 @@ func (query CounterAuditQuery) Validate() error {
 	if query.To.Sub(query.From) > MaximumCounterAuditRange {
 		return errors.New("counter audit window exceeds 31 days")
 	}
-	if query.DeviceID != nil && !validUUIDv7(*query.DeviceID) {
+	if query.DeviceID != nil && !uuidv7.IsValidAnyCase(*query.DeviceID) {
 		return errors.New("counter audit deviceId must be a UUIDv7 value")
 	}
-	if query.PointID != nil && !validUUIDv7(*query.PointID) {
+	if query.PointID != nil && !uuidv7.IsValidAnyCase(*query.PointID) {
 		return errors.New("counter audit pointId must be a UUIDv7 value")
 	}
 	if query.Limit < 0 || query.Limit > MaximumCounterAuditLimit {
@@ -181,7 +183,7 @@ func validateCounterAuditSummary(summary CounterAuditSummary) error {
 }
 
 func validateCounterAuditItem(item CounterAuditItem, normalized CounterAuditQuery) error {
-	if !validUUIDv7(item.PointID) || !validUUIDv7(item.DeviceID) {
+	if !uuidv7.IsValidAnyCase(item.PointID) || !uuidv7.IsValidAnyCase(item.DeviceID) {
 		return errors.New("pointId and deviceId must be UUIDv7 values")
 	}
 	if normalized.DeviceID != nil && item.DeviceID != *normalized.DeviceID {

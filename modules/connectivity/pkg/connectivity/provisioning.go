@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 var (
@@ -101,7 +102,7 @@ type JITPEnrollRequest struct {
 
 func normalizeLowerUUID(raw string) (string, bool) {
 	trimmed := strings.ToLower(strings.TrimSpace(raw))
-	if !gatewayIDPattern.MatchString(trimmed) {
+	if !uuidv7.IsValid(trimmed) {
 		return "", false
 	}
 	return trimmed, true

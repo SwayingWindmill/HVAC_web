@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type SchedulerJob struct {
@@ -106,7 +107,7 @@ WHERE job_id=$1::uuid AND state='READY'`, jobs[i].JobID, workerID, now.UTC().Add
 }
 
 func (s *PostgresStore) StartMetricJob(ctx context.Context, job SchedulerJob, leaseDuration time.Duration, now time.Time) (bool, error) {
-	attemptID, err := uuidv7(now)
+	attemptID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return false, err
 	}

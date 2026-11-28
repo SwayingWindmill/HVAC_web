@@ -103,3 +103,14 @@ func TestSemanticCatalogSpeaksTheOperatorsWords(t *testing.T) {
 		}
 	}
 }
+
+func TestSemanticQueryBucketsFallsBackToUTCOnInvalidTimezone(t *testing.T) {
+	base := semanticQuery()
+	for _, tz := range []string{"", "Local", "Mars/Olympus_Mons"} {
+		query := base
+		query.Timezone = tz
+		if got := query.Buckets(); got <= 0 {
+			t.Fatalf("Buckets(%q) = %d, want positive fallback bucket count", tz, got)
+		}
+	}
+}

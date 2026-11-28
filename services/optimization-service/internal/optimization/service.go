@@ -3,7 +3,6 @@ package optimization
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/intelligencemodel"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type SolverAdapter interface {
@@ -585,13 +585,7 @@ func (service *Service) Reconcile(ctx context.Context, staleBefore time.Time, li
 
 func deterministicV7(namespace, value string, at time.Time) string {
 	digest := sha256.Sum256([]byte(namespace + "|" + value))
-	bytes := append([]byte(nil), digest[:16]...)
-	milliseconds := uint64(at.UTC().UnixMilli())
-	bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5] = byte(milliseconds>>40), byte(milliseconds>>32), byte(milliseconds>>24), byte(milliseconds>>16), byte(milliseconds>>8), byte(milliseconds)
-	bytes[6] = (bytes[6] & 0x0f) | 0x70
-	bytes[8] = (bytes[8] & 0x3f) | 0x80
-	hexValue := hex.EncodeToString(bytes)
-	return fmt.Sprintf("%s-%s-%s-%s-%s", hexValue[0:8], hexValue[8:12], hexValue[12:16], hexValue[16:20], hexValue[20:32])
+	return uuidv7.MustFormatAt(at, [10]byte(digest[6:16]))
 }
 
 func timePointer(at time.Time) *time.Time {

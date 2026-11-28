@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 var (
@@ -108,7 +109,7 @@ func hashCredential(value []byte) string {
 
 // Gateway identity is resolved by the owner read port, never by caller-supplied Tenant.
 func (service *CredentialService) gateway(ctx context.Context, gatewayID string) (tenant, site string, err error) {
-	if !gatewayIDPattern.MatchString(gatewayID) {
+	if !uuidv7.IsValid(gatewayID) {
 		return "", "", ErrEnrollmentRejected
 	}
 	err = service.store.pool.QueryRow(ctx, `SELECT tenant_id::text,site_id::text FROM core_registry.gateway_directory_v1 WHERE gateway_id=$1::uuid AND status='ACTIVE'`, gatewayID).Scan(&tenant, &site)
@@ -309,7 +310,7 @@ func (service *CredentialService) verifyActiveCredentialWith(
 		return "", ErrEnrollmentRejected
 	}
 	gatewayID := peer.Subject.CommonName
-	if !gatewayIDPattern.MatchString(gatewayID) {
+	if !uuidv7.IsValid(gatewayID) {
 		return "", ErrEnrollmentRejected
 	}
 	if service == nil || service.store == nil {
@@ -488,7 +489,7 @@ func (service *CredentialService) Revoke(ctx context.Context, claims registryaut
 func (service *CredentialService) RevokeRetiredGateway(ctx context.Context, tenantID, gatewayID string) error {
 	tenant := strings.TrimSpace(tenantID)
 	gateway := strings.TrimSpace(gatewayID)
-	if !tunnelAuditUUIDv7Pattern.MatchString(tenant) || !tunnelAuditUUIDv7Pattern.MatchString(gateway) {
+	if !uuidv7.IsValidAnyCase(tenant) || !uuidv7.IsValidAnyCase(gateway) {
 		return ErrEnrollmentRejected
 	}
 	if service == nil || service.store == nil || service.store.pool == nil {
@@ -639,7 +640,7 @@ func normalizeCredentialRecordUTC(record GatewayCredentialRecord) GatewayCredent
 // RevokeCertificate revokes a single certificate row without mutating gateway_enrollments.revoked_at
 // or other active certificates held by the same Gateway.
 func (service *CredentialService) RevokeCertificate(ctx context.Context, claims registryauth.GrantClaims, gatewayID, credentialID, reason string) (GatewayCredentialRecord, error) {
-	if !gatewayIDPattern.MatchString(credentialID) {
+	if !uuidv7.IsValid(credentialID) {
 		return GatewayCredentialRecord{}, ErrEnrollmentRejected
 	}
 	trimmedReason := strings.TrimSpace(reason)

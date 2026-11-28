@@ -2,9 +2,6 @@ package clickhouse
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/modules/energy/internal/energy"
 )
 
@@ -74,15 +72,5 @@ func TestProjectorWritesEveryIntervalOfALargeHistoryBatch(t *testing.T) {
 // newTestUUIDv7 is a UUIDv7 stamped at the given time with random bits, like the ids Telemetry
 // Runtime assigns on admission.
 func newTestUUIDv7(at time.Time) string {
-	var value [16]byte
-	if _, err := rand.Read(value[:]); err != nil {
-		panic(err)
-	}
-	var millis [8]byte
-	binary.BigEndian.PutUint64(millis[:], uint64(at.UnixMilli()))
-	copy(value[:6], millis[2:])
-	value[6] = value[6]&0x0f | 0x70
-	value[8] = value[8]&0x3f | 0x80
-	encoded := hex.EncodeToString(value[:])
-	return encoded[:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:]
+	return uuidv7.MustNewAt(at)
 }

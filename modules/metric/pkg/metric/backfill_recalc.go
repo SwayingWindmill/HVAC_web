@@ -17,6 +17,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -906,7 +907,7 @@ func (s *PostgresStore) EnqueueMetricRecalcJobs(ctx context.Context, candidates 
 
 	enqueued := 0
 	for _, cand := range candidates {
-		jobID, idErr := uuidv7(nowUTC)
+		jobID, idErr := uuidv7.NewAt(nowUTC)
 		if idErr != nil {
 			return 0, idErr
 		}

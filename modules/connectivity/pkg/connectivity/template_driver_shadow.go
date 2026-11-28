@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -51,10 +52,10 @@ func (store *Store) UpsertGatewayTemplateDriverConfig(ctx context.Context, gatew
 	gwID := strings.TrimSpace(gatewayID)
 	tenantID := strings.TrimSpace(input.TenantID)
 	deviceKey := strings.TrimSpace(input.DeviceKey)
-	if !gatewayIDPattern.MatchString(gwID) {
+	if !uuidv7.IsValid(gwID) {
 		return TemplateDriverUpsertResult{}, fmt.Errorf("%w: gatewayId must be UUIDv7", ErrConfigShadowInvalid)
 	}
-	if !gatewayIDPattern.MatchString(tenantID) {
+	if !uuidv7.IsValid(tenantID) {
 		return TemplateDriverUpsertResult{}, fmt.Errorf("%w: tenantId must be UUIDv7", ErrConfigShadowInvalid)
 	}
 	if deviceKey == "" {
@@ -67,7 +68,7 @@ func (store *Store) UpsertGatewayTemplateDriverConfig(ctx context.Context, gatew
 	updatedBy := strings.TrimSpace(input.UpdatedBy)
 	if updatedBy == "" {
 		updatedBy = defaultSystemTemplateShadowActorID
-	} else if !gatewayIDPattern.MatchString(updatedBy) {
+	} else if !uuidv7.IsValid(updatedBy) {
 		return TemplateDriverUpsertResult{}, fmt.Errorf("%w: updatedBy must be UUIDv7", ErrConfigShadowInvalid)
 	}
 	if input.UnitID != nil && (*input.UnitID < 1 || *input.UnitID > 247) {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetryapi"
 )
 
@@ -319,7 +320,7 @@ func canonicalDeviceIDs(raw []string) ([]string, error) {
 	ids := make([]string, 0, len(raw))
 	for _, entry := range raw {
 		id := strings.ToLower(strings.TrimSpace(entry))
-		if !uuidV7Pattern.MatchString(id) {
+		if !uuidv7.IsValid(id) {
 			return nil, fmt.Errorf("deviceId %q must be UUIDv7", entry)
 		}
 		if _, duplicate := seen[id]; duplicate {

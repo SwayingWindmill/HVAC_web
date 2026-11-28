@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	_ "time/tzdata"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -79,7 +81,7 @@ type EnergySeriesQuery struct {
 }
 
 func (query EnergySeriesQuery) Validate() error {
-	if !validUUIDv7(query.TenantID) || !validUUIDv7(query.SiteID) {
+	if !uuidv7.IsValidAnyCase(query.TenantID) || !uuidv7.IsValidAnyCase(query.SiteID) {
 		return errors.New("analytics tenant and site must be UUIDv7")
 	}
 	if !query.EnergyType.Valid() {
@@ -208,13 +210,4 @@ type EnergySeriesResponse struct {
 	CrossGap      *EnergyCrossGap      `json:"crossGap,omitempty"`
 	Devices       []EnergyDeviceSeries `json:"devices,omitempty"`
 	Metadata      EnergySeriesMetadata `json:"metadata"`
-}
-
-func validUUIDv7(value string) bool {
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
-		return false
-	}
-	compact := strings.ReplaceAll(value, "-", "")
-	decoded, err := hex.DecodeString(compact)
-	return err == nil && len(decoded) == 16 && decoded[6]>>4 == 7 && decoded[8]>>6 == 2
 }

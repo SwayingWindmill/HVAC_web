@@ -24,6 +24,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -1587,7 +1588,7 @@ func structurallyValidRegistryGrant(value string) bool {
 }
 
 func isLowerUUIDv7(value string) bool {
-	return isLowerUUID(value) && value[14] == '7' && strings.ContainsRune("89ab", rune(value[19]))
+	return uuidv7.IsValid(value)
 }
 
 func isLowerUUID(value string) bool {

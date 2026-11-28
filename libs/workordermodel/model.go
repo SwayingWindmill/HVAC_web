@@ -2,9 +2,10 @@ package workordermodel
 
 import (
 	"errors"
-	"regexp"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const SchemaVersion = 1
@@ -12,7 +13,6 @@ const SchemaVersion = 1
 const MaximumScheduleHorizon = 365 * 24 * time.Hour
 
 var (
-	uuidV7Pattern        = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	ErrVersionConflict   = errors.New("work order version conflict")
 	ErrInvalidCreate     = errors.New("work order create request is invalid")
 	ErrInvalidAssignment = errors.New("work order assignment request is invalid")
@@ -182,7 +182,7 @@ type LifecycleInput struct {
 	OccurredAt         string
 }
 
-func IsUUIDv7(value string) bool { return uuidV7Pattern.MatchString(value) }
+func IsUUIDv7(value string) bool { return uuidv7.IsValid(value) }
 
 func Create(input CreateInput) (WorkOrder, error) {
 	occurredAt, err := parseInstant(input.OccurredAt)

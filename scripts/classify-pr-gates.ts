@@ -287,6 +287,17 @@ for (const file of files) {
     else selectBroad(file, 'shared contract changed');
   });
 
+  // libs/uuidv7 is imported across Go domains for ID generation and validation.
+  match(file.startsWith('libs/uuidv7/'), () => {
+    selectPlatform(file, 'shared UUIDv7 library changed');
+    selectRegistry(file, 'shared UUIDv7 library changed');
+    selectTelemetry(file, 'shared UUIDv7 library changed');
+    selectCommand(file, 'shared UUIDv7 library changed');
+    selectAlarm(file, 'shared UUIDv7 library changed');
+    selectWorkOrder(file, 'shared UUIDv7 library changed');
+    selectAnalytics(file, 'shared UUIDv7 library changed');
+  });
+
   // libs/grant signs and verifies every registry, telemetry, command and delegation grant.
   match(file.startsWith('libs/grant/'), () => {
     selectPlatform(file, 'shared grant signing changed');

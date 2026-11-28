@@ -450,3 +450,21 @@ test('Go layer DAG forbids upward libs->modules/services/cmd/tools, module/servi
     [],
   );
 });
+
+test('inspectOwnershipBoundaries rejects hand-rolled UUIDv7 0x70 bit-twiddling outside libs/uuidv7', () => {
+  withTempWorkspace((rootDir) => {
+    mkdirSync(join(rootDir, 'contracts/ownership'), { recursive: true });
+    writeFileSync(
+      join(rootDir, 'contracts/ownership/platform-registry.v1.json'),
+      JSON.stringify({ resources: [] }),
+      'utf8',
+    );
+    writeGoFile(rootDir, 'libs/uuidv7/uuidv7.go', 'package uuidv7\nfunc ok(b []byte) { b[6] = (b[6] & 0x0f) | 0x70 }\n');
+    writeGoFile(rootDir, 'modules/iam/internal/iam/bad_uuid.go', 'package iam\nfunc bad(b []byte) { b[6] = (b[6] & 0x0f) | 0x70 }\n');
+    const result = inspectOwnershipBoundaries(rootDir);
+    assert.deepEqual(
+      result.violations.map((v) => ({ rule: v.rule, file: v.file, symbol: v.symbol })),
+      [{ rule: 'raw-uuidv7', file: 'modules/iam/internal/iam/bad_uuid.go', symbol: '0x70' }],
+    );
+  });
+});

@@ -2,12 +2,12 @@ package registryauth
 
 import (
 	"crypto"
-	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/grant"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -24,7 +24,7 @@ type GrantStatusRequest struct {
 }
 
 func (request GrantStatusRequest) Validate() error {
-	if !validUUIDv7(request.TenantID) {
+	if !uuidv7.IsValidAnyCase(request.TenantID) {
 		return errors.New("tenant must be a UUIDv7")
 	}
 	if len(request.TokenID) == 0 || len(request.TokenID) > MaximumGrantTokenIDSize {
@@ -139,7 +139,7 @@ type DecisionRequest struct {
 }
 
 func (request DecisionRequest) Validate() error {
-	if !validUUIDv7(request.TenantID) {
+	if !uuidv7.IsValidAnyCase(request.TenantID) {
 		return errors.New("tenant must be a UUIDv7")
 	}
 	if !request.Action.Valid() || request.Action == ActionRegistryRead {
@@ -149,18 +149,6 @@ func (request DecisionRequest) Validate() error {
 		return errors.New("registry grant presenter is invalid")
 	}
 	return nil
-}
-
-func validUUIDv7(value string) bool {
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
-		return false
-	}
-	compact := strings.ReplaceAll(value, "-", "")
-	decoded := make([]byte, 16)
-	if _, err := hex.Decode(decoded, []byte(compact)); err != nil {
-		return false
-	}
-	return decoded[6]>>4 == 7 && decoded[8]>>6 == 2
 }
 
 type ReasonCode string
@@ -288,7 +276,7 @@ func ValidateGrant(claims GrantClaims, validation GrantValidation) error {
 	if !delegated && !workloadOwn {
 		return errors.New("registry grant identity fields are incomplete")
 	}
-	if !validUUIDv7(claims.TenantID) {
+	if !uuidv7.IsValidAnyCase(claims.TenantID) {
 		return errors.New("registry grant tenant identifier is invalid")
 	}
 	if len(claims.TokenID) > MaximumGrantTokenIDSize {
@@ -330,7 +318,7 @@ func validateScope(claims GrantClaims, action Action) error {
 	for _, values := range [][]string{claims.AllowedSiteIDs, claims.DeniedSiteIDs} {
 		seen := make(map[string]struct{}, len(values))
 		for _, value := range values {
-			if strings.TrimSpace(value) == "" || !validUUIDv7(value) {
+			if strings.TrimSpace(value) == "" || !uuidv7.IsValidAnyCase(value) {
 				return errors.New("registry grant Site scope contains an invalid identifier")
 			}
 			if _, exists := seen[value]; exists {

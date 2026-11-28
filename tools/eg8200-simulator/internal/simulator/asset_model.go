@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 type SpaceConfig struct {
@@ -173,7 +174,7 @@ func validateAssetModel(config Config) error {
 	pointIDs := make(map[string]struct{}, len(config.Points))
 	devicePointCount := make(map[string]int, len(devices))
 	for index, point := range config.Points {
-		if !uuidV7Pattern.MatchString(strings.TrimSpace(point.PointID)) {
+		if !uuidv7.IsValidAnyCase(strings.TrimSpace(point.PointID)) {
 			return fmt.Errorf("point %d pointId must be UUIDv7", index)
 		}
 		if _, duplicate := pointIDs[point.PointID]; duplicate {

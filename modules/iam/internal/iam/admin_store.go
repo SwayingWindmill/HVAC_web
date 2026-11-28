@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const iamAdminDatabaseRole = "s1_iam_admin"
@@ -341,7 +342,7 @@ func applyRoleTemplate(ctx context.Context, tx pgx.Tx, tenantID string, request 
 // applyRoleBinding assigns a Role to the whole Tenant (SiteID "") or to one Site. A Role that
 // carries a Tenant-scoped capability, such as the built-in admin, is assigned only Tenant-wide.
 func applyRoleBinding(ctx context.Context, tx pgx.Tx, tenantID string, request AdminMutationRequest, now time.Time) (string, int64, error) {
-	if request.PrincipalID == "" || request.RoleTemplateID == "" || (request.SiteID != "" && !isUUIDv7(request.SiteID)) ||
+	if request.PrincipalID == "" || request.RoleTemplateID == "" || (request.SiteID != "" && !uuidv7.IsValidAnyCase(request.SiteID)) ||
 		(request.Status != "ACTIVE" && request.Status != "SUSPENDED" && request.Status != "REVOKED") {
 		return "", 0, errors.New("role binding mutation is invalid")
 	}

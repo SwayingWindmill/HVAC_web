@@ -6,13 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/url"
-	"regexp"
 	"strings"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const MQTTGatewayConfigSchemaVersion = 6
-
-var uuidV7Pattern = regexp.MustCompile("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 // MQTTGatewayConfig identifies the Gateway by its Registry Device id, which is also its
 // certificate CN and MQTT client id. Devices are named on the wire by their source keys
@@ -53,7 +52,7 @@ func (config MQTTGatewayConfig) Validate() error {
 	if config.SchemaVersion != MQTTGatewayConfigSchemaVersion {
 		return fmt.Errorf("unsupported MQTT gateway config schemaVersion %d", config.SchemaVersion)
 	}
-	if !uuidV7Pattern.MatchString(config.GatewayID) || config.GatewayID != strings.ToLower(config.GatewayID) {
+	if !uuidv7.IsValid(config.GatewayID) {
 		return errors.New("MQTT gatewayId must be a lowercase UUIDv7 Registry Device id")
 	}
 	broker, err := url.Parse(strings.TrimSpace(config.BrokerURL))

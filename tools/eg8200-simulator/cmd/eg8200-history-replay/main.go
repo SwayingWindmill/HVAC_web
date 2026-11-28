@@ -16,12 +16,12 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"regexp"
 	"slices"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 	"github.com/quanlaihe/hvac-web/tools/eg8200-simulator/internal/simulator"
 )
 
@@ -29,8 +29,6 @@ const (
 	historicalReplayObservationPath = "/internal/v1/telemetry/history-replay/observations:accept"
 	maximumReplayResponseBytes      = int64(64 << 10)
 )
-
-var uuidV7Pattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 type replayObservationRequest struct {
 	ReplayDatasetID string          `json:"replayDatasetId"`
@@ -105,7 +103,7 @@ func main() {
 	if strings.TrimSpace(*plantConfigPath) == "" || strings.TrimSpace(*deviceIDsPath) == "" {
 		log.Fatal("historical replay requires plant-config and device-ids")
 	}
-	if !uuidV7Pattern.MatchString(strings.TrimSpace(*datasetID)) {
+	if !uuidv7.IsValidAnyCase(strings.TrimSpace(*datasetID)) {
 		log.Fatal("historical replay dataset-id must be UUIDv7")
 	}
 	from, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*fromValue))
@@ -186,7 +184,7 @@ func loadReplayConfigs(plantPath, deviceIDsPath string) (simulator.Config, map[s
 		return simulator.Config{}, nil, fmt.Errorf("decode replay Device ids: %w", err)
 	}
 	for _, deviceID := range plantConfig.ReportingDeviceIDs() {
-		if !uuidV7Pattern.MatchString(deviceIDs[deviceID]) {
+		if !uuidv7.IsValidAnyCase(deviceIDs[deviceID]) {
 			return simulator.Config{}, nil, fmt.Errorf("replay Device id for %s is missing or not UUIDv7", deviceID)
 		}
 	}
@@ -216,7 +214,7 @@ func loadScheduledCommands(path string) ([]scheduledCommand, error) {
 
 func runReplay(ctx context.Context, config simulator.Config, deviceIDs map[string]string, plan replayPlan, admit replayAdmitter) (int, error) {
 	datasetID, from, duration := plan.DatasetID, plan.From, plan.Duration
-	if admit == nil || !uuidV7Pattern.MatchString(datasetID) || from.IsZero() || duration <= 0 || plan.Step < 0 {
+	if admit == nil || !uuidv7.IsValidAnyCase(datasetID) || from.IsZero() || duration <= 0 || plan.Step < 0 {
 		return 0, errors.New("historical replay runner configuration is invalid")
 	}
 	commands := slices.Clone(plan.Commands)

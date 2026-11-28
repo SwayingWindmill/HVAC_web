@@ -4,16 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/quanlaihe/hvac-web/libs/edgetunnel"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
-
-var tunnelAuditUUIDv7Pattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 
 func truncateTunnelAuditUTF8(value string, maxBytes int) string {
 	if maxBytes <= 0 {
@@ -41,7 +39,7 @@ func (store *Store) RecordTunnelAudit(ctx context.Context, event edgetunnel.Audi
 	gatewayID := strings.TrimSpace(event.GatewayID)
 	sessionID := strings.TrimSpace(event.SessionID)
 	eventType := strings.TrimSpace(event.EventType)
-	if !tunnelAuditUUIDv7Pattern.MatchString(gatewayID) || !tunnelAuditUUIDv7Pattern.MatchString(sessionID) {
+	if !uuidv7.IsValidAnyCase(gatewayID) || !uuidv7.IsValidAnyCase(sessionID) {
 		return fmt.Errorf("invalid tunnel audit identifiers: gateway=%q session=%q", gatewayID, sessionID)
 	}
 	switch eventType {

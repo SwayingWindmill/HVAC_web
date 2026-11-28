@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -50,7 +52,7 @@ type DecisionRequest struct {
 }
 
 func (request DecisionRequest) Validate() error {
-	if !validUUIDv7(request.TenantID) {
+	if !uuidv7.IsValidAnyCase(request.TenantID) {
 		return errors.New("tenant must be a UUIDv7")
 	}
 	if !request.Action.Valid() {
@@ -73,7 +75,7 @@ func CanonicalTargets(targets []Target) ([]Target, error) {
 	seenDevices := make(map[string]struct{}, len(targets))
 	totalKeys := 0
 	for index, target := range targets {
-		if !validUUIDv7(target.DeviceID) {
+		if !uuidv7.IsValidAnyCase(target.DeviceID) {
 			return nil, errors.New("telemetry target device must be a UUIDv7")
 		}
 		if _, duplicate := seenDevices[target.DeviceID]; duplicate {
@@ -106,7 +108,7 @@ func CanonicalTargets(targets []Target) ([]Target, error) {
 }
 
 func ScopeDigest(action Action, tenantID string, targets []Target) (string, error) {
-	if !action.Valid() || !validUUIDv7(tenantID) {
+	if !action.Valid() || !uuidv7.IsValidAnyCase(tenantID) {
 		return "", errors.New("telemetry scope context is invalid")
 	}
 	canonical, err := CanonicalTargets(targets)
@@ -123,13 +125,4 @@ func ScopeDigest(action Action, tenantID string, targets []Target) (string, erro
 	}
 	digest := sha256.Sum256(payload)
 	return hex.EncodeToString(digest[:]), nil
-}
-
-func validUUIDv7(value string) bool {
-	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
-		return false
-	}
-	compact := strings.ReplaceAll(value, "-", "")
-	decoded, err := hex.DecodeString(compact)
-	return err == nil && len(decoded) == 16 && decoded[6]>>4 == 7 && decoded[8]>>6 == 2
 }

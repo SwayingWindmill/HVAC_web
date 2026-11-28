@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 // The most a semantic query may span and return: 31 days by hour, and rows after its dimensions.
@@ -100,7 +102,7 @@ type SemanticQuery struct {
 }
 
 func (query SemanticQuery) Validate() error {
-	if !validUUIDv7(query.TenantID) || !validUUIDv7(query.SiteID) {
+	if !uuidv7.IsValidAnyCase(query.TenantID) || !uuidv7.IsValidAnyCase(query.SiteID) {
 		return errors.New("semantic query tenant and site must be UUIDv7")
 	}
 	view, ok := semanticCatalog.View(query.View)
@@ -141,7 +143,12 @@ func (query SemanticQuery) Validate() error {
 
 // Buckets is how many time buckets of its granularity a valid query's range holds at least.
 func (query SemanticQuery) Buckets() int {
-	location, _ := time.LoadLocation(query.Timezone)
+	location := time.UTC
+	if trimmed := strings.TrimSpace(query.Timezone); trimmed != "" && trimmed != "Local" {
+		if loaded, err := time.LoadLocation(trimmed); err == nil && loaded != nil {
+			location = loaded
+		}
+	}
 	return countBuckets(query.From.In(location), query.To.In(location), query.Granularity)
 }
 

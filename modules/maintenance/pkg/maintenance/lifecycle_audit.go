@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/quanlaihe/hvac-web/libs/uuidv7"
 )
 
 const (
@@ -395,7 +396,7 @@ ORDER BY tenant_id ASC, dataset_code ASC, data_class ASC, effective_from ASC, id
 }
 
 func upsertLifecycleAuditEvent(ctx context.Context, tx pgx.Tx, finding LifecycleAuditFinding, now time.Time) error {
-	eventID, err := uuidv7(now)
+	eventID, err := uuidv7.NewAt(now)
 	if err != nil {
 		return err
 	}
