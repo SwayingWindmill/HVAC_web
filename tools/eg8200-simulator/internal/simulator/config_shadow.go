@@ -41,12 +41,20 @@ const (
 type (
 	PointCopyTarget           = edgecontrol.PointCopyTarget
 	GatewayPointMapping       = edgecontrol.GatewayPointMapping
-	GatewaySamplingPolicy     = edgecontrol.GatewaySamplingPolicy
 	ConcentratorShadowParams  = edgecontrol.ConcentratorShadowParams
 	ConcentratorShadowEIDSlot = edgecontrol.ConcentratorShadowEIDSlot
 	ConcentratorUnitShadow    = edgecontrol.ConcentratorUnitShadow
 	ShadowDriftDetail         = edgecontrol.ShadowDriftDetail
 )
+
+// GatewaySamplingPolicy extends the shared shadow contract with local simulator deadband filtering.
+type GatewaySamplingPolicy struct {
+	DeviceKey         string  `json:"deviceKey"`
+	PointCode         string  `json:"pointCode,omitempty"`
+	SampleIntervalMS  int     `json:"sampleIntervalMs"`
+	PublishIntervalMS int     `json:"publishIntervalMs"`
+	Deadband          float64 `json:"deadband,omitempty"`
+}
 
 type GatewayDesiredConfig struct {
 	DesiredRevision     int64                             `json:"desiredRevision"`

@@ -101,27 +101,15 @@
     },
     {
       "id": "GATE-GO-VULN-1",
-      "command": "node scripts/run-go-vulnerability-scan.mjs --shard=1/4",
+      "command": "node scripts/run-go-vulnerability-scan.mjs --shard=1/2",
       "category": "security",
-      "evidence": ["out/security/go-vuln-shard-1-of-4.json"]
+      "evidence": ["out/security/go-vuln-shard-1-of-2.json"]
     },
     {
       "id": "GATE-GO-VULN-2",
-      "command": "node scripts/run-go-vulnerability-scan.mjs --shard=2/4",
+      "command": "node scripts/run-go-vulnerability-scan.mjs --shard=2/2",
       "category": "security",
-      "evidence": ["out/security/go-vuln-shard-2-of-4.json"]
-    },
-    {
-      "id": "GATE-GO-VULN-3",
-      "command": "node scripts/run-go-vulnerability-scan.mjs --shard=3/4",
-      "category": "security",
-      "evidence": ["out/security/go-vuln-shard-3-of-4.json"]
-    },
-    {
-      "id": "GATE-GO-VULN-4",
-      "command": "node scripts/run-go-vulnerability-scan.mjs --shard=4/4",
-      "category": "security",
-      "evidence": ["out/security/go-vuln-shard-4-of-4.json"]
+      "evidence": ["out/security/go-vuln-shard-2-of-2.json"]
     }
   ],
   "requirements": [
@@ -269,7 +257,7 @@
       "id": "REQ-SEC-001",
       "class": "SOFTWARE_REQUIRED",
       "title": "生产依赖许可证和 Go 已知漏洞 Gate",
-      "gateIds": ["GATE-LICENSES", "GATE-GO-VULN-1", "GATE-GO-VULN-2", "GATE-GO-VULN-3", "GATE-GO-VULN-4"],
+      "gateIds": ["GATE-LICENSES", "GATE-GO-VULN-1", "GATE-GO-VULN-2"],
       "acceptance": "许可证策略通过且 Go workspace 无已知漏洞"
     },
     {

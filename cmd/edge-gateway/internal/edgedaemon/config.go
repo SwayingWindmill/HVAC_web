@@ -284,15 +284,15 @@ func (c Config) Validate() error {
 	}
 	if c.Tunnel.Enabled {
 		if strings.TrimSpace(c.PlatformBaseURL) == "" {
-			return errors.New("edgetunnel.enabled requires platformBaseUrl")
+			return errors.New("tunnel.enabled requires platformBaseUrl")
 		}
 		for _, port := range c.Tunnel.AllowedTargetPorts {
 			if !edgetunnel.IsSupportedTargetPort(port) {
-				return fmt.Errorf("edgetunnel.allowedTargetPorts contains unsupported port %d", port)
+				return fmt.Errorf("tunnel.allowedTargetPorts contains unsupported port %d", port)
 			}
 		}
 		if c.Tunnel.PingIntervalSec < 5 || c.Tunnel.PingIntervalSec > 120 {
-			return fmt.Errorf("edgetunnel.pingIntervalSec %d must be in [5,120]", c.Tunnel.PingIntervalSec)
+			return fmt.Errorf("tunnel.pingIntervalSec %d must be in [5,120]", c.Tunnel.PingIntervalSec)
 		}
 	}
 	for keyID, keyB64 := range c.OTA.TrustedPublicKeys {

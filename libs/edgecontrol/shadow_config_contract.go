@@ -16,13 +16,12 @@ type GatewayPointMapping struct {
 	CopyTargets      []PointCopyTarget `json:"copyTargets,omitempty"`
 }
 
-// GatewaySamplingPolicy configures poll/publish intervals and optional deadband for a device or point.
+// GatewaySamplingPolicy configures poll/publish intervals for a device or point.
 type GatewaySamplingPolicy struct {
-	DeviceKey         string  `json:"deviceKey"`
-	PointCode         string  `json:"pointCode,omitempty"`
-	SampleIntervalMS  int     `json:"sampleIntervalMs"`
-	PublishIntervalMS int     `json:"publishIntervalMs"`
-	Deadband          float64 `json:"deadband,omitempty"`
+	DeviceKey         string `json:"deviceKey"`
+	PointCode         string `json:"pointCode,omitempty"`
+	SampleIntervalMS  int    `json:"sampleIntervalMs"`
+	PublishIntervalMS int    `json:"publishIntervalMs"`
 }
 
 // ConcentratorShadowParams mirrors serial/LoRa concentrator parameters.

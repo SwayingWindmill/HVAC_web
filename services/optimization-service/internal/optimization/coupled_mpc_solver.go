@@ -1696,8 +1696,8 @@ func NewCoupledSolverHTTPHandler(solver *CoupledPlantMPCSolver) http.Handler {
 				DailyCost:          sol.DailyCostCNY,
 			},
 			ExpectedImpact: intelligencemodel.RecommendationExpectedImpact{
-				EnergySavingKWhPerDay: req.Baseline.DailyEnergyKWh - sol.DailyEnergyKWh,
-				CostSavingPerDay:      req.Baseline.DailyCost - sol.DailyCostCNY,
+				EnergySavingKWhPerDay: sol.EnergySavingKWhPerDay,
+				CostSavingPerDay:      sol.CostSavingPerDay,
 			},
 			Uncertainty: intelligencemodel.RecommendationUncertainty{
 				EnergyP90KWh: req.ResponseModel.EnergyUncertaintyP90KWh,

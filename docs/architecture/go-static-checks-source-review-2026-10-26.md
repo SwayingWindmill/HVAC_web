@@ -6,13 +6,13 @@
 
 | 检查 | 命令 | 在哪个门禁跑 |
 | --- | --- | --- |
-| 静态检查 | `npm run go:lint`（`scripts/run-go-lint.mjs`，golangci-lint v2.14.0，规则在 `.golangci.yml`） | 单元门禁的 `go` 一项：PR 改了 `.go`、`go.mod`/`go.sum`、`go.work` 或这些检查本身时，检查全部 55 个模块 |
+| 静态检查 | `npm run go:lint`（`scripts/run-go-lint.mjs`，golangci-lint v2.14.0，规则在 `.golangci.yml`） | 单元门禁的 `go` 一项：PR 改了 `.go`、`go.mod`/`go.sum`、`go.work` 或这些检查本身时，检查 `go.work` 列出的全部模块 |
 | 依赖和标准库漏洞 | `npm run security:go-vuln`（govulncheck v1.9.0） | 同上 |
 | 数据竞争 | 单元门禁里的 Go 测试都带 `-race`（`.github/workflows/pr-gates.yml` 的 `GOFLAGS`） | 单元门禁，按改动的领域 |
 
 ## 采纳
 
-- **每个仓库一份 `.golangci.yml`，作为开了哪些检查的唯一依据。** 放在根目录，`go.work` 里的 55 个模块都用它。
+- **每个仓库一份 `.golangci.yml`，作为开了哪些检查的唯一依据。** 放在根目录，`go.work` 里的全部模块（已合并为根模块 `.` 与 `./cmd/wecom-alert-adapter`）都用它。
 - **CI 上跑 golangci-lint、govulncheck 和 `go test -race`。** 规则里把这三项列为 Go 项目 CI 的基本项。
 - **`//nolint` 必须写明检查名和理由。** 目前代码里一个都没有；以后要加，照这个写。
 
