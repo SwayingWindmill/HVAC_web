@@ -257,11 +257,154 @@ interface WebFileLinesBaseline {
   readonly legacyFileCaps: Readonly<Record<string, number>>;
 }
 
-const NUQS_ALLOWED_FILES = new Set([
-  'apps/hvac-web/src/routes/__root.tsx',
-  'apps/hvac-web/src/components/data-table/data-table-filter-list.tsx',
-  'apps/hvac-web/src/lib/parsers.ts',
+const SONNER_ALLOWED_FILES = new Set([
+  'apps/hvac-web/src/components/ui/sonner.tsx',
+  'apps/hvac-web/src/lib/toast.ts',
 ]);
+
+const FEATURE_FORBIDDEN_APP_IMPORTS = new Set([
+  'app/main.tsx',
+  'app/router.ts',
+  'app/ShellChrome.tsx',
+  'app/RouteSurfaces.tsx',
+]);
+
+const ROUTE_FORBIDDEN_APP_IMPORTS = new Set([
+  'app/main.tsx',
+  'app/router.ts',
+]);
+
+function webSrcRelative(root: string, filePath: string): string {
+  return relative(resolve(root, 'apps/hvac-web/src'), filePath).replaceAll('\\', '/');
+}
+
+function resolveWebImport(srcRoot: string, fileSet: ReadonlySet<string>, fromFile: string, specifier: string): string | null {
+  let base: string;
+  if (specifier.startsWith('@/')) {
+    base = resolve(srcRoot, specifier.slice(2));
+  } else if (specifier.startsWith('.')) {
+    base = resolve(dirname(fromFile), specifier);
+  } else {
+    return null;
+  }
+  const candidates = [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    resolve(base, 'index.ts'),
+    resolve(base, 'index.tsx'),
+  ];
+  return candidates.find((candidate) => fileSet.has(candidate)) ?? null;
+}
+
+function collectModuleSpecifiers(sourceFile: ts.SourceFile): Array<{ readonly specifier: string; readonly line: number }> {
+  const results: Array<{ readonly specifier: string; readonly line: number }> = [];
+  const visit = (node: ts.Node): void => {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+      && node.moduleSpecifier
+      && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      results.push({ specifier: node.moduleSpecifier.text, line: lineOfNode(sourceFile, node.moduleSpecifier) });
+    } else if (ts.isCallExpression(node)
+      && node.expression.kind === ts.SyntaxKind.ImportKeyword
+      && node.arguments.length > 0
+      && ts.isStringLiteralLike(node.arguments[0]!)) {
+      results.push({ specifier: node.arguments[0]!.text, line: lineOfNode(sourceFile, node.arguments[0]!) });
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return results;
+}
+
+async function validateWebModuleGraph(root: string, errors: string[]): Promise<void> {
+  const srcRoot = resolve(root, 'apps/hvac-web/src');
+  if (!existsSync(srcRoot)) return;
+
+  const sourcePaths = (await collectFeatureSources(srcRoot))
+    .filter((filePath) => !filePath.endsWith('.gen.ts') && !filePath.endsWith('.d.ts'))
+    .sort();
+  const fileSet = new Set(sourcePaths);
+  const adjacency = new Map<string, string[]>();
+
+  for (const filePath of sourcePaths) {
+    const source = await readFile(filePath, 'utf8');
+    const sourceFile = ts.createSourceFile(
+      filePath,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      filePath.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+    );
+    const fromRel = webSrcRelative(root, filePath);
+    const targets: string[] = [];
+
+    for (const { specifier, line } of collectModuleSpecifiers(sourceFile)) {
+      const target = resolveWebImport(srcRoot, fileSet, filePath, specifier);
+      if (!target) continue;
+      const toRel = webSrcRelative(root, target);
+      if (target === filePath) {
+        errors.push(`Web circular dependency detected: ${fromRel} -> ${toRel} (line ${line})`);
+      }
+      if (!targets.includes(target)) targets.push(target);
+
+      const isFoundation = /^(?:lib|domain|api|platform)\//.test(fromRel);
+      const isUiOrBlock = /^(?:components\/(?:ui|data-table|assistant-ui)|blocks)\//.test(fromRel);
+      const isFeature = fromRel.startsWith('features/');
+      const isRoute = fromRel.startsWith('routes/');
+
+      if (isFoundation && /^(?:components|blocks|features|routes|app)\//.test(toRel)) {
+        errors.push(`${fromRel}:${line} (foundation layer) must not import from higher layer ${toRel}`);
+      } else if (isUiOrBlock && /^(?:features|routes|app)\//.test(toRel)) {
+        errors.push(`${fromRel}:${line} (UI/blocks layer) must not import from ${toRel}`);
+      } else if (isFeature && (toRel.startsWith('routes/') || FEATURE_FORBIDDEN_APP_IMPORTS.has(toRel))) {
+        errors.push(`${fromRel}:${line} (feature layer) must not import from ${toRel}`);
+      } else if (isRoute && ROUTE_FORBIDDEN_APP_IMPORTS.has(toRel)) {
+        errors.push(`${fromRel}:${line} (route layer) must not import from ${toRel}`);
+      }
+    }
+    adjacency.set(filePath, targets);
+  }
+
+  let index = 0;
+  const indices = new Map<string, number>();
+  const lowlink = new Map<string, number>();
+  const onStack = new Set<string>();
+  const stack: string[] = [];
+
+  const strongconnect = (node: string): void => {
+    indices.set(node, index);
+    lowlink.set(node, index);
+    index += 1;
+    stack.push(node);
+    onStack.add(node);
+
+    for (const neighbor of adjacency.get(node) ?? []) {
+      if (!indices.has(neighbor)) {
+        strongconnect(neighbor);
+        lowlink.set(node, Math.min(lowlink.get(node)!, lowlink.get(neighbor)!));
+      } else if (onStack.has(neighbor)) {
+        lowlink.set(node, Math.min(lowlink.get(node)!, indices.get(neighbor)!));
+      }
+    }
+
+    if (lowlink.get(node) === indices.get(node)) {
+      const component: string[] = [];
+      while (stack.length > 0) {
+        const member = stack.pop()!;
+        onStack.delete(member);
+        component.push(webSrcRelative(root, member));
+        if (member === node) break;
+      }
+      if (component.length > 1) {
+        errors.push(`Web circular dependency detected: ${component.reverse().join(' -> ')}`);
+      }
+    }
+  };
+
+  for (const filePath of sourcePaths) {
+    if (!indices.has(filePath)) strongconnect(filePath);
+  }
+}
 
 export function countSourceLines(source: string): number {
   const normalized = source.replaceAll('\r\n', '\n');
@@ -506,17 +649,21 @@ async function validateWebAstAndCopyGuardrails(root: string, errors: string[]): 
       }
     }
 
-    if (!NUQS_ALLOWED_FILES.has(relativePath)) {
-      for (const statement of sourceFile.statements) {
-        if ((ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement))
-          && statement.moduleSpecifier
-          && ts.isStringLiteralLike(statement.moduleSpecifier)) {
-          const specifier = statement.moduleSpecifier.text;
-          if (specifier === 'nuqs' || specifier.startsWith('nuqs/')) {
-            errors.push(
-              `${relativePath}:${lineOfNode(sourceFile, statement)} avoid \`nuqs\` outside DataTable filter internals; declare route search params in TanStack Router validateSearch instead`,
-            );
-          }
+    for (const statement of sourceFile.statements) {
+      if ((ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement))
+        && statement.moduleSpecifier
+        && ts.isStringLiteralLike(statement.moduleSpecifier)) {
+        const specifier = statement.moduleSpecifier.text;
+        if (specifier === 'nuqs' || specifier.startsWith('nuqs/')) {
+          errors.push(
+            `${relativePath}:${lineOfNode(sourceFile, statement)} avoid \`nuqs\`; declare route search params in TanStack Router validateSearch instead`,
+          );
+        }
+        if (!SONNER_ALLOWED_FILES.has(relativePath)
+          && (specifier === 'sonner' || specifier.startsWith('sonner/'))) {
+          errors.push(
+            `${relativePath}:${lineOfNode(sourceFile, statement)} avoid importing \`sonner\` directly; use notifySuccess/notifyError/notifyInfo/notifyWarning from @/lib/toast instead`,
+          );
         }
       }
     }
@@ -775,6 +922,7 @@ export async function validateDesignSystem(rawRoot = defaultRoot): Promise<{ err
   await validateImeSafeEnterHandlers(root, errors);
   await validateFactTileProps(root, errors);
   await validateWebAstAndCopyGuardrails(root, errors);
+  await validateWebModuleGraph(root, errors);
   await validateWebFileLinesRatchet(root, errors);
   await validateRouteTreeFreshness(root, errors);
 

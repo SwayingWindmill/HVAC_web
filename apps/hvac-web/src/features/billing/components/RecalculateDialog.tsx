@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm, useWatch } from 'react-hook-form';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { z } from 'zod';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -169,7 +169,7 @@ export function RecalculateDialog({
         }),
         queryClient.invalidateQueries({ queryKey: ['energy-series', siteId] }),
       ]);
-      toast.success(
+      notifySuccess(
         `已提交重算任务（${values.fromDate} 至 ${values.toDate}），完成后将自动刷新电费与能耗数据`,
       );
       onOpenChange(false);

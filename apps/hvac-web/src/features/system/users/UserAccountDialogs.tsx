@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import type { UserAdminMember } from '@/api/generated/platformGateway.gen';
 import {
   AlertDialog,
@@ -80,7 +80,7 @@ function ProfileForm({
     onMutate: () => onBusyChange(true),
     onSettled: () => onBusyChange(false),
     onSuccess: () => {
-      toast.success('已保存');
+      notifySuccess('已保存');
       onSaved();
     },
   });
@@ -144,7 +144,7 @@ export function ResetPasswordDialog({
   const reset = useMutation({
     mutationFn: ({ password }: { password: string }) => userAdminApi.resetPassword(csrfToken, member!.principalId, password),
     onSuccess: () => {
-      toast.success(`已为 ${member!.displayName} 设置新密码，请告诉对方`);
+      notifySuccess(`已为 ${member!.displayName} 设置新密码，请告诉对方`);
       resetAndClose();
     },
   });
@@ -217,7 +217,7 @@ export function DisableDialog({
   const disable = useMutation({
     mutationFn: () => userAdminApi.setEnabled(csrfToken, member!.principalId, false),
     onSuccess: () => {
-      toast.success(`已停用 ${member!.displayName}`);
+      notifySuccess(`已停用 ${member!.displayName}`);
       onClose();
       onDone();
     },

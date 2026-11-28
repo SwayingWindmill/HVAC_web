@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Plus, RotateCcw, Rocket } from 'lucide-react';
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import type {
   EdgeModelArtifactView,
   EdgeModelDeploymentView,
@@ -148,7 +148,7 @@ export function RegisterEdgeModelDialog({
     ),
     onSuccess: (created) => {
       setErrorMsg(null);
-      toast.success(`已登记候选版本「${created.modelKey} ${created.version}」`);
+      notifySuccess(`已登记候选版本「${created.modelKey} ${created.version}」`);
       void queryClient.invalidateQueries({ queryKey: edgeModelKeys.workspace(siteId) });
       onOpenChange(false);
     },
@@ -312,7 +312,7 @@ export function ApproveEdgeModelDialog({
     },
     onSuccess: () => {
       setErrorMsg(null);
-      toast.success(decision === 'APPROVED' ? '已审批通过，可执行下发' : '已记录驳回意见');
+      notifySuccess(decision === 'APPROVED' ? '已审批通过，可执行下发' : '已记录驳回意见');
       void queryClient.invalidateQueries({ queryKey: edgeModelKeys.workspace(siteId) });
       onOpenChange(false);
     },
@@ -433,7 +433,7 @@ export function DeployEdgeModelDialog({
     onSuccess: (res) => {
       setErrorMsg(null);
       const syncHint = res.shadowSyncStatus === 'SYNCED' ? '，配置影子已同步' : '';
-      toast.success(`已下发至${environment === 'PRODUCTION' ? '正式运行' : '影子试运行'}${syncHint}`);
+      notifySuccess(`已下发至${environment === 'PRODUCTION' ? '正式运行' : '影子试运行'}${syncHint}`);
       void queryClient.invalidateQueries({ queryKey: edgeModelKeys.workspace(siteId) });
       onOpenChange(false);
     },
@@ -556,7 +556,7 @@ export function RollbackEdgeModelDialog({
     onSuccess: (res) => {
       setErrorMsg(null);
       const restoredLabel = res.restoredDeployment ? `，已恢复版本 ${res.restoredDeployment.version}` : '，已切回系统基线';
-      toast.success(`版本回退完成${restoredLabel}`);
+      notifySuccess(`版本回退完成${restoredLabel}`);
       void queryClient.invalidateQueries({ queryKey: edgeModelKeys.workspace(siteId) });
       onOpenChange(false);
     },

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Activity, LineChart, Plus, Radio, Trash2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import type { Device, GatewayWaveformRule, TelemetryPoint, WaveformTriggerType } from '@/api/generated/platformGateway.gen';
 import { Panel } from '@/blocks/panel';
 import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
@@ -162,23 +162,23 @@ export function WaveformCapturePanel({
       return gatewayRemoteDiagApi.createWaveformRule(activeGatewayId, body, csrfToken);
     },
     onSuccess: () => {
-      toast.success('波形抓拍触发规则已新增');
+      notifySuccess('波形抓拍触发规则已新增');
       setRuleDialogOpen(false);
       void queryClient.invalidateQueries({ queryKey: gatewayWaveformRulesKey(activeGatewayId) });
     },
-    onError: (err) => toast.error(describeRemoteDiagError(err, '触发规则保存失败')),
+    onError: (err) => notifyError(describeRemoteDiagError(err, '触发规则保存失败')),
   });
 
   const deleteRuleMutation = useMutation({
     mutationFn: (ruleId: string) => gatewayRemoteDiagApi.deleteWaveformRule(activeGatewayId, ruleId, csrfToken),
     onSuccess: () => {
-      toast.success('触发规则已删除');
+      notifySuccess('触发规则已删除');
       setPendingDeleteRule(null);
       void queryClient.invalidateQueries({ queryKey: gatewayWaveformRulesKey(activeGatewayId) });
     },
     onError: (err) => {
       setPendingDeleteRule(null);
-      toast.error(describeRemoteDiagError(err, '删除触发规则失败'));
+      notifyError(describeRemoteDiagError(err, '删除触发规则失败'));
     },
   });
 
@@ -204,7 +204,7 @@ export function WaveformCapturePanel({
         csrfToken,
       ),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: gatewayWaveformRulesKey(activeGatewayId) }),
-    onError: (err) => toast.error(describeRemoteDiagError(err, '更新规则状态失败')),
+    onError: (err) => notifyError(describeRemoteDiagError(err, '更新规则状态失败')),
   });
 
   const triggerMutation = useMutation({
@@ -221,11 +221,11 @@ export function WaveformCapturePanel({
         csrfToken,
       ),
     onSuccess: () => {
-      toast.success('手动瞬态波形抓拍指令已下发并记入审计');
+      notifySuccess('手动瞬态波形抓拍指令已下发并记入审计');
       setTriggerDialogOpen(false);
       void queryClient.invalidateQueries({ queryKey: gatewayWaveformCapturesKey(activeGatewayId) });
     },
-    onError: (err) => toast.error(describeRemoteDiagError(err, '手动抓拍下发失败')),
+    onError: (err) => notifyError(describeRemoteDiagError(err, '手动抓拍下发失败')),
   });
 
   const buildDefaultPointsForDevice = (code: string, primaryPoint: string) => {

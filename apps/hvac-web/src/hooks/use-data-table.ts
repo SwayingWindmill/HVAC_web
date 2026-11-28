@@ -7,8 +7,8 @@ import {
 import {
   dataTableFeatures,
   type DataTableFeatures,
+  type DataTableMeta,
 } from '@/components/data-table/data-table-features';
-import type { DataTableMeta } from '@/lib/data-table-types';
 
 interface UseDataTableOptions<TData extends RowData> {
   readonly key: string;

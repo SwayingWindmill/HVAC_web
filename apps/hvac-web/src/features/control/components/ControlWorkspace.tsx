@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { GitBranch, TableProperties, Terminal, TriangleAlert } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { FocusHeading } from '@/app/FocusHeading';
 import { PanelLink } from '@/blocks/panel';
 import { Main } from '@/components/layout/Main';
@@ -101,7 +101,7 @@ export function ControlWorkspace() {
     mutationFn: (command: Command) => approveCommand(command.commandId, csrfToken),
     onSuccess: () => {
       setPendingAction(null);
-      toast.success('已批准');
+      notifySuccess('已批准');
       void settle();
     },
     onError: (error, command) => {
@@ -114,7 +114,7 @@ export function ControlWorkspace() {
 
   const cancel = useMutation({
     mutationFn: (command: Command) => cancelCommand(command.commandId, undefined, csrfToken),
-    onSuccess: () => { toast.success('已撤回，不会下发'); void settle(); },
+    onSuccess: () => { notifySuccess('已撤回，不会下发'); void settle(); },
     onError: (error) => { commandFailure(error); void settle(); },
   });
 
@@ -123,7 +123,7 @@ export function ControlWorkspace() {
       reconcileCommand(commandId, outcome, csrfToken),
     onSuccess: () => {
       setPendingAction(null);
-      toast.success('已记录现场确认结果');
+      notifySuccess('已记录现场确认结果');
       void settle();
     },
     onError: (error) => {

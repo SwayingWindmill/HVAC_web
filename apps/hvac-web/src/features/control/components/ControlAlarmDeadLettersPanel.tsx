@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { RefreshCw, RotateCcw } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import { DataTableBlock } from '@/blocks/data-table';
 import { PanelCount } from '@/blocks/panel';
 import { DataTable, type DataTableFeatures } from '@/components/data-table';
@@ -42,11 +42,11 @@ export function ControlAlarmDeadLettersPanel({
   const replay = useMutation({
     mutationFn: (outboxId: string) => replayControlAlarmDeadLetter(siteId, outboxId, csrfToken),
     onSuccess: (result) => {
-      toast.success(result.replayed ? '已重新提交到控制告警投递队列' : '该死信此前已重投，正在队列中处理');
+      notifySuccess(result.replayed ? '已重新提交到控制告警投递队列' : '该死信此前已重投，正在队列中处理');
       void queryClient.invalidateQueries({ queryKey: controlAlarmDeadLetterKeys.site(siteId) });
     },
     onError: (error) => {
-      toast.error(error instanceof CommandRequestError ? error.message : '死信重投失败，请稍后重试');
+      notifyError(error instanceof CommandRequestError ? error.message : '死信重投失败，请稍后重试');
     },
   });
 

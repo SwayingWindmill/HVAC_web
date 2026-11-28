@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { Leaf, Plus } from 'lucide-react';
 import { useMemo, useState, type ReactNode } from 'react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { PageHeader } from '@/blocks/page-header';
 import { Panel, PanelHeader } from '@/blocks/panel';
 import { InfoTip } from '@/components/info-tip';
@@ -245,7 +245,7 @@ export function SavingsWorkspace() {
         machines={machines}
         onOpenChange={setRegistering}
         onRegistered={(measure) => {
-          toast.success('措施已登记');
+          notifySuccess('措施已登记');
           void queryClient.invalidateQueries({ queryKey: savingsKeys.all(site.id) });
           inspect(measure.id);
         }}

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Rocket, Trash2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import type {
   Device,
   OTACampaignCreateRequest,
@@ -154,7 +154,7 @@ export function OtaCampaignCreateDialog({
     onSuccess: (detail) => {
       void queryClient.invalidateQueries({ queryKey: otaKeys.campaigns() });
       queryClient.setQueryData(otaKeys.campaignDetail(detail.id), detail);
-      toast.success(`灰度发布任务「${detail.name}」已发起`);
+      notifySuccess(`灰度发布任务「${detail.name}」已发起`);
       resetForm();
       onOpenChange(false);
       onCreated(detail);

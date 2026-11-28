@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { ArrowUpRight, ClipboardList, Link2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -115,8 +115,8 @@ function SensorInspectionDetail({
 
   const copyLink = () => {
     void navigator.clipboard.writeText(window.location.href).then(
-      () => toast.success('链接已复制'),
-      () => toast.error('无法复制链接'),
+      () => notifySuccess('链接已复制'),
+      () => notifyError('无法复制链接'),
     );
   };
 
@@ -341,7 +341,7 @@ function SensorInspectionDetail({
             },
           ]}
           onCreated={() => {
-            toast.success('已创建传感器校准工单');
+            notifySuccess('已创建传感器校准工单');
             void queryClient.invalidateQueries({
               queryKey: integrationsKeys.externalWorkOrders(siteId, row.workOrderSourceRef),
             });

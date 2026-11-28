@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PlatformApiError, type EnergySeriesResponse } from '../apps/hvac-web/src/api/generated/platformGateway.gen.ts';
+import { energyQueryNow } from '../apps/hvac-web/src/lib/site-time.ts';
 import {
   comparePeriods,
   completedComparisonTotals,
-  energyQueryNow,
   energyRetryDelay,
   completeOnly,
   copUnavailableText,

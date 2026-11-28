@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Download, ShieldAlert } from 'lucide-react';
 import { Fragment, useState } from 'react';
-import { toast } from 'sonner';
+import { notifyError, notifyInfo, notifySuccess } from '@/lib/toast';
 import { FactTile } from '@/blocks/fact-list';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -116,7 +116,7 @@ export function NegativeSamplesDrawer({
         offset: 0,
       });
       if (page.items.length === 0) {
-        toast.info('当前筛选条件下没有可导出的负样本记录');
+        notifyInfo('当前筛选条件下没有可导出的负样本记录');
         return;
       }
       const jsonl = serializeNegativeSamplesJsonl(page.items);
@@ -129,9 +129,9 @@ export function NegativeSamplesDrawer({
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(objectUrl);
-      toast.success(`已导出 ${page.items.length} 条负样本 JSONL 数据集`);
+      notifySuccess(`已导出 ${page.items.length} 条负样本 JSONL 数据集`);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : '导出负样本失败，请稍后重试');
+      notifyError(err instanceof Error ? err.message : '导出负样本失败，请稍后重试');
     } finally {
       setExporting(false);
     }

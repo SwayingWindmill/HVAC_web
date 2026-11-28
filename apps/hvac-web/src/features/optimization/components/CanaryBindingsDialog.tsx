@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { GitBranch, RotateCcw } from 'lucide-react';
 import { useState, type KeyboardEvent } from 'react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { FactTile } from '@/blocks/fact-list';
 import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -117,7 +117,7 @@ export function CanaryBindingsDialog({
     }) => upsertSiteOptimizationCanaryBinding(siteId, targetLoop, { servingRef, status: nextStatus }, csrfToken),
     onSuccess: (saved) => {
       setFormError(null);
-      toast.success(`已更新「${formatLoopKey(saved.loopKey)}」灰度策略绑定`);
+      notifySuccess(`已更新「${formatLoopKey(saved.loopKey)}」灰度策略绑定`);
       void queryClient.invalidateQueries({ queryKey: optimizationKeys.canaryBindings(siteId) });
       void queryClient.invalidateQueries({ queryKey: optimizationKeys.governanceSummary(siteId) });
     },
@@ -131,7 +131,7 @@ export function CanaryBindingsDialog({
     mutationFn: (targetLoop: string) => deleteSiteOptimizationCanaryBinding(siteId, targetLoop, csrfToken),
     onSuccess: (deleted) => {
       setFormError(null);
-      toast.success(`已将「${formatLoopKey(deleted.loopKey)}」切回默认策略`);
+      notifySuccess(`已将「${formatLoopKey(deleted.loopKey)}」切回默认策略`);
       void queryClient.invalidateQueries({ queryKey: optimizationKeys.canaryBindings(siteId) });
       void queryClient.invalidateQueries({ queryKey: optimizationKeys.governanceSummary(siteId) });
     },

@@ -4,7 +4,7 @@ import test from 'node:test';
 import {
   normalizeAssistantMarkdown,
   withMissingTableDividers,
-} from '../apps/hvac-web/src/features/assistant/answer-markdown.ts';
+} from '../apps/hvac-web/src/lib/answer-markdown.ts';
 import { deduplicateFindingKeyFigures } from '../apps/hvac-web/src/features/assistant/finding-dedup.ts';
 
 test('a pipe table written without its GFM divider row gets a matching divider inserted (#669)', () => {

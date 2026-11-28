@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { RefreshCw, RotateCcw } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import { DataTableBlock } from '@/blocks/data-table';
 import { PanelCount } from '@/blocks/panel';
 import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
@@ -57,7 +57,7 @@ export function RuleActionDeadLettersPanel({
   const replay = useMutation({
     mutationFn: (outboxId: string) => replayAlarmRuleDeadLetter(siteId, outboxId, csrfToken),
     onSuccess: (result) => {
-      toast.success(
+      notifySuccess(
         result.status === 'DELIVERED'
           ? '该规则动作此前已完成投递'
           : '已重新提交到规则动作投递队列',
@@ -65,7 +65,7 @@ export function RuleActionDeadLettersPanel({
       void queryClient.invalidateQueries({ queryKey: alarmKeys.ruleDeadLetters(siteId) });
     },
     onError: (error) => {
-      toast.error(error instanceof AlarmRequestError ? error.message : '重投规则动作失败，请稍后重试');
+      notifyError(error instanceof AlarmRequestError ? error.message : '重投规则动作失败，请稍后重试');
     },
     onSettled: () => setPendingReplay(null),
   });

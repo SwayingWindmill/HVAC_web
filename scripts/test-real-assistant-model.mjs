@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { assistantThreadFrom } from '../apps/hvac-web/src/features/assistant/thread-model.ts';
-import { withBoldLeadOnItsOwnLine } from '../apps/hvac-web/src/features/assistant/answer-markdown.ts';
+import { withBoldLeadOnItsOwnLine } from '../apps/hvac-web/src/lib/answer-markdown.ts';
 
 const session = (status, activeRunId, revision) => ({
   id: 'session-1', tenantId: 'tenant-1', siteId: 'site-1', agentDefinitionId: 'operations-investigation.v1',

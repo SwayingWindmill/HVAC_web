@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Controller, useForm } from 'react-hook-form';
 import { Plus, X } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import type { BuiltInRoleKey, UserAdminMember, UserAdminRole } from '@/api/generated/platformGateway.gen';
 import { ConfirmDiscardDialog } from '@/components/confirm-discard-dialog';
 import { Button } from '@/components/ui/button';
@@ -198,7 +198,7 @@ export function CreateUserDialog({
         assignments: [assignmentOf(values, roles, validTo)],
       }),
     onSuccess: (_, { values }) => {
-      toast.success(`已创建 ${values.displayName}，请把用户名和密码告诉对方`);
+      notifySuccess(`已创建 ${values.displayName}，请把用户名和密码告诉对方`);
       resetAndClose();
       onDone();
     },

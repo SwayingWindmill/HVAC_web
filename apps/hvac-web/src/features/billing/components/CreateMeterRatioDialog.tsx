@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Controller, useForm, useWatch } from 'react-hook-form';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { z } from 'zod';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -200,7 +200,7 @@ export function CreateMeterRatioDialog({
         ? '已创建电表倍率版本，后台重算任务已加入队列'
         : '已创建电表倍率版本';
       onNotice(message);
-      toast.success(message);
+      notifySuccess(message);
       onOpenChange(false);
     },
     onError: (error) => {

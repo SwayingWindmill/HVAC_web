@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Controller, useForm, useWatch } from 'react-hook-form';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { z } from 'zod';
 import type { UtilityBill } from '@/api/generated/platformGateway.gen';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -99,7 +99,7 @@ export function ConfirmArchiveBillDialog({
     },
     onSuccess: async (confirmed) => {
       await queryClient.invalidateQueries({ queryKey: billingKeys.billsRoot(siteId) });
-      toast.success(
+      notifySuccess(
         `已确认归档 ${formatBillingMonthLabel(confirmed.billingMonth)}（${METER_SCOPE_LABEL[confirmed.meterScope]}）结算电费单`,
       );
       onOpenChange(false);

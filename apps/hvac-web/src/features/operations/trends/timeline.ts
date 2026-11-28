@@ -1,4 +1,4 @@
-import { siteMidnight, wallTime } from '../../energy-analysis/consumption/model.ts';
+import { siteMidnight, wallTime } from '../../../lib/site-time.ts';
 import type { HourlyPoint } from '../systems-devices/device-history.ts';
 
 export type TrendGranularity = 'MINUTE' | 'FIVE_MINUTE' | 'QUARTER_HOUR' | 'HOUR' | 'DAY';

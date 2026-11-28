@@ -1,5 +1,4 @@
 import { useEffect } from 'react';
-import { NuqsAdapter } from 'nuqs/adapters/tanstack-router';
 import { Outlet, createRootRouteWithContext, useLocation } from '@tanstack/react-router';
 import type { HvacRouterContext } from '@/app/router-context';
 import { NotFoundSurface, RouteErrorSurface } from '@/app/RouteSurfaces';
@@ -17,9 +16,5 @@ function RootRoute() {
   useEffect(() => {
     observability.record({ name: 'route_change', fields: { path: location.pathname } });
   }, [location.pathname, location.searchStr, observability]);
-  return (
-    <NuqsAdapter>
-      <Outlet />
-    </NuqsAdapter>
-  );
+  return <Outlet />;
 }

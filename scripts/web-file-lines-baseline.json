@@ -4,7 +4,6 @@
   "maxLinesPerFile": 600,
   "legacyFileCaps": {
     "apps/hvac-web/src/app/shell-runtime.ts": 1047,
-    "apps/hvac-web/src/components/data-table/data-table-filter-list.tsx": 865,
     "apps/hvac-web/src/features/alarms/components/AlarmRuleConditionEditor.tsx": 854,
     "apps/hvac-web/src/features/alarms/components/AlarmRuleEditorSheet.tsx": 806,
     "apps/hvac-web/src/features/billing/billing-model.ts": 733,

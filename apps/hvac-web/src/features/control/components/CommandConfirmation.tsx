@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { ArrowRight } from 'lucide-react';
 import { Fragment, useId, useState } from 'react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -117,7 +117,7 @@ export function CodeField({
 }
 
 export function commandFailure(error: unknown) {
-  toast.error(error instanceof CommandRequestError ? error.message : '指令服务暂时不可用，请稍后再试');
+  notifyError(error instanceof CommandRequestError ? error.message : '指令服务暂时不可用，请稍后再试');
 }
 
 /** Submits a confirmed command to Command Governance and refreshes the Site's command log. */
@@ -127,7 +127,7 @@ export function useSubmitCommand(siteId: string, csrfToken: string) {
     mutationFn: ({ pending, verificationCode }: { readonly pending: PendingCommand; readonly verificationCode?: string }) =>
       createCommand({ assetId: pending.target.assetId, commandPointId: pending.pointId, parameters: pending.parameters, verificationCode }, csrfToken),
     onSuccess: (command: Command) => {
-      toast.success(command.status === 'AWAITING_APPROVAL' ? `已提交，${APPROVAL_LABEL[command.approvalPolicy]}后下发` : '已提交，正在下发');
+      notifySuccess(command.status === 'AWAITING_APPROVAL' ? `已提交，${APPROVAL_LABEL[command.approvalPolicy]}后下发` : '已提交，正在下发');
       void queryClient.invalidateQueries({ queryKey: commandKeys.site(siteId) });
     },
   });

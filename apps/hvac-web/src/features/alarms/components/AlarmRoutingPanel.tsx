@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { RefreshCw } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import { DataTableBlock } from '@/blocks/data-table';
 import { FactTile } from '@/blocks/fact-list';
 import { Panel, PanelHeader } from '@/blocks/panel';
@@ -60,10 +60,10 @@ export function AlarmRoutingPanel({
     onSuccess: (next) => {
       const { changed, ...summary } = next;
       queryClient.setQueryData(alarmKeys.routing(siteId), summary);
-      toast.success(changed ? '站点通知路由配置已热更新并生效' : '配置文件指纹未变化，继续沿用当前路由');
+      notifySuccess(changed ? '站点通知路由配置已热更新并生效' : '配置文件指纹未变化，继续沿用当前路由');
     },
     onError: (error) => {
-      toast.error(error instanceof AlarmRequestError ? error.message : '路由配置热重载失败，已保留原生效配置');
+      notifyError(error instanceof AlarmRequestError ? error.message : '路由配置热重载失败，已保留原生效配置');
       void queryClient.invalidateQueries({ queryKey: alarmKeys.routing(siteId) });
     },
   });

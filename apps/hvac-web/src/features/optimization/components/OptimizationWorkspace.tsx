@@ -11,7 +11,7 @@ import {
   TriangleAlert,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { GatewayRequestError } from '@/api/gateway-client';
 import type { WorkOrder } from '@/api/work-orders';
 import { PageHeader } from '@/blocks/page-header';
@@ -222,7 +222,7 @@ export function OptimizationWorkspace() {
     if (!waiting) return;
     if (recommendation?.runId === waiting.runId) {
       setWaiting(null);
-      toast.success('已生成新的优化建议');
+      notifySuccess('已生成新的优化建议');
       return;
     }
     const timer = window.setTimeout(() => {

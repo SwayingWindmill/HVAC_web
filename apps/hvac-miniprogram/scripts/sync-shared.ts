@@ -16,7 +16,7 @@ const SHARED: readonly { readonly from: string; readonly to: string; readonly im
   { from: 'apps/hvac-web/src/domain/plantTopology.ts', to: 'miniprogram/shared/plantTopology.ts' },
   { from: 'apps/hvac-web/src/features/assistant/thread-model.ts', to: 'miniprogram/shared/thread-model.ts', imports: [AGENT_TYPES] },
   { from: 'apps/hvac-web/src/features/assistant/tool-labels.ts', to: 'miniprogram/shared/tool-labels.ts' },
-  { from: 'apps/hvac-web/src/features/assistant/answer-markdown.ts', to: 'miniprogram/shared/answer-markdown.ts' },
+  { from: 'apps/hvac-web/src/lib/answer-markdown.ts', to: 'miniprogram/shared/answer-markdown.ts' },
 ];
 
 const header = (from: string) => `// 由 apps/hvac-miniprogram/scripts/sync-shared.ts 从 ${from} 复制，不要在这里改。\n`;

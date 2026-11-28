@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CalendarDays, Pencil, Plus, Trash2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import { Panel, PanelHeader } from '@/blocks/panel';
 import { StateCard } from '@/blocks/state/state-card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -31,7 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { wallTime } from '@/features/energy-analysis/consumption/model';
+import { wallTime } from '@/lib/site-time';
 import { formatTime } from '@/lib/operator-format';
 import {
   formatWeekdayShort,
@@ -88,7 +88,7 @@ export function SiteHolidaysPanel({
         ? `已删除 ${result.holidayDate} 日历覆盖，后台重算任务已加入队列`
         : `已删除 ${result.holidayDate} 日历覆盖`;
       onNotice(message);
-      toast.success(message);
+      notifySuccess(message);
       setDeletingHoliday(null);
     },
     onError: (error) => {

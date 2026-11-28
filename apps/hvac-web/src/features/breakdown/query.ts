@@ -2,7 +2,6 @@ import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { siteAssetModelQuery } from '@/api/site-asset-model';
 import {
-  energyQueryNow,
   energyRetryDelay,
   periodWindow,
   previousWindow,
@@ -11,6 +10,7 @@ import {
   type EnergyPeriod,
   type Granularity,
 } from '@/features/energy-analysis/consumption/model';
+import { energyQueryNow } from '@/lib/site-time';
 import { useEnergyReader } from '@/features/energy-analysis/consumption/query';
 import type { EnergySeriesResponse } from '@/api/generated/platformGateway.gen';
 import { energyBreakdown, type Breakdown, type Machine } from './breakdown-model';

@@ -11,8 +11,8 @@ import type {
 } from '../../api/generated/platformGateway.gen.ts';
 import type { DeviceHistoryAggregateBucket } from '../../api/generated/s2Telemetry.gen.ts';
 import type { CreateWorkOrderInput, WorkOrder, WorkOrderSourceReference } from '../../api/work-orders.ts';
-import type { TrendsSearch } from '../../routes/_app._site.operations.trends.tsx';
-import { siteMidnight, wallTime } from '../energy-analysis/consumption/model.ts';
+import type { TrendsSearch } from '../operations/trends/trends-search.ts';
+import { siteMidnight, wallTime } from '../../lib/site-time.ts';
 
 export const DAY_OF_WEEK_LABELS: Readonly<Record<number, string>> = {
   1: '周一',

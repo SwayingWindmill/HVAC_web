@@ -27,12 +27,8 @@
 页面、标签页级别的表格用 `DataTableBlock`：
 
 ```tsx
-<DataTableBlock title="工单" description="当前站点的工单，可排序、筛选和选择显示的列。" actions={...}>
-  <DataTable table={table} footer={...}>
-    <DataTableAdvancedToolbar table={table}>
-      ...
-    </DataTableAdvancedToolbar>
-  </DataTable>
+<DataTableBlock title="工单" description="当前站点的工单，可排序、筛选和分页。" controls={...} actions={...}>
+  <DataTable table={table} footer={...} />
 </DataTableBlock>
 ```
 
@@ -43,7 +39,6 @@
 面板或侧栏里的小块数据，不要用第二种表格模式：
 
 - 小的只读对比、参数、依据表：直接用 shadcn 的 `Table`。
-- 左边选对象、右边看详情：用 shadcn 的 `ItemGroup` / `Item`。
 - 按时间排的执行或变更记录：真是事件时用时间线。
 - 表格内编辑、大量数据的虚拟滚动、固定列、树形表格：先看 ReUI / tablecn 的 Data Grid，再考虑自己写。
 

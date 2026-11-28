@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getRouteApi, useNavigate } from '@tanstack/react-router';
 import { SearchCheck, Stethoscope } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { toast } from 'sonner';
+import { notifyError, notifyInfo, notifySuccess, notifyWarning } from '@/lib/toast';
 import { GatewayRequestError } from '@/api/gateway-client';
 import { PageHeader } from '@/blocks/page-header';
 import { Panel } from '@/blocks/panel';
@@ -187,13 +187,13 @@ export function DiagnosticsWorkspace() {
     onSuccess: (result) => {
       setOutcome({ ...result, at: Date.now() });
       if (result.status === 'FINDING') {
-        toast.warning(`发现问题：${LOW_DELTA_T.title}`);
+        notifyWarning(`发现问题：${LOW_DELTA_T.title}`);
         void queryClient.invalidateQueries({ queryKey: diagnosticsKeys.findings(site.id) });
-      } else if (result.status === 'ONGOING') toast.warning(`问题仍在持续：${LOW_DELTA_T.title}`);
-      else if (result.status === 'NOT_OPERATING') toast.info('冷站运行时间不足，本次不判断温差');
-      else toast.success('诊断完成，未发现问题');
+      } else if (result.status === 'ONGOING') notifyWarning(`问题仍在持续：${LOW_DELTA_T.title}`);
+      else if (result.status === 'NOT_OPERATING') notifyInfo('冷站运行时间不足，本次不判断温差');
+      else notifySuccess('诊断完成，未发现问题');
     },
-    onError: (error) => toast.error(error instanceof GatewayRequestError ? error.message : '诊断服务暂时不可用'),
+    onError: (error) => notifyError(error instanceof GatewayRequestError ? error.message : '诊断服务暂时不可用'),
   });
 
   const all = findings.data ?? [];

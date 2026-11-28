@@ -1,5 +1,5 @@
 import type { SiteTariff } from '../../api/generated/platformGateway.gen';
-import { siteMidnight, wallTime } from '../energy-analysis/consumption/model.ts';
+import { siteMidnight, wallTime } from '../../lib/site-time.ts';
 import { daySchedule, periodAt, type PeriodCode } from '../tariff/tariff-model.ts';
 import type { QuarterHour } from './demand-model.ts';
 import type { LoadForecastPoint } from './forecast-model.ts';

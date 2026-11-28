@@ -1,7 +1,7 @@
 import type { Alarm, AlarmSeverity } from '../alarms/alarm-api';
 import type { WorkOrder } from '../../api/work-orders';
 import type { Finding } from '../diagnostics/diagnostics-model';
-import { siteMidnight, wallTime } from '../energy-analysis/consumption/model.ts';
+import { siteMidnight, wallTime } from '../../lib/site-time.ts';
 
 // A Site's monthly report. A closed month reads from its snapshot, kept by report-service once the
 // month was over; the running month, and a closed month without one, are assembled on demand

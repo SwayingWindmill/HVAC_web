@@ -1,6 +1,7 @@
 import type { SiteTariff, TariffPeriod } from '../../api/generated/platformGateway.gen';
 import { isOneOf } from '../../lib/typed.ts';
-import { wallTime, type EnergyCost } from '../energy-analysis/consumption/model.ts';
+import { wallTime } from '../../lib/site-time.ts';
+import { type EnergyCost } from '../energy-analysis/consumption/model.ts';
 
 // The Site's Tariff periods, and the costs the Energy analytics owner priced at them. Settlement
 // stays the authority on the bill; the demand charge is still estimated here from the published rates.

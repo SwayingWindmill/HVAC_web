@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getRouteApi, Link } from '@tanstack/react-router';
 import { ClipboardPlus, LineChart, Link2, SlidersHorizontal } from 'lucide-react';
 import { useMemo, type ReactNode } from 'react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import { siteAssetModelQuery } from '@/api/site-asset-model';
 import { listWorkOrders } from '@/api/work-orders';
 import { BrandMark } from '@/components/brand-mark';
@@ -170,7 +170,7 @@ export function FindingDetail({ finding, assetName, plant, meterId, onCreate }: 
     enabled: canListWorkOrders,
   });
   const copyLink = () => {
-    void navigator.clipboard.writeText(window.location.href).then(() => toast.success('链接已复制'), () => toast.error('无法复制链接'));
+    void navigator.clipboard.writeText(window.location.href).then(() => notifySuccess('链接已复制'), () => notifyError('无法复制链接'));
   };
   const metricName = isExcess ? '偏差比' : rule ? '供回水温差' : '测量值';
   return (

@@ -1,16 +1,12 @@
 import {
-  PlatformApiError,
-  type EnergySeriesResponse,
-  type MonthlyElectricityBudget,
-  type UtilityBill,
-  type UtilityBillBasicChargeMode,
-  type UtilityBillMeterScope,
-  type UtilityBillStatus,
-  type UtilityBillTouBreakdown,
+  PlatformApiError, type EnergySeriesResponse, type MonthlyElectricityBudget,
+  type UtilityBill, type UtilityBillBasicChargeMode, type UtilityBillMeterScope,
+  type UtilityBillStatus, type UtilityBillTouBreakdown,
 } from '../../api/generated/platformGateway.gen.ts';
 import type { AccountingRecalcGranularity } from '../../api/accounting-recalc.ts';
 import { formatDecimal, formatTime } from '../../lib/operator-format.ts';
-import { siteDayKey, siteMidnight, wallTime } from '../energy-analysis/consumption/model.ts';
+import { siteMidnight, wallTime } from '../../lib/site-time.ts';
+import { siteDayKey } from '../energy-analysis/consumption/model.ts';
 import { PERIOD_LABEL, PERIOD_ORDER, sumCosts, type CostInput, type PeriodCode } from '../tariff/tariff-model.ts';
 
 const DAY_MS = 86_400_000;

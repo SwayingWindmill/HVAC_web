@@ -30,6 +30,7 @@ import {
   type TouCost,
 } from "@/features/tariff/tariff-model";
 import { formatDecimal, formatTime } from "@/lib/operator-format";
+import { wallTime } from "@/lib/site-time";
 import { isOneOf } from "@/lib/typed";
 import {
   copUnavailableText,
@@ -38,7 +39,6 @@ import {
   periodWindow,
   relativeChange,
   summaryCostBuckets,
-  wallTime,
   type BucketComparison,
   type EnergyPeriod,
   type EnergySummary,

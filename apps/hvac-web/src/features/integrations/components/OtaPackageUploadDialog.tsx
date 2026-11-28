@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, Upload } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import type { OTAPackage } from '@/api/generated/platformGateway.gen';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -92,7 +92,7 @@ export function OtaPackageUploadDialog({
     mutationFn: async (formData: FormData) => otaApi.uploadPackage(formData, csrfToken),
     onSuccess: (pkg) => {
       void queryClient.invalidateQueries({ queryKey: otaKeys.packages() });
-      toast.success(`升级包 v${pkg.version} 已上传并签名`);
+      notifySuccess(`升级包 v${pkg.version} 已上传并签名`);
       resetForm();
       onOpenChange(false);
       onUploaded?.(pkg);

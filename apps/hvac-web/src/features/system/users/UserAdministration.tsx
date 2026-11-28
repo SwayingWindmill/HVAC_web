@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { MoreHorizontal, UserPlus } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifyError, notifySuccess } from '@/lib/toast';
 import type { UserAdminMember } from '@/api/generated/platformGateway.gen';
 import { Panel, PanelHeader } from '@/blocks/panel';
 import { Button } from '@/components/ui/button';
@@ -70,8 +70,8 @@ export function UserAdministration({ csrfToken, sites }: { readonly csrfToken: s
 
   const enable = useMutation({
     mutationFn: (member: UserAdminMember) => userAdminApi.setEnabled(csrfToken, member.principalId, true),
-    onSuccess: () => { toast.success('已启用，可以重新登录'); void refresh(); },
-    onError: (error) => toast.error(userAdminErrorMessage(error)),
+    onSuccess: () => { notifySuccess('已启用，可以重新登录'); void refresh(); },
+    onError: (error) => notifyError(userAdminErrorMessage(error)),
   });
 
   const members = directory.data?.members ?? [];

@@ -1,3 +1,4 @@
+import type * as React from 'react';
 import {
   columnFacetingFeature,
   columnFilteringFeature,
@@ -21,10 +22,16 @@ import {
   tableFeatures,
 } from '@tanstack/react-table';
 
-import type {
-  DataTableColumnMeta,
-  DataTableMeta,
-} from '@/lib/data-table-types';
+export interface DataTableMeta {
+  readonly [key: string]: unknown;
+}
+
+export interface DataTableColumnMeta {
+  readonly label?: string;
+  readonly placeholder?: string;
+  readonly unit?: string;
+  readonly icon?: React.ComponentType<React.ComponentProps<'svg'>>;
+}
 
 export const dataTableFeatures = tableFeatures({
   columnFilteringFeature,

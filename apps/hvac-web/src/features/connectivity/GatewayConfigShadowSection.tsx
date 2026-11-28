@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { RefreshCw, Settings2 } from 'lucide-react';
-import { toast } from 'sonner';
+import { notifySuccess } from '@/lib/toast';
 import type { Device, GatewayDesiredConfig } from '@/api/generated/platformGateway.gen';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
@@ -91,7 +91,7 @@ export function GatewayConfigShadowSection({
       queryClient.setQueryData(gatewayConfigShadowKey(gateway.id), updated);
       setValidationError(null);
       setEditorOpen(false);
-      toast.success(
+      notifySuccess(
         updated.desired
           ? `配置影子已保存（期望修订 v${updated.desired.desiredRevision}）`
           : '配置影子已更新',
