@@ -5,9 +5,11 @@ import type { Site } from './site';
 import {
   fetchRecentDays,
   queryEnergySeries,
-  todayStart,
+  resolveSiteTodayStart,
   type Window,
 } from './today';
+
+export { resolveSiteTodayStart };
 
 export const energySeries = (
   site: Site,
@@ -23,5 +25,5 @@ export const electricityByDevice = (site: Site, window: Window) =>
 /** The Site's last two days of electricity, enough to find where today began. */
 export const recentDays = (site: Site, now: Date) => fetchRecentDays(gateway, site, now);
 
-/** Where today began at the Site; null when it has no electricity reading in the last two days. */
-export const siteTodayStart = async (site: Site, now: Date) => todayStart(await recentDays(site, now), now);
+/** Where today began at the Site; null when Intl lacks timezone support and recent days have no reading. */
+export const siteTodayStart = (site: Site, now: Date) => resolveSiteTodayStart(gateway, site, now);

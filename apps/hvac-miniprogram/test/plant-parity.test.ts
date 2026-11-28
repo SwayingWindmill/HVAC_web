@@ -379,3 +379,21 @@ test('web and mini program produce identical PlantUnit aggregation for dual-boun
   assert.equal(web.devices.find((d) => d.deviceId === chwpMainId)?.category, 'METER');
   assert.equal(phone.devices.find((d) => d.deviceId === chwpMainId)?.runState, 'RUNNING');
 });
+
+test('web and mini program preserve SLEEPING presence identically across devices, units, and onlineCount', () => {
+  const sleepingSnapshots = structuredClone(snapshots);
+  const chillerId = assetModel.devices.find((device: { displayName: string }) => device.displayName.startsWith('CHILLER-01')).id;
+  sleepingSnapshots.items.find((item: { deviceId: string }) => item.deviceId === chillerId).snapshot.presence.currentState = 'SLEEPING';
+
+  const byDeviceId = new Map(sleepingSnapshots.items.map((item: { deviceId: string; status: string; snapshot: unknown; problem: unknown }) => [
+    item.deviceId, item.status === 'OK' ? { status: 'ok', snapshot: item.snapshot } : { status: 'error', problem: item.problem },
+  ]));
+  const web = buildPlantView(buildAssetsRows({ assetModel, snapshots: byDeviceId as never, now }), assetModel);
+  const phone = buildPlant(assetModel, sleepingSnapshots, now);
+
+  assert.equal(phone.devices.find((d) => d.deviceId === chillerId)?.connection, 'SLEEPING');
+  assert.equal(web.devices.find((d) => d.deviceId === chillerId)?.connection, 'SLEEPING');
+  assert.equal(phone.units.find((u) => u.deviceIds.includes(chillerId))?.connection, 'SLEEPING');
+  assert.equal(web.units.find((u) => u.deviceIds.includes(chillerId))?.connection, 'SLEEPING');
+  assert.equal(phone.onlineCount, web.onlineCount);
+});

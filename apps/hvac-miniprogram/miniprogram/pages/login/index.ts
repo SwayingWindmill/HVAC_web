@@ -1,4 +1,8 @@
+import { clearAssistantChoice } from '../../lib/assistant-choice';
+import { clearPlantCache } from '../../lib/plant-load';
 import { gateway, weChatLogin } from '../../lib/platform';
+import { clearSites } from '../../lib/site';
+import { clearTabBadge } from '../../lib/tab';
 import type { SignInOutcome } from '../../lib/gateway';
 
 Page({
@@ -54,6 +58,10 @@ Page({
 
   finish(outcome: SignInOutcome) {
     if (outcome.kind === 'signed-in') {
+      clearSites();
+      clearPlantCache();
+      clearAssistantChoice();
+      clearTabBadge();
       this.setData({ busy: false, password: '', code: '' });
       wx.switchTab({ url: '/pages/overview/index' });
       return;

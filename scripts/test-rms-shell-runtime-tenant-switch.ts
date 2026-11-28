@@ -94,6 +94,14 @@ const realtimeStatus = evaluateModule(
     throw new Error(`unexpected require: ${specifier}`);
   },
 );
+const shellRuntimeHelpers = evaluateModule(
+  compileTsModule('apps/hvac-web/src/app/shell-runtime-helpers.ts'),
+  (specifier) => {
+    if (specifier === './shell-policy') return policy;
+    if (specifier === './router-paths') return routerPaths;
+    throw new Error(`unexpected require: ${specifier}`);
+  },
+);
 const runtimeExports = evaluateModule(
   compileTsModule('apps/hvac-web/src/app/shell-runtime.ts'),
   (specifier) => {
@@ -101,6 +109,7 @@ const runtimeExports = evaluateModule(
     if (specifier === './router-paths') return routerPaths;
     if (specifier === './protected-scope') return protectedScope;
     if (specifier === './realtime-status') return realtimeStatus;
+    if (specifier === './shell-runtime-helpers') return shellRuntimeHelpers;
     throw new Error(`unexpected require: ${specifier}`);
   },
 ) as { readonly createShellRuntime: typeof createShellRuntime };

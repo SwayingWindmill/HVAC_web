@@ -62,6 +62,13 @@ export interface AssetControlLockState {
   readonly revision: number;
 }
 
+export interface DevicePriorityLockState {
+  readonly deviceId: string;
+  readonly lockedPriority: string;
+  readonly lockedUntil: string;
+  readonly reason?: string;
+}
+
 export interface SiteControlState {
   readonly tenantId: string;
   readonly siteId: string;
@@ -72,6 +79,7 @@ export interface SiteControlState {
   readonly updatedAt: string;
   readonly revision: number;
   readonly assetLocks: readonly AssetControlLockState[];
+  readonly devicePriorityLocks?: readonly DevicePriorityLockState[];
   readonly activeMaintenanceWindow?: ActiveMaintenanceWindow | null;
 }
 
@@ -250,6 +258,12 @@ const CONTROL_CAPABILITIES: ReadonlySet<string> = new Set([
   'schedule.manage',
 ]);
 
+const HIGH_RISK_CONTROL_CAPABILITIES: ReadonlySet<string> = new Set([
+  'schedule.manage',
+  'command.submit.high',
+  'command.submit.critical',
+]);
+
 const ACTION_BUTTON_LABELS: Readonly<Record<ActionCapability, string>> = {
   START: '启动',
   STOP: '停止',
@@ -328,6 +342,16 @@ export function canSubmitCommands(principal: PrincipalCapabilitiesResponse | nul
   return capabilities.some((capability) => (
     CONTROL_CAPABILITIES.has(capability) || capability.startsWith('command.submit.')
   ));
+}
+
+/**
+ * Checks whether principal capabilities authorize high-risk start/stop commands.
+ * Low/medium accounts may adjust setpoints/parameters without remote start/stop rights.
+ */
+export function canSubmitHighRiskCommands(principal: PrincipalCapabilitiesResponse | null | undefined): boolean {
+  const capabilities = principal?.authorization?.capabilities;
+  if (!Array.isArray(capabilities)) return false;
+  return capabilities.some((capability) => HIGH_RISK_CONTROL_CAPABILITIES.has(capability));
 }
 
 /** True when a command has not yet reached a settled terminal outcome. */
@@ -558,6 +582,8 @@ function evaluateInterlockReason(
 
 function isActionRelevantForRunState(capability: ActionCapability, device: PlantDevice): string {
   if (device.connection === 'OFFLINE') return '设备当前离线，先排查连接与现场供电再试';
+  if (device.connection === 'SLEEPING') return '设备处于休眠状态，请待唤醒后再试';
+  if (device.connection !== 'ONLINE') return '暂未确认设备在线状态，请稍后刷新核对';
   switch (capability) {
     case 'START':
     case 'START_UNIT_SEQUENCE':
@@ -583,6 +609,8 @@ export function evaluateControlGuards(options: {
   readonly runStateByDeviceId?: ReadonlyMap<string, string>;
   readonly nameByDeviceId?: ReadonlyMap<string, string>;
   readonly draftValues?: Readonly<Record<string, number>>;
+  readonly nowMs?: number;
+  readonly canExecuteHighRisk?: boolean;
 }): {
   readonly guard: GuardSummary;
   readonly actions: readonly ActionButtonView[];
@@ -597,6 +625,8 @@ export function evaluateControlGuards(options: {
     runStateByDeviceId = new Map<string, string>(),
     nameByDeviceId = new Map<string, string>(),
     draftValues = {},
+    nowMs = Date.now(),
+    canExecuteHighRisk = true,
   } = options;
 
   const open = activeOpenCommandForTarget(target, commands);
@@ -620,6 +650,11 @@ export function evaluateControlGuards(options: {
     };
   } else {
     const lock = controlState.assetLocks.find((item) => item.assetId === target.assetId && item.lockMode !== 'UNLOCKED');
+    const safetyPriorityLock = (controlState.devicePriorityLocks ?? []).find((item) => {
+      if (item.deviceId !== target.deviceId || item.lockedPriority !== 'SAFETY_INTERLOCK') return false;
+      const untilMs = Date.parse(item.lockedUntil);
+      return Number.isFinite(untilMs) && untilMs > nowMs;
+    });
     if (controlState.controlMode === 'MANUAL_OVERRIDE') {
       guard = {
         blocked: true,
@@ -646,6 +681,16 @@ export function evaluateControlGuards(options: {
         headline: `设备处于现场${modeName}`,
         detail: `${lock.reason || '现场挂牌保护中'}${actor}，禁止远程调节。`,
       };
+    } else if (safetyPriorityLock) {
+      guard = {
+        blocked: true,
+        tone: 'bad',
+        badge: '安全联锁锁定',
+        headline: '设备处于安全联锁保护锁定',
+        detail: safetyPriorityLock.reason
+          ? `${safetyPriorityLock.reason}，解除安全联锁前禁止远程操作。`
+          : '现场安全联锁生效中，请解除联锁后再试。',
+      };
     } else if (controlState.activeMaintenanceWindow) {
       guard = {
         blocked: false,
@@ -662,6 +707,22 @@ export function evaluateControlGuards(options: {
         headline: '当前连不上设备通信模块',
         detail: '离线期间无法核对现场读数，请先检查控制柜与供电。',
       };
+    } else if (device.connection === 'SLEEPING') {
+      guard = {
+        blocked: true,
+        tone: 'warning',
+        badge: '设备休眠中',
+        headline: '设备当前处于休眠状态',
+        detail: '休眠期间无法即时核对现场读数与响应，请待设备唤醒后再试。',
+      };
+    } else if (device.connection !== 'ONLINE') {
+      guard = {
+        blocked: true,
+        tone: 'warning',
+        badge: '连接未确认',
+        headline: '暂未确认设备在线状态',
+        detail: '尚未收到设备在线状态，为防误动作暂不开放远程调节。',
+      };
     }
   }
 
@@ -673,6 +734,8 @@ export function evaluateControlGuards(options: {
       disabledReason = '检修窗口内只允许停机或复位';
     } else if (open) {
       disabledReason = '上一条指令尚未结束，请先等待完成';
+    } else if (action.highRisk && !canExecuteHighRisk) {
+      disabledReason = '当前账号仅开通参数调节权限，不能远程启停设备';
     } else {
       disabledReason = isActionRelevantForRunState(action.capability, device)
         || evaluateInterlockReason(action, runStateByDeviceId, nameByDeviceId);
@@ -738,7 +801,13 @@ export function buildActionConfirmationIntent(options: {
 }): PendingControlIntent {
   const { action, assetName, device } = options;
   const stopping = action.capability === 'STOP' || action.capability === 'STOP_UNIT_SEQUENCE';
-  const beforeLabel = device.connection === 'OFFLINE' ? '离线' : (RUN_STATE_LABELS[device.runState] ?? '暂无读数');
+  const beforeLabel = device.connection === 'OFFLINE'
+    ? '离线'
+    : device.connection === 'SLEEPING'
+      ? '休眠中'
+      : device.connection !== 'ONLINE'
+        ? '连接未确认'
+        : (RUN_STATE_LABELS[device.runState] ?? '暂无读数');
   return {
     idempotencyKey: newIdempotencyKey(),
     assetId: action.assetId,

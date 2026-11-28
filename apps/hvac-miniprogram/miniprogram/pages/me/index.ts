@@ -2,7 +2,7 @@ import { clearAssistantChoice } from '../../lib/assistant-choice';
 import { gateway, requireSession, signOutLocally, weChatLogin } from '../../lib/platform';
 import { clearPlantCache } from '../../lib/plant-load';
 import { clearSites, currentSite } from '../../lib/site';
-import { selectTab } from '../../lib/tab';
+import { clearTabBadge, selectTab } from '../../lib/tab';
 import {
   readTenantState,
   switchActiveTenant,
@@ -62,6 +62,7 @@ Page({
       clearSites();
       clearPlantCache();
       clearAssistantChoice();
+      clearTabBadge();
     });
     if (!result.switched || !result.state) {
       this.setData({ switchingTenant: false });
@@ -127,7 +128,6 @@ Page({
       // A Session the platform already ended cannot be ended again.
     }
     signOutLocally();
-    clearPlantCache();
     wx.reLaunch({ url: '/pages/login/index' });
   },
 });

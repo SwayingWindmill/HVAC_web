@@ -2,7 +2,7 @@
 // loops and the air, as the web's 实时运行 page reads them (apps/hvac-web/src/features/operations/realtime).
 
 import { grouped } from './format';
-import { siteClock, type DayPoint } from './today';
+import { evaluatePlantCop, siteClock, type DayPoint } from './today';
 import { CATEGORY_LABELS, EQUIPMENT_CATEGORIES, isRunning, loopDifferentialPressure, plantReading, toStandaloneUnit, type ParallelBranch, type Plant, type PlantCategory, type PlantDevice, type PlantReading, type PlantUnit, type WaterLoopKind } from './plant';
 
 export type StatusTone = 'running' | 'stopped' | 'fault' | 'offline' | 'neutral';
@@ -338,7 +338,7 @@ export function hourlyCop(electricity: readonly DayPoint[], cooling: readonly Da
     const used = electricityAt.get(hour);
     const cooled = coolingAt.get(hour);
     if (used === undefined || cooled === undefined) return undefined;
-    return used > 0 && cooled > 0 ? cooled / used : 'idle';
+    return evaluatePlantCop(cooled, used).cop ?? 'idle';
   }, (max) => Math.max(1, Math.ceil(max)));
   return { bars, scale, gaps, peak: best === null ? '' : `今天最高 ${grouped(best.value, 2)}（${best.hour} 点）` };
 }
@@ -395,6 +395,7 @@ function missingRanges(hours: readonly number[]): string {
 /** A device's state in a word, as the web's device-presentation names it. */
 export function deviceStatus(device: PlantDevice): { readonly label: string; readonly tone: StatusTone } {
   if (device.connection === 'OFFLINE') return { label: '离线', tone: 'offline' };
+  if (device.connection === 'SLEEPING') return { label: '休眠中', tone: 'neutral' };
   if (device.runState === 'FAULT') return { label: device.faultCode ? `故障 ${device.faultCode}` : '故障', tone: 'fault' };
   if (device.runState === 'RUNNING') return { label: '运行', tone: 'running' };
   if (device.runState === 'STOPPED') return { label: '停机', tone: 'stopped' };

@@ -3,6 +3,9 @@
 
 import { createGateway, type ChunkedTransport, type SessionStore, type Transport } from './gateway';
 import type { AskWeChat } from './reminders';
+import { registerSignOutHandler, runSignOutHandlers } from './session-cleanup';
+
+export { registerSignOutHandler };
 
 export const GATEWAY_ORIGIN = 'https://hvac.swayingwindmill.online';
 const SESSION_KEY = 'hvac.session';
@@ -14,9 +17,27 @@ export const weChatLogin = () => new Promise<string>((resolve, reject) => {
 const REQUEST_TIMEOUT_MS = 15_000;
 
 const session: SessionStore = {
-  get: () => (wx.getStorageSync(SESSION_KEY) as string) || null,
-  set: (token) => wx.setStorageSync(SESSION_KEY, token),
-  clear: () => wx.removeStorageSync(SESSION_KEY),
+  get: () => {
+    try {
+      return (wx.getStorageSync(SESSION_KEY) as string) || null;
+    } catch {
+      return null;
+    }
+  },
+  set: (token) => {
+    try {
+      wx.setStorageSync(SESSION_KEY, token);
+    } catch {
+      // Ignore storage quota or restricted context errors.
+    }
+  },
+  clear: () => {
+    try {
+      wx.removeStorageSync(SESSION_KEY);
+    } catch {
+      // Ignore missing key cleanup errors so sign-out handlers always run.
+    }
+  },
 };
 
 const transport: Transport = (request) => new Promise((resolve, reject) => {
@@ -58,20 +79,6 @@ const chunked: ChunkedTransport = (request) => {
 };
 
 let signingOut = false;
-const signedOutHandlers: (() => void)[] = [];
-
-/** Registers a local cache cleanup to run whenever a 401 or manual sign-out ends the Session. */
-export function registerSignOutHandler(handler: () => void): void {
-  if (!signedOutHandlers.includes(handler)) {
-    signedOutHandlers.push(handler);
-  }
-}
-
-function runSignOutHandlers(): void {
-  for (const handler of signedOutHandlers) {
-    handler();
-  }
-}
 
 export const gateway = createGateway({
   origin: GATEWAY_ORIGIN,

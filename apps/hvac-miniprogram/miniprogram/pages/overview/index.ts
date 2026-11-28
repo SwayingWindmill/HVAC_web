@@ -1,6 +1,6 @@
-import { askWeChat, gateway, requireSession } from '../../lib/platform';
+import { askWeChat, gateway, registerSignOutHandler, requireSession } from '../../lib/platform';
 import { addDailyReminder, readDailyReminders, type ReminderRow } from '../../lib/reminders';
-import { currentSite, siteById } from '../../lib/site';
+import { currentSite, siteById, siteSelectionVersion } from '../../lib/site';
 import { loadPlant } from '../../lib/plant-load';
 import { whileShown } from '../../lib/refresh';
 import { presentPlantNow } from '../../lib/run';
@@ -8,6 +8,12 @@ import { loadOverview, presentOverview, type OverviewCharts } from '../../lib/ov
 import { selectTab, showAttention } from '../../lib/tab';
 
 const refresher = whileShown(60_000);
+let lastSiteId: string | null = null;
+let lastSiteVersion = -1;
+registerSignOutHandler(() => {
+  lastSiteId = null;
+  lastSiteVersion = -1;
+});
 
 const siteName = async (id: string) => (await siteById(id))?.displayName ?? null;
 
@@ -81,11 +87,22 @@ Page({
   },
 
   async refresh(rereadSites = false) {
+    const version = siteSelectionVersion();
+    if (lastSiteId !== null && version !== lastSiteVersion) {
+      lastSiteId = null;
+      this.setData({ loading: true, noSite: false, failed: false, refreshError: '', siteName: '', updatedAt: '', view: null, plant: { failed: false, now: null }, charts: null, daily: null, dailySiteId: '' });
+    }
     try {
       const site = await currentSite(rereadSites);
+      lastSiteVersion = siteSelectionVersion();
       if (site === null) {
+        lastSiteId = null;
         this.setData({ loading: false, noSite: true, failed: false, refreshError: '', siteName: '', updatedAt: '', view: null, plant: { failed: false, now: null }, charts: null });
         return;
+      }
+      if (site.id !== lastSiteId) {
+        lastSiteId = site.id;
+        this.setData({ loading: true, noSite: false, failed: false, refreshError: '', siteName: site.displayName, updatedAt: '', view: null, plant: { failed: false, now: null }, charts: null, daily: null, dailySiteId: '' });
       }
       const { inputs, plant, waiting, charts } = await loadOverview({ gateway, loadPlant }, site, new Date());
       if (waiting !== null) showAttention(this, waiting);

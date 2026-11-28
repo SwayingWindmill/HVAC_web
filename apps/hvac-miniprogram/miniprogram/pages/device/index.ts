@@ -2,6 +2,7 @@ import {
   buildActionConfirmationIntent,
   buildSettingConfirmationIntent,
   canSubmitCommands,
+  canSubmitHighRiskCommands,
   clampAndRoundSetting,
   CODE_PATTERN,
   createCommandSubmitMutex,
@@ -189,7 +190,7 @@ Page({
       const canControl = hasControllablePoints && canSubmitCommands(principal);
 
       const runStateByDeviceId = new Map<string, string>(
-        device.deviceIds.map((id) => [id, device.connection === 'OFFLINE' ? 'OFFLINE' : device.runState]),
+        device.deviceIds.map((id) => [id, device.connection !== 'ONLINE' ? device.connection : device.runState]),
       );
       const nameByDeviceId = new Map<string, string>(
         (rawModel?.devices ?? []).map((item) => [item.id, item.displayName]),
@@ -200,7 +201,7 @@ Page({
           const plant = await loadPlant(site, false);
           if (generation !== pageGeneration) return;
           for (const peer of plant.devices) {
-            runStateByDeviceId.set(peer.deviceId, peer.connection === 'OFFLINE' ? 'OFFLINE' : peer.runState);
+            runStateByDeviceId.set(peer.deviceId, peer.connection !== 'ONLINE' ? peer.connection : peer.runState);
             nameByDeviceId.set(peer.deviceId, peer.name);
           }
         } catch {
@@ -210,9 +211,11 @@ Page({
       }
 
       let openStatus: PresentedCommandStatus | null = null;
+      const canExecuteHighRisk = canSubmitHighRiskCommands(principal);
+      const nowMs = now.getTime();
       const controlTargets: ControlTargetView[] = targets.map((target) => {
         const targetController = device.members.find((member) => member.deviceId === target.deviceId);
-        const deviceForGuard = targetController && targetController.connection === 'OFFLINE'
+        const deviceForGuard = targetController && targetController.connection !== 'ONLINE'
           ? { ...device, connection: targetController.connection }
           : device;
         const evaluated = evaluateControlGuards({
@@ -223,6 +226,8 @@ Page({
           runStateByDeviceId,
           nameByDeviceId,
           draftValues,
+          nowMs,
+          canExecuteHighRisk,
         });
         if (openStatus === null && evaluated.openCommand !== null) {
           openStatus = evaluated.openCommand;

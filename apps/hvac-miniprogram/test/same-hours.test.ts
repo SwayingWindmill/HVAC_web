@@ -3,6 +3,7 @@ import test from 'node:test';
 import { hourlyElectricity } from '../miniprogram/lib/run.ts';
 import {
   compareWithYesterday,
+  evaluatePlantCop,
   queryNonEmptyHourly,
   sameHoursWindows,
   siteDayBounds,
@@ -100,4 +101,24 @@ test('queryNonEmptyHourly skips zero-width midnight windows and queries positive
   assert.equal(loaded.length, 1);
   assert.equal(posted.length, 1);
   assert.equal(posted[0].energyType, 'cooling');
+});
+
+test('evaluatePlantCop and summarize enforce <1 kWh standby and [1, 12] physical COP bounds', () => {
+  assert.deepEqual(evaluatePlantCop(0.8, 0.2), { cop: null, unavailableReason: 'standby' });
+  assert.deepEqual(evaluatePlantCop(12, 0.5), { cop: null, unavailableReason: 'out-of-range' });
+  assert.deepEqual(evaluatePlantCop(4, 5), { cop: null, unavailableReason: 'standby' });
+  assert.deepEqual(evaluatePlantCop(65, 5), { cop: null, unavailableReason: 'out-of-range' });
+  assert.deepEqual(evaluatePlantCop(450, 100), { cop: 4.5, unavailableReason: null });
+
+  const standbySummary = summarize(
+    [hour('2026-10-20T00:00:00Z', 0.4)],
+    [hour('2026-10-20T00:00:00Z', 8)],
+  );
+  assert.equal(standbySummary.cop, null);
+
+  const outlierSummary = summarize(
+    [hour('2026-10-20T00:00:00Z', 2)],
+    [hour('2026-10-20T00:00:00Z', 30)],
+  );
+  assert.equal(outlierSummary.cop, null);
 });

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { buildPlant } from '../miniprogram/lib/plant.ts';
-import { hourlyCop, hourlyElectricity, presentDevice, presentDevices, presentPlantNow, presentRealtime } from '../miniprogram/lib/run.ts';
+import { deviceStatus, hourlyCop, hourlyElectricity, needsAttention, presentDevice, presentDevices, presentPlantNow, presentRealtime } from '../miniprogram/lib/run.ts';
 import { assetModel, recordedAt, snapshots } from './recorded.ts';
 
 const now = recordedAt;
@@ -468,4 +468,22 @@ test('run presentation deduplicates dual-bound chillers while keeping full endpo
   assert.equal(overview?.summary, '4 / 4 台运行 · 10 / 10 在线');
   assert.equal(list.groups.find((g) => g.title === '冷站主设备')?.devices.length, 4);
   assert.equal(list.groups.find((g) => g.title === '计量和环境')?.devices.some((d) => d.deviceId === chwpHeaderId && d.value === '132'), true);
+});
+
+test('hourlyCop renders <1 kWh standby and out-of-range COP buckets as idle; deviceStatus handles SLEEPING cleanly', () => {
+  const start = '2026-10-20T16:00:00.000Z';
+  const hour = (index: number, energyKWh: number) => siteHour(start, index, energyKWh);
+  const chart = hourlyCop(
+    [hour(0, 0.4), hour(1, 5), hour(2, 2), hour(3, 100)],
+    [hour(0, 8), hour(1, 3), hour(2, 30), hour(3, 450)],
+    start,
+    new Date(Date.parse(start) + 4 * 3_600_000),
+  );
+  assert.deepEqual(chart.bars.slice(0, 4).map((b) => b.state), ['idle', 'idle', 'idle', 'value']);
+  assert.equal(chart.peak, '今天最高 4.50（3 点）');
+
+  const sleepingPlant = plantWith((snapshotOf) => { snapshotOf('CHILLER-01').presence.currentState = 'SLEEPING'; });
+  const chiller = sleepingPlant.devices.find((d) => d.name === 'CHILLER-01')!;
+  assert.deepEqual(deviceStatus(chiller), { label: '休眠中', tone: 'neutral' });
+  assert.equal(needsAttention(chiller), false);
 });

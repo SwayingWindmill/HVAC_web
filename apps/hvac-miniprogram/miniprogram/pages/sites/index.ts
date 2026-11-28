@@ -1,4 +1,5 @@
 import { listSites, rememberedSiteId, rememberSite } from '../../lib/site';
+import { clearTabBadge } from '../../lib/tab';
 
 Page({
   data: {
@@ -18,7 +19,11 @@ Page({
   },
 
   choose(event: WechatMiniprogram.TouchEvent<Record<string, never>, Record<string, never>, { id: string }>) {
-    rememberSite(event.currentTarget.dataset.id);
+    const nextSiteId = event.currentTarget.dataset.id;
+    if (nextSiteId !== rememberedSiteId()) {
+      clearTabBadge();
+    }
+    rememberSite(nextSiteId);
     wx.navigateBack();
   },
 });
