@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -364,7 +363,7 @@ func newEmbeddedAuditServer(ctx context.Context, logger *slog.Logger, bgWG *sync
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
-	clientCAs, err := loadCertPool(energyRequiredEnv("AUDIT_CLIENT_CA"), "Audit client CA")
+	clientCAs, err := workloadtls.LoadCertPool(energyRequiredEnv("AUDIT_CLIENT_CA"))
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
@@ -478,7 +477,7 @@ func newEmbeddedIAMServer(ctx context.Context, logger *slog.Logger) (*http.Serve
 	if !ok {
 		return nil, nil, func() {}, errors.New("IAM workload key cannot sign grants")
 	}
-	clientCAs, err := loadCertPool(energyRequiredEnv("IAM_CLIENT_CA"), "IAM client CA")
+	clientCAs, err := workloadtls.LoadCertPool(energyRequiredEnv("IAM_CLIENT_CA"))
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
@@ -601,15 +600,15 @@ func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger, bgWG *sync.
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
-	clientCAs, err := loadCertPool(energyRequiredEnv("CORE_CLIENT_CA"), "Core client CA")
+	clientCAs, err := workloadtls.LoadCertPool(energyRequiredEnv("CORE_CLIENT_CA"))
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
-	iamRoots, err := loadCertPool(energyRequiredEnv("CORE_IAM_CA"), "Core IAM CA")
+	iamRoots, err := workloadtls.LoadCertPool(energyRequiredEnv("CORE_IAM_CA"))
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
-	grantPublicKey, err := embeddedCertificatePublicKey(energyRequiredEnv("CORE_IAM_GRANT_CERT"))
+	grantPublicKey, err := identitycontext.LoadCertificatePublicKey(energyRequiredEnv("CORE_IAM_GRANT_CERT"))
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
@@ -703,7 +702,7 @@ func buildEmbeddedCoreOutboxRelayConfig(cert tls.Certificate, defaultRoots, fall
 			caPath = defaultCA
 		}
 		if caPath != "" {
-			loaded, err := loadCertPool(caPath, caEnv)
+			loaded, err := workloadtls.LoadCertPool(caPath)
 			if err != nil {
 				return nil, err
 			}
@@ -770,15 +769,15 @@ func newEmbeddedCommandServer(ctx context.Context, logger *slog.Logger, alarmRef
 	if !ok {
 		return nil, nil, func() {}, errors.New("command workload key cannot sign delegation tokens")
 	}
-	clientCAs, err := loadCertPool(clientCAPath, "Command client CA")
+	clientCAs, err := workloadtls.LoadCertPool(clientCAPath)
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
-	commandGrantPublicKey, err := embeddedCertificatePublicKey(energyRequiredEnv("COMMAND_IAM_GRANT_CERT"))
+	commandGrantPublicKey, err := identitycontext.LoadCertificatePublicKey(energyRequiredEnv("COMMAND_IAM_GRANT_CERT"))
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
-	gatewayDelegationPublicKey, err := embeddedCertificatePublicKey(energyRequiredEnv("COMMAND_GATEWAY_DELEGATION_CERT"))
+	gatewayDelegationPublicKey, err := identitycontext.LoadCertificatePublicKey(energyRequiredEnv("COMMAND_GATEWAY_DELEGATION_CERT"))
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
@@ -966,7 +965,7 @@ func newEmbeddedCommandHandler(
 ) http.Handler {
 	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.URL.Path == commandservice.InternalOperatorPrefix || strings.HasPrefix(request.URL.Path, commandservice.InternalOperatorPrefix+"/") {
-			if embeddedPeerSPIFFE(request) != gatewaySPIFFE {
+			if identitycontext.PeerSPIFFE(request) != gatewaySPIFFE {
 				embeddedWriteProblem(writer, http.StatusForbidden, "COMMAND_GATEWAY_WORKLOAD_FORBIDDEN")
 				return
 			}
@@ -974,7 +973,7 @@ func newEmbeddedCommandHandler(
 			return
 		}
 		if request.URL.Path == commandservice.InternalCommandsPath || strings.HasPrefix(request.URL.Path, commandservice.InternalCommandsPath+"/") {
-			if embeddedPeerSPIFFE(request) != gatewaySPIFFE {
+			if identitycontext.PeerSPIFFE(request) != gatewaySPIFFE {
 				embeddedWriteProblem(writer, http.StatusForbidden, "COMMAND_GATEWAY_WORKLOAD_FORBIDDEN")
 				return
 			}
@@ -1016,7 +1015,7 @@ func buildEmbeddedCommandControlFailureSender(alarmRef *embeddedAlarmStoreRef, c
 	var remoteClient *http.Client
 	if parsed, err := url.Parse(alarmBaseURL); err == nil && parsed.Scheme == "https" && parsed.Host != "" && clientCert != nil {
 		if caPath := strings.TrimSpace(os.Getenv("ALARM_SERVICE_SERVER_CA")); caPath != "" {
-			if roots, err := loadCertPool(caPath, "Alarm Service server CA"); err == nil {
+			if roots, err := workloadtls.LoadCertPool(caPath); err == nil {
 				remoteClient = &http.Client{
 					Timeout: 3 * time.Second,
 					CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -1192,11 +1191,11 @@ func newEmbeddedAlarmServer(ctx context.Context, logger *slog.Logger, alarmRef *
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
-	clientCAs, err := loadCertPool(energyRequiredEnv("ALARM_CLIENT_CA"), "Alarm client CA")
+	clientCAs, err := workloadtls.LoadCertPool(energyRequiredEnv("ALARM_CLIENT_CA"))
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
-	gatewayPublicKey, err := embeddedCertificatePublicKey(energyRequiredEnv("ALARM_GATEWAY_DELEGATION_CERT"))
+	gatewayPublicKey, err := identitycontext.LoadCertificatePublicKey(energyRequiredEnv("ALARM_GATEWAY_DELEGATION_CERT"))
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
@@ -1311,11 +1310,11 @@ func newEmbeddedWorkOrderServer(ctx context.Context, logger *slog.Logger, workOr
 	if err != nil {
 		return nil, func() {}, err
 	}
-	clientCAs, err := loadCertPool(energyRequiredEnv("WORK_ORDER_CLIENT_CA"), "Work Order client CA")
+	clientCAs, err := workloadtls.LoadCertPool(energyRequiredEnv("WORK_ORDER_CLIENT_CA"))
 	if err != nil {
 		return nil, func() {}, err
 	}
-	gatewayPublicKey, err := embeddedCertificatePublicKey(energyRequiredEnv("WORK_ORDER_GATEWAY_DELEGATION_CERT"))
+	gatewayPublicKey, err := identitycontext.LoadCertificatePublicKey(energyRequiredEnv("WORK_ORDER_GATEWAY_DELEGATION_CERT"))
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -1372,16 +1371,16 @@ func newEmbeddedQueryServer(logger *slog.Logger) (*http.Server, *observability.R
 	if err != nil {
 		return nil, nil, err
 	}
-	clientCAs, err := loadCertPool(energyRequiredEnv("QUERY_CLIENT_CA"), "Query client CA")
+	clientCAs, err := workloadtls.LoadCertPool(energyRequiredEnv("QUERY_CLIENT_CA"))
 	if err != nil {
 		return nil, nil, err
 	}
-	delegationPublicKey, err := embeddedCertificatePublicKey(energyRequiredEnv("QUERY_GATEWAY_DELEGATION_CERT"))
+	delegationPublicKey, err := identitycontext.LoadCertificatePublicKey(energyRequiredEnv("QUERY_GATEWAY_DELEGATION_CERT"))
 	if err != nil {
 		return nil, nil, err
 	}
 	// IAM's grant certificate, the one Registry verifies: Workload Principals' Energy Series grants carry it.
-	workloadGrantPublicKey, err := embeddedCertificatePublicKey(energyRequiredEnv("CORE_IAM_GRANT_CERT"))
+	workloadGrantPublicKey, err := identitycontext.LoadCertificatePublicKey(energyRequiredEnv("CORE_IAM_GRANT_CERT"))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1444,7 +1443,7 @@ func newEmbeddedQueryServer(logger *slog.Logger) (*http.Server, *observability.R
 func embeddedQueryHTTPClient(caPath string) (*http.Client, error) {
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS13}
 	if caPath != "" {
-		roots, err := loadCertPool(caPath, "Query data backend CA")
+		roots, err := workloadtls.LoadCertPool(caPath)
 		if err != nil {
 			return nil, err
 		}
@@ -1473,21 +1472,6 @@ func embeddedLoadValueFile(path string, maximumBytes int64) (string, error) {
 	return value, nil
 }
 
-func embeddedPeerSPIFFE(request *http.Request) string {
-	if request == nil || request.TLS == nil || len(request.TLS.PeerCertificates) == 0 {
-		return ""
-	}
-	leaf := request.TLS.PeerCertificates[0]
-	if leaf == nil || len(leaf.URIs) != 1 || leaf.URIs[0] == nil {
-		return ""
-	}
-	identity := leaf.URIs[0].String()
-	if !strings.HasPrefix(identity, "spiffe://") {
-		return ""
-	}
-	return identity
-}
-
 func embeddedWriteProblem(writer http.ResponseWriter, status int, code string) {
 	writer.Header().Set("Content-Type", "application/problem+json")
 	writer.WriteHeader(status)
@@ -1503,22 +1487,6 @@ func embeddedCertificateSPIFFEID(certificate *x509.Certificate) (string, error) 
 		return "", errors.New("certificate URI is not a SPIFFE identity")
 	}
 	return identity, nil
-}
-
-func embeddedCertificatePublicKey(path string) (crypto.PublicKey, error) {
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	block, _ := pem.Decode(body)
-	if block == nil || block.Type != "CERTIFICATE" {
-		return nil, errors.New("certificate public key source is invalid")
-	}
-	certificate, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return nil, err
-	}
-	return certificate.PublicKey, nil
 }
 
 func embeddedAlarmControlEventsSPIFFEs() []string {

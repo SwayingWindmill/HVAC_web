@@ -83,7 +83,7 @@ func (verifier SiteContextVerifier) Validate() error {
 
 // PeerSPIFFE is the SPIFFE ID of the workload certificate the client presented, or empty.
 func PeerSPIFFE(request *http.Request) string {
-	if request.TLS == nil || len(request.TLS.PeerCertificates) == 0 {
+	if request == nil || request.TLS == nil || len(request.TLS.PeerCertificates) == 0 {
 		return ""
 	}
 	leaf := request.TLS.PeerCertificates[0]

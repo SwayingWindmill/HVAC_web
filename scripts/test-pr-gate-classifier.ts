@@ -776,6 +776,12 @@ test('classifier preserves deployment secret check on .gitignore, spatial model 
   assert.ok(schedCmd.unitProfiles.includes('analytics'));
   assert.ok(runPlan('unit', schedCmd.unitProfiles).commands.includes('npm run test:analytics'));
 
+  for (const sharedLib of ['libs/servicehost/servicehost.go', 'libs/schedulerjob/schedulerjob.go']) {
+    const libClassification = runClassification([sharedLib]);
+    assert.equal(libClassification.unknown, false, sharedLib);
+    assert.ok(libClassification.unitProfiles.includes('analytics'), sharedLib);
+  }
+
   const edgeTunnel = runClassification(['libs/edgetunnel/tunnel.go']);
   assert.deepEqual(edgeTunnel.unitProfiles, ['command', 'go', 'telemetry']);
   assert.equal(edgeTunnel.unknown, false);

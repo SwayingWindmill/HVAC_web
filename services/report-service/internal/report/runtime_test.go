@@ -34,18 +34,6 @@ func TestParsePostgresPoolConfigAndNilSafety(t *testing.T) {
 }
 
 func TestDiagnosticsHandlerHealthzMetricsAndReadiness(t *testing.T) {
-	healthRec := httptest.NewRecorder()
-	HealthHandler().ServeHTTP(healthRec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
-	if healthRec.Code != http.StatusOK {
-		t.Fatalf("GET /healthz = %d, want 200", healthRec.Code)
-	}
-
-	metricsRec := httptest.NewRecorder()
-	HealthHandler().ServeHTTP(metricsRec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
-	if !strings.Contains(metricsRec.Body.String(), `hvac_service_up{service="report-service"} 1`) {
-		t.Fatalf("GET /metrics missing hvac_service_up gauge:\n%s", metricsRec.Body.String())
-	}
-
 	var pgErr atomic.Value
 	rt := observability.NewRuntime(observability.RuntimeConfig{Service: "report-service"})
 	rt.SetDependencies(
@@ -57,7 +45,13 @@ func TestDiagnosticsHandlerHealthzMetricsAndReadiness(t *testing.T) {
 		}},
 	)
 	rt.MarkReady()
-	diag := NewDiagnosticsHandler(rt)
+	diag := rt.DiagnosticsHandler()
+
+	healthRec := httptest.NewRecorder()
+	diag.ServeHTTP(healthRec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if healthRec.Code != http.StatusOK {
+		t.Fatalf("GET /healthz = %d, want 200", healthRec.Code)
+	}
 
 	okRec := httptest.NewRecorder()
 	diag.ServeHTTP(okRec, httptest.NewRequest(http.MethodGet, "/health/ready", nil))

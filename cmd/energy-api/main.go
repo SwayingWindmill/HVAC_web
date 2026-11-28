@@ -25,6 +25,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/limitpolicy"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
+	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/identity-service/pkg/identityadmin"
 	"github.com/redis/go-redis/v9"
 )
@@ -163,7 +164,7 @@ func run() int {
 
 	var connectivityConfig *gateway.ConnectivityConfig
 	if workloadCertificate != nil {
-		roots, err := loadCertPool(envOr("CONNECTIVITY_SERVER_CA", "/run/hvac/gateway-ca/ca.crt"), "Connectivity server CA")
+		roots, err := workloadtls.LoadCertPool(envOr("CONNECTIVITY_SERVER_CA", "/run/hvac/gateway-ca/ca.crt"))
 		if err != nil {
 			logger.Error("connectivity_client_config_invalid", "error_code", "CONNECTIVITY_CLIENT_CONFIG_INVALID")
 			return 1
@@ -432,13 +433,13 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 	if !ok {
 		return nil, nil, func() {}, errors.New("gateway workload private key cannot sign delegation grants")
 	}
-	iamRoots, err := loadCertPool(required["IAM_SERVER_CA"], "IAM server CA")
+	iamRoots, err := workloadtls.LoadCertPool(required["IAM_SERVER_CA"])
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
 	oidcClient := &http.Client{Timeout: 5 * time.Second, Transport: cloneDefaultTransportWithTLS(nil)}
 	if oidcCAPath := os.Getenv("OIDC_SERVER_CA"); oidcCAPath != "" {
-		oidcRoots, err := loadCertPool(oidcCAPath, "OIDC server CA")
+		oidcRoots, err := workloadtls.LoadCertPool(oidcCAPath)
 		if err != nil {
 			return nil, nil, func() {}, err
 		}
@@ -453,7 +454,7 @@ func loadIdentityConfig(ctx context.Context) (*gateway.IdentityConfig, *tls.Cert
 	if auditCAPath == "" {
 		return nil, nil, func() {}, errors.New("AUDIT_SERVER_CA is required when AUDIT_URL is configured")
 	}
-	auditRoots, err := loadCertPool(auditCAPath, "Audit server CA")
+	auditRoots, err := workloadtls.LoadCertPool(auditCAPath)
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
@@ -591,7 +592,7 @@ func loadGatewayInternalServer(handler http.Handler) (*http.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	clientCAs, err := loadCertPool(os.Getenv("GATEWAY_INTERNAL_CLIENT_CA"), "Gateway internal client CA")
+	clientCAs, err := workloadtls.LoadCertPool(os.Getenv("GATEWAY_INTERNAL_CLIENT_CA"))
 	if err != nil {
 		return nil, err
 	}
@@ -632,7 +633,7 @@ func loadGatewayServerTLSConfig() (*tls.Config, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	clientCAs, err := loadCertPool(clientCAPath, "Gateway client CA")
+	clientCAs, err := workloadtls.LoadCertPool(clientCAPath)
 	if err != nil {
 		return nil, false, err
 	}
@@ -660,7 +661,7 @@ func loadTelemetryConfig(certificate *tls.Certificate) (*gateway.TelemetryConfig
 	if caPath == "" {
 		return nil, errors.New("TELEMETRY_RUNTIME_SERVER_CA is required when TELEMETRY_RUNTIME_URL is configured")
 	}
-	roots, err := loadCertPool(caPath, "Telemetry Runtime server CA")
+	roots, err := workloadtls.LoadCertPool(caPath)
 	if err != nil {
 		return nil, err
 	}
@@ -685,7 +686,7 @@ func loadCommandConfig(certificate *tls.Certificate) (*gateway.CommandConfig, er
 	if caPath == "" {
 		return nil, errors.New("COMMAND_SERVICE_SERVER_CA is required when COMMAND_SERVICE_URL is configured")
 	}
-	roots, err := loadCertPool(caPath, "Command Service server CA")
+	roots, err := workloadtls.LoadCertPool(caPath)
 	if err != nil {
 		return nil, err
 	}
@@ -705,7 +706,7 @@ func loadIntelligenceOwnerClient(certificate *tls.Certificate) (*http.Client, er
 	if certificate == nil {
 		return nil, nil
 	}
-	roots, err := loadCertPool(strings.TrimSpace(os.Getenv("INTELLIGENCE_SERVER_CA")), "intelligence owners' server CA")
+	roots, err := workloadtls.LoadCertPool(strings.TrimSpace(os.Getenv("INTELLIGENCE_SERVER_CA")))
 	if err != nil {
 		return nil, err
 	}
@@ -729,7 +730,7 @@ func loadAlarmConfig(certificate *tls.Certificate) (*gateway.AlarmConfig, error)
 	if caPath == "" {
 		return nil, errors.New("ALARM_SERVICE_SERVER_CA is required when ALARM_SERVICE_URL is configured")
 	}
-	roots, err := loadCertPool(caPath, "Alarm Service server CA")
+	roots, err := workloadtls.LoadCertPool(caPath)
 	if err != nil {
 		return nil, err
 	}
@@ -763,7 +764,7 @@ func loadNotificationConfig(certificate *tls.Certificate) (*gateway.Notification
 	if caPath == "" {
 		return nil, errors.New("NOTIFICATION_SERVICE_SERVER_CA is required when NOTIFICATION_SERVICE_URL is configured")
 	}
-	roots, err := loadCertPool(caPath, "Notification Service server CA")
+	roots, err := workloadtls.LoadCertPool(caPath)
 	if err != nil {
 		return nil, err
 	}
@@ -795,7 +796,7 @@ func loadWorkOrderConfig(certificate *tls.Certificate) (*gateway.WorkOrderConfig
 	if caPath == "" {
 		return nil, errors.New("WORK_ORDER_SERVICE_SERVER_CA is required when WORK_ORDER_SERVICE_URL is configured")
 	}
-	roots, err := loadCertPool(caPath, "Work Order Service server CA")
+	roots, err := workloadtls.LoadCertPool(caPath)
 	if err != nil {
 		return nil, err
 	}
@@ -828,7 +829,7 @@ func loadAnalyticsConfig(certificate *tls.Certificate) (*gateway.AnalyticsConfig
 	if caPath == "" {
 		return nil, errors.New("TELEMETRY_QUERY_SERVER_CA is required when TELEMETRY_QUERY_URL is configured")
 	}
-	roots, err := loadCertPool(caPath, "Telemetry Query server CA")
+	roots, err := workloadtls.LoadCertPool(caPath)
 	if err != nil {
 		return nil, err
 	}
@@ -858,7 +859,7 @@ func loadOperationsConfig(ctx context.Context, certificate *tls.Certificate) (*g
 	if caPath == "" {
 		return nil, func() {}, errors.New("OPERATIONS_AGENT_SERVER_CA is required when OPERATIONS_AGENT_URL is configured")
 	}
-	roots, err := loadCertPool(caPath, "Operations Agent server CA")
+	roots, err := workloadtls.LoadCertPool(caPath)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -946,18 +947,6 @@ func applyRedisClientBounds(options *redis.Options) {
 	if options.MinIdleConns > options.PoolSize {
 		options.MinIdleConns = options.PoolSize
 	}
-}
-
-func loadCertPool(path, label string) (*x509.CertPool, error) {
-	pemBytes, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pemBytes) {
-		return nil, fmt.Errorf("%s is invalid", label)
-	}
-	return pool, nil
 }
 
 func sessionEncryptionKey() ([]byte, error) {

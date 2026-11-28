@@ -14,6 +14,7 @@ import (
 
 	"github.com/quanlaihe/hvac-web/cmd/energy-api/internal/gateway"
 	"github.com/quanlaihe/hvac-web/libs/ownershipregistry"
+	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 )
 
 type routingRuntime struct {
@@ -121,7 +122,7 @@ func loadRegistryConfig(snapshot *ownershipregistry.Snapshot, identityEnabled bo
 	if err != nil {
 		return nil, err
 	}
-	roots, err := loadCertPool(coreCAPath, "Core server CA")
+	roots, err := workloadtls.LoadCertPool(coreCAPath)
 	if err != nil {
 		return nil, err
 	}

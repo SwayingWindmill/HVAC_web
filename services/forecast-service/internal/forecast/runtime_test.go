@@ -145,24 +145,6 @@ func TestClickHouseHTTPPoolDrainAndPing(t *testing.T) {
 }
 
 func TestDiagnosticsHandlerHealthzMetricsAndReadiness(t *testing.T) {
-	healthHandler := HealthHandler()
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	rec := httptest.NewRecorder()
-	healthHandler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /healthz = %d, want 200", rec.Code)
-	}
-
-	metricsReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	metricsRec := httptest.NewRecorder()
-	healthHandler.ServeHTTP(metricsRec, metricsReq)
-	if metricsRec.Code != http.StatusOK {
-		t.Fatalf("GET /metrics = %d, want 200", metricsRec.Code)
-	}
-	if !strings.Contains(metricsRec.Body.String(), `hvac_service_up{service="forecast-service"} 1`) {
-		t.Fatalf("GET /metrics missing hvac_service_up gauge:\n%s", metricsRec.Body.String())
-	}
-
 	var pgErr atomic.Value
 	var chErr atomic.Value
 	rt := observability.NewRuntime(observability.RuntimeConfig{Service: "forecast-service"})
@@ -181,7 +163,13 @@ func TestDiagnosticsHandlerHealthzMetricsAndReadiness(t *testing.T) {
 		}},
 	)
 	rt.MarkReady()
-	diag := NewDiagnosticsHandler(rt)
+	diag := rt.DiagnosticsHandler()
+
+	rec := httptest.NewRecorder()
+	diag.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /healthz = %d, want 200", rec.Code)
+	}
 
 	readyRec := httptest.NewRecorder()
 	diag.ServeHTTP(readyRec, httptest.NewRequest(http.MethodGet, "/health/ready", nil))

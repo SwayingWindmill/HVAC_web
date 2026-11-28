@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
-	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const maxFDDRequestBytes = int64(256 << 10)
@@ -35,41 +34,6 @@ func NewHTTPHandler(service *Service, auth AuthConfig) (http.Handler, error) {
 	mux.HandleFunc("GET /v1/sites/{siteId}/fdd/findings", guard.guard(ReadAction, true, ignoreContext(handler.handleListFindings)))
 	mux.HandleFunc("PATCH /v1/sites/{siteId}/fdd/findings/{findingId}/links", guard.guard(WriteAction, false, ignoreContext(handler.handleLinkFinding)))
 	return mux, nil
-}
-
-// HealthHandler answers the container health check on the plain diagnostics port.
-func HealthHandler() http.Handler {
-	return NewDiagnosticsHandler(nil)
-}
-
-// NewDiagnosticsHandler serves /healthz, /metrics (preserving hvac_service_up), and runtime readiness probes.
-func NewDiagnosticsHandler(runtime *observability.Runtime) http.Handler {
-	metrics := observability.NewRegistry()
-	var runtimeHandler http.Handler
-	if runtime != nil {
-		if runtime.Metrics != nil {
-			metrics = runtime.Metrics
-		}
-		runtimeHandler = runtime.DiagnosticsHandler()
-	}
-	_ = metrics.SetGauge(
-		"hvac_service_up",
-		"1 when this diagnostics server is serving.",
-		map[string]string{"service": "fdd-service"},
-		1,
-	)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"status":"ok"}`))
-	})
-	if runtimeHandler != nil {
-		mux.Handle("/", runtimeHandler)
-	} else {
-		mux.Handle("GET /metrics", metrics.Handler())
-	}
-	return mux
 }
 
 func ignoreContext(next http.HandlerFunc) func(http.ResponseWriter, *http.Request, identitycontext.SiteContext) {

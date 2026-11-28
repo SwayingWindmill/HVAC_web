@@ -14,7 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/modules/alarm/pkg/alarmservice"
 	"github.com/quanlaihe/hvac-web/services/notification-service/pkg/notificationservice"
 )
@@ -33,11 +35,11 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger, bgW
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
-	clientCAs, err := loadCertPool(energyRequiredEnv("NOTIFICATION_CLIENT_CA"), "Notification client CA")
+	clientCAs, err := workloadtls.LoadCertPool(energyRequiredEnv("NOTIFICATION_CLIENT_CA"))
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
-	gatewayPublicKey, err := embeddedCertificatePublicKey(energyRequiredEnv("NOTIFICATION_GATEWAY_DELEGATION_CERT"))
+	gatewayPublicKey, err := identitycontext.LoadCertificatePublicKey(energyRequiredEnv("NOTIFICATION_GATEWAY_DELEGATION_CERT"))
 	if err != nil {
 		return nil, nil, func() {}, err
 	}
@@ -110,7 +112,7 @@ func newEmbeddedNotificationServer(ctx context.Context, logger *slog.Logger, bgW
 		return nil, nil, func() {}, err
 	}
 	router := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if embeddedPeerSPIFFE(request) != gatewaySPIFFE {
+		if identitycontext.PeerSPIFFE(request) != gatewaySPIFFE {
 			embeddedWriteProblem(writer, http.StatusForbidden, "NOTIFICATION_GATEWAY_WORKLOAD_FORBIDDEN")
 			return
 		}

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
+	"github.com/quanlaihe/hvac-web/libs/observability"
 )
 
 const testGatewaySPIFFE = "spiffe://hvac.local/platform-gateway"
@@ -100,13 +101,14 @@ func TestReportsServeOnlyTheGatewayWithAContextToReadTheSite(t *testing.T) {
 
 // The container health check has no certificate; it asks the plain diagnostics port, which answers nothing else.
 func TestTheHealthCheckIsOnTheDiagnosticsPortAlone(t *testing.T) {
+	diagnostics := observability.NewRuntime(observability.RuntimeConfig{Service: "report-service"}).DiagnosticsHandler()
 	recorder := httptest.NewRecorder()
-	HealthHandler().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	diagnostics.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("health = %d", recorder.Code)
 	}
 	metrics := httptest.NewRecorder()
-	HealthHandler().ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	diagnostics.ServeHTTP(metrics, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if metrics.Code != http.StatusOK || !strings.Contains(metrics.Body.String(), "hvac_service_up") {
 		t.Fatalf("metrics = %d %s", metrics.Code, metrics.Body.String())
 	}
@@ -117,7 +119,7 @@ func TestTheHealthCheckIsOnTheDiagnosticsPortAlone(t *testing.T) {
 		t.Fatal("the business port still answers the health check")
 	}
 	report := httptest.NewRecorder()
-	HealthHandler().ServeHTTP(report, httptest.NewRequest(http.MethodGet, "/v1/sites/"+testSite+"/reports/monthly?year=2026", nil))
+	diagnostics.ServeHTTP(report, httptest.NewRequest(http.MethodGet, "/v1/sites/"+testSite+"/reports/monthly?year=2026", nil))
 	if report.Code == http.StatusOK {
 		t.Fatal("the diagnostics port serves reports")
 	}

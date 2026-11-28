@@ -25,6 +25,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
+	"github.com/quanlaihe/hvac-web/libs/workloadtls"
 	"github.com/quanlaihe/hvac-web/services/notification-service/pkg/notificationservice"
 )
 
@@ -56,11 +57,11 @@ func newWeChatReminderWorker(logger *slog.Logger, scheduler *notificationservice
 	if !ok {
 		return nil, errors.New("the Gateway workload key cannot sign grants")
 	}
-	iamRoots, err := loadCertPool(required["IAM_SERVER_CA"], "IAM server CA")
+	iamRoots, err := workloadtls.LoadCertPool(required["IAM_SERVER_CA"])
 	if err != nil {
 		return nil, err
 	}
-	coreRoots, err := loadCertPool(required["CORE_SERVER_CA"], "Core server CA")
+	coreRoots, err := workloadtls.LoadCertPool(required["CORE_SERVER_CA"])
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +69,7 @@ func newWeChatReminderWorker(logger *slog.Logger, scheduler *notificationservice
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	coreClient := &http.Client{Timeout: 5 * time.Second, Transport: workloadTransport(coreRoots, &certificate, envOr("CORE_SERVER_NAME", "localhost")),
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	queryRoots, err := loadCertPool(required["TELEMETRY_QUERY_SERVER_CA"], "Telemetry Query server CA")
+	queryRoots, err := workloadtls.LoadCertPool(required["TELEMETRY_QUERY_SERVER_CA"])
 	if err != nil {
 		return nil, err
 	}
