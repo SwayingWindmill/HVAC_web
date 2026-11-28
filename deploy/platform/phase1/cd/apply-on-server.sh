@@ -136,6 +136,7 @@ declare -a planned_images=()
 declare -a planned_kinds=()
 declare -a planned_previous=()
 declare -a planned_oci_refs=()
+declare -a planned_changed=()
 
 while IFS=$'\t' read -r service image kind required package <&3; do
   [[ -z "${service:-}" || "$service" == \#* ]] && continue
@@ -158,14 +159,20 @@ while IFS=$'\t' read -r service image kind required package <&3; do
       resolved="$image"
     fi
     previous=""
+    changed=1
     if docker image inspect "$resolved" >/dev/null 2>&1 </dev/null; then
-      previous="$(rollback_tag "$resolved")"
+      if docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$resolved" </dev/null 2>/dev/null | grep -Fxq "$oci_ref"; then
+        changed=0
+      else
+        previous="$(rollback_tag "$resolved")"
+      fi
     fi
     planned_services+=("$service")
     planned_images+=("$resolved")
     planned_kinds+=("$kind")
     planned_previous+=("$previous")
     planned_oci_refs+=("$oci_ref")
+    planned_changed+=("$changed")
     continue
   fi
 
@@ -198,6 +205,7 @@ while IFS=$'\t' read -r service image kind required package <&3; do
   planned_kinds+=("$kind")
   planned_previous+=("$previous")
   planned_oci_refs+=("")
+  planned_changed+=(1)
 done 3< "$release/services.tsv"
 
 if [[ "${#planned_services[@]}" -eq 0 ]]; then
@@ -235,12 +243,23 @@ docker_pull_with_retry() {
 }
 
 if [[ "$oci_mode" == 1 ]]; then
-  if [[ -n "${OCI_REGISTRY_LOGIN_CMD:-}" ]]; then
+  any_oci_changed=0
+  for index in "${!planned_services[@]}"; do
+    if [[ "${planned_changed[$index]}" == 1 ]]; then
+      any_oci_changed=1
+      break
+    fi
+  done
+  if [[ "$any_oci_changed" == 1 && -n "${OCI_REGISTRY_LOGIN_CMD:-}" ]]; then
     bash -c "${OCI_REGISTRY_LOGIN_CMD}"
   fi
   for index in "${!planned_services[@]}"; do
     service="${planned_services[$index]}"
     oci_ref="${planned_oci_refs[$index]}"
+    if [[ "${planned_changed[$index]}" == 0 ]]; then
+      echo "unchanged ${service}: already at ${oci_ref}"
+      continue
+    fi
     echo "pulling ${service}: ${oci_ref}"
     if ! docker_pull_with_retry "$oci_ref"; then
       echo "error: failed to pull OCI image for ${service} (${oci_ref}); nothing on host was changed." >&2
@@ -470,6 +489,10 @@ printf '%s\n' "$revision" > "$platform_dir/REVISION"
 echo "updated $platform_dir to $revision"
 
 for index in "${!planned_services[@]}"; do
+  if [[ "$oci_mode" == 1 && "${planned_changed[$index]}" == 0 ]]; then
+    echo "kept ${planned_images[$index]} (${planned_oci_refs[$index]})"
+    continue
+  fi
   if [[ -n "${planned_previous[$index]}" ]]; then
     docker tag "${planned_images[$index]}" "${planned_previous[$index]}"
   fi
@@ -495,7 +518,7 @@ mkdir -p "$platform_dir/rollbacks"
 manifest="$platform_dir/rollbacks/${stamp}.tsv"
 : > "$manifest"
 for index in "${!planned_services[@]}"; do
-  if [[ "$oci_mode" == 1 && -z "${planned_previous[$index]}" ]]; then
+  if [[ "$oci_mode" == 1 && ( "${planned_changed[$index]}" == 0 || -z "${planned_previous[$index]}" ) ]]; then
     continue
   fi
   printf '%s\t%s\n' "${planned_images[$index]}" "${planned_previous[$index]}" >> "$manifest"
@@ -554,6 +577,14 @@ fi
 if ! SMOKE_RESOLVE_IP=127.0.0.1 SMOKE_CHECK_CONTAINERS=1 bash "$script_dir/smoke-release.sh"; then
   rollback_now "smoke checks failed."
   exit 1
+fi
+if [[ "$oci_mode" == 1 ]]; then
+  deployed_manifest_tmp="$(mktemp "$platform_dir/.deployed-image-manifest.XXXXXX")"
+  {
+    printf '# revision=%s\n' "$revision"
+    cat "$manifest_file"
+  } > "$deployed_manifest_tmp"
+  mv -f "$deployed_manifest_tmp" "$platform_dir/deployed-image-manifest.tsv"
 fi
 bash "$release/observability-config.sh" apply "$platform_dir" "$compose_project"
 if [[ "$oci_mode" == 1 ]]; then

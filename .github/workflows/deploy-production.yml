@@ -9,6 +9,10 @@ on:
         description: "Rebuild every <service>:deploy-base as a verified one-layer copy of the running image before this deploy (docs/operations/disk-full.md)"
         type: boolean
         default: false
+      rebuild_all:
+        description: "Force full rebuild and push of every OCI image (bypass incremental change detection)"
+        type: boolean
+        default: false
       deploy_mode:
         description: "Deployment delivery mode (auto uses OCI images when TCR_PASSWORD is configured)"
         type: choice
@@ -55,6 +59,8 @@ jobs:
           fi
 
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Require deploy credentials
         env:
@@ -110,6 +116,15 @@ jobs:
             package-lock.json
             services/operations-agent-service/package-lock.json
 
+      - name: Probe deployed OCI state
+        if: steps.mode.outputs.use_oci == 'true' && !inputs.rebuild_all
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_PASSWORD: ${{ secrets.DEPLOY_SSH_PASSWORD }}
+          OCI_REGISTRY: ${{ vars.TCR_REGISTRY || secrets.TCR_REGISTRY || 'ccr.ccs.tencentyun.com' }}
+          OCI_NAMESPACE: ${{ vars.TCR_NAMESPACE || secrets.TCR_NAMESPACE || 'hvac' }}
+        run: bash deploy/platform/phase1/cd/push-release.sh --probe-deployed out/oci-probe
+
       - name: Build and push immutable OCI images
         if: steps.mode.outputs.use_oci == 'true'
         env:
@@ -117,10 +132,45 @@ jobs:
           OCI_NAMESPACE: ${{ vars.TCR_NAMESPACE || secrets.TCR_NAMESPACE || 'hvac' }}
           TCR_USERNAME: ${{ vars.TCR_USERNAME || secrets.TCR_USERNAME }}
           TCR_PASSWORD: ${{ secrets.TCR_PASSWORD }}
+          FORCE_REBUILD_ALL: ${{ inputs.rebuild_all && '1' || '0' }}
         run: |
-          printf '%s\n' "${TCR_PASSWORD}" | docker login "${OCI_REGISTRY}" --username "${TCR_USERNAME}" --password-stdin
-          trap 'docker logout "${OCI_REGISTRY}" >/dev/null 2>&1 || true' EXIT
-          OCI_PUSH=1 bash deploy/platform/phase1/cd/build-oci-images.sh
+          sel_mode="full"
+          sel_services=""
+          if [[ "${FORCE_REBUILD_ALL}" != "1" ]] \
+            && [[ -s out/oci-probe/deployed-revision ]] \
+            && [[ -s out/oci-probe/deployed-manifest.tsv ]]; then
+            base_rev="$(tr -d '[:space:]' < out/oci-probe/deployed-revision)"
+            selection="$(bash deploy/platform/phase1/cd/select-oci-services.sh \
+              --base-revision "${base_rev}" \
+              --head-revision HEAD \
+              --reuse-manifest out/oci-probe/deployed-manifest.tsv \
+              --registry "${OCI_REGISTRY}" \
+              --namespace "${OCI_NAMESPACE}")"
+            IFS=$'\t' read -r sel_mode sel_services <<< "${selection}"
+          fi
+          echo "Resolved OCI build plan: mode=${sel_mode} services='${sel_services}'"
+
+          need_docker_push=1
+          if [[ "${sel_mode}" == "incremental" && -z "${sel_services}" ]]; then
+            need_docker_push=0
+          fi
+
+          if [[ "${need_docker_push}" == "1" ]]; then
+            printf '%s\n' "${TCR_PASSWORD}" | docker login "${OCI_REGISTRY}" --username "${TCR_USERNAME}" --password-stdin
+            trap 'docker logout "${OCI_REGISTRY}" >/dev/null 2>&1 || true' EXIT
+          fi
+
+          if [[ "${sel_mode}" == "incremental" ]]; then
+            OCI_PUSH=1 \
+            OCI_PUSH_CONCURRENCY=4 \
+            OCI_INCREMENTAL=1 \
+            OCI_SKIP_ABSENT_OPTIONAL=1 \
+            OCI_REUSE_MANIFEST=out/oci-probe/deployed-manifest.tsv \
+            OCI_BUILD_SERVICES="${sel_services}" \
+              bash deploy/platform/phase1/cd/build-oci-images.sh
+          else
+            OCI_PUSH=1 OCI_PUSH_CONCURRENCY=4 bash deploy/platform/phase1/cd/build-oci-images.sh
+          fi
 
       - name: Build release artifacts (tarball mode)
         if: steps.mode.outputs.use_oci != 'true'

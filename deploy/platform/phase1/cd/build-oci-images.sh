@@ -13,6 +13,11 @@ registry="${OCI_REGISTRY:-ccr.ccs.tencentyun.com}"
 namespace="${OCI_NAMESPACE:-hvac}"
 push_images="${OCI_PUSH:-1}"
 services_filter="${OCI_SERVICES_FILTER:-}"
+reuse_manifest="${OCI_REUSE_MANIFEST:-}"
+incremental_mode="${OCI_INCREMENTAL:-0}"
+build_services_csv="${OCI_BUILD_SERVICES:-}"
+skip_absent_optional="${OCI_SKIP_ABSENT_OPTIONAL:-0}"
+push_concurrency="${OCI_PUSH_CONCURRENCY:-4}"
 go_runtime_image="${GO_RUNTIME_IMAGE:-gcr.io/distroless/static-debian12:nonroot}"
 fake_digest="${OCI_FAKE_DIGEST:-}"
 
@@ -30,6 +35,18 @@ if [[ -z "$namespace" || "$namespace" =~ [[:space:]] ]]; then
 fi
 if [[ "$push_images" != 0 && "$push_images" != 1 ]]; then
   echo "error: OCI_PUSH must be 0 or 1 (got '$push_images')." >&2
+  exit 1
+fi
+if [[ "$incremental_mode" != 0 && "$incremental_mode" != 1 ]]; then
+  echo "error: OCI_INCREMENTAL must be 0 or 1 (got '$incremental_mode')." >&2
+  exit 1
+fi
+if [[ "$skip_absent_optional" != 0 && "$skip_absent_optional" != 1 ]]; then
+  echo "error: OCI_SKIP_ABSENT_OPTIONAL must be 0 or 1 (got '$skip_absent_optional')." >&2
+  exit 1
+fi
+if [[ ! "$push_concurrency" =~ ^[1-9][0-9]*$ ]]; then
+  echo "error: OCI_PUSH_CONCURRENCY must be a positive integer (got '$push_concurrency')." >&2
   exit 1
 fi
 if [[ -n "$fake_digest" && ! "$fake_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -131,8 +148,15 @@ for script in apply-on-server.sh rebuild-deploy-base.sh rollback.sh smoke-releas
 done
 
 healthcheck_bin="$work/healthcheck"
+shared_var_lib_hvac="$work/shared-var-lib-hvac"
+shared_zoneinfo="$work/shared-zoneinfo"
 healthcheck_built=0
+var_lib_ready=0
 go_runtime_ready=0
+zero_mtime() {
+  local target="$1"
+  touch -d @0 "$target" 2>/dev/null || touch -t 197001010000 "$target" 2>/dev/null || true
+}
 ensure_go_toolchain() {
   if ! command -v go >/dev/null 2>&1; then
     echo "error: go is required on PATH to build OCI Go images." >&2
@@ -158,7 +182,20 @@ ensure_healthcheck() {
     go build -trimpath -buildvcs=false -ldflags="-s -w" \
     -o "$healthcheck_bin" \
     ./tools/container-healthcheck/cmd/container-healthcheck/main.go
+  zero_mtime "$healthcheck_bin"
   healthcheck_built=1
+}
+ensure_var_lib_hvac() {
+  if [[ "$var_lib_ready" -eq 1 ]]; then
+    return
+  fi
+  mkdir -p "$shared_var_lib_hvac/connectivity-spool" "$shared_var_lib_hvac/mqtt-crl" "$shared_var_lib_hvac/ota-packages"
+  chmod 755 "$shared_var_lib_hvac" "$shared_var_lib_hvac/connectivity-spool" "$shared_var_lib_hvac/mqtt-crl" "$shared_var_lib_hvac/ota-packages"
+  zero_mtime "$shared_var_lib_hvac/connectivity-spool"
+  zero_mtime "$shared_var_lib_hvac/mqtt-crl"
+  zero_mtime "$shared_var_lib_hvac/ota-packages"
+  zero_mtime "$shared_var_lib_hvac"
+  var_lib_ready=1
 }
 
 oci_push_attempts="${OCI_PUSH_ATTEMPTS:-3}"
@@ -185,9 +222,50 @@ docker_push_with_retry() {
   done
 }
 
+declare -A build_service_set=()
+if [[ "$incremental_mode" == 1 && -n "$build_services_csv" ]]; then
+  IFS=',' read -r -a _build_entries <<< "$build_services_csv"
+  for _entry in "${_build_entries[@]}"; do
+    _entry="${_entry#"${_entry%%[![:space:]]*}"}"
+    _entry="${_entry%"${_entry##*[![:space:]]}"}"
+    [[ -n "$_entry" ]] && build_service_set["$_entry"]=1
+  done
+fi
+
+declare -A reuse_ref_by_service=()
+if [[ -n "$reuse_manifest" && -f "$reuse_manifest" ]]; then
+  while IFS=$'\t' read -r m_service _m_local m_oci_ref; do
+    [[ -z "${m_service:-}" || "$m_service" == \#* ]] && continue
+    if [[ -n "${m_oci_ref:-}" ]]; then
+      reuse_ref_by_service["$m_service"]="$m_oci_ref"
+    fi
+  done < "$reuse_manifest"
+fi
+
+valid_reuse_digest_ref() {
+  local svc="$1" oci_repo="$2"
+  local cand="${reuse_ref_by_service[$svc]:-}"
+  [[ -n "$cand" ]] || return 1
+  local prefix="${oci_repo}@sha256:"
+  if [[ "$cand" != "${prefix}"* ]]; then
+    return 1
+  fi
+  local suffix="${cand#"$prefix"}"
+  [[ "$suffix" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s\n' "$cand"
+}
+
 manifest_tmp="$work/image-manifest.tsv"
 printf '# service\tlocal_image\toci_ref\n' > "$manifest_tmp"
+
+declare -a planned_services=()
+declare -a planned_locals=()
+declare -a planned_repos=()
+declare -a planned_tags=()
+declare -a planned_refs=()
+declare -a push_indices=()
 built_count=0
+reused_count=0
 
 while IFS=$'\t' read -r service local_image kind required package <&3; do
   [[ -z "${service:-}" || "$service" == \#* ]] && continue
@@ -198,6 +276,36 @@ while IFS=$'\t' read -r service local_image kind required package <&3; do
   repo_name="$(repo_name_for_image "$local_image")"
   oci_repo="${registry}/${namespace}/${repo_name}"
   oci_tag_ref="${oci_repo}:${oci_tag}"
+
+  should_build=1
+  reused_ref=""
+  if [[ "$incremental_mode" == 1 ]]; then
+    if [[ -n "${build_service_set[$service]:-}" ]]; then
+      should_build=1
+    elif reused_ref="$(valid_reuse_digest_ref "$service" "$oci_repo" || true)" && [[ -n "$reused_ref" ]]; then
+      should_build=0
+    elif [[ "$required" != required && "$skip_absent_optional" == 1 ]]; then
+      echo "== skipping absent optional OCI image ${service}"
+      continue
+    else
+      echo "warning: no valid reuse digest for ${service}; building fresh OCI image" >&2
+      should_build=1
+    fi
+  fi
+
+  plan_idx="${#planned_services[@]}"
+  planned_services+=("$service")
+  planned_locals+=("$local_image")
+  planned_repos+=("$oci_repo")
+  planned_tags+=("$oci_tag_ref")
+
+  if [[ "$should_build" == 0 ]]; then
+    echo "== reusing OCI image ${service} -> ${reused_ref}"
+    planned_refs+=("$reused_ref")
+    reused_count=$((reused_count + 1))
+    continue
+  fi
+
   svc_ctx="$work/ctx-${service}"
   rm -rf "$svc_ctx"
   mkdir -p "$svc_ctx"
@@ -212,30 +320,34 @@ while IFS=$'\t' read -r service local_image kind required package <&3; do
       ensure_go_toolchain
       ensure_go_runtime
       ensure_healthcheck
+      ensure_var_lib_hvac
       CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
         go build -trimpath -buildvcs=false -ldflags="-s -w" \
         -o "$svc_ctx/service" \
         "$package"
-      cp "$healthcheck_bin" "$svc_ctx/healthcheck"
+      cp -p "$healthcheck_bin" "$svc_ctx/healthcheck"
       chmod 755 "$svc_ctx/service" "$svc_ctx/healthcheck"
-      mkdir -p "$svc_ctx/spool" "$svc_ctx/mqtt-crl" "$svc_ctx/ota-packages"
+      zero_mtime "$svc_ctx/healthcheck"
+      cp -a "$shared_var_lib_hvac" "$svc_ctx/var-lib-hvac"
       cat > "$svc_ctx/Dockerfile" <<EOF
 FROM ${go_runtime_image}
-LABEL org.opencontainers.image.title=${service}
-LABEL org.opencontainers.image.revision=${revision}
 WORKDIR /
 EOF
       if [[ -d /usr/share/zoneinfo ]]; then
+        if [[ ! -d "$shared_zoneinfo" ]]; then
+          mkdir -p "$shared_zoneinfo"
+          cp -a /usr/share/zoneinfo/. "$shared_zoneinfo/"
+        fi
         mkdir -p "$svc_ctx/zoneinfo"
-        cp -a /usr/share/zoneinfo/. "$svc_ctx/zoneinfo/"
+        cp -a "$shared_zoneinfo/." "$svc_ctx/zoneinfo/"
         echo "COPY zoneinfo /usr/share/zoneinfo" >> "$svc_ctx/Dockerfile"
       fi
-      cat >> "$svc_ctx/Dockerfile" <<'EOF'
-COPY --chown=65532:65532 service /service
+      cat >> "$svc_ctx/Dockerfile" <<EOF
+COPY --chown=65532:65532 var-lib-hvac /var/lib/hvac
 COPY --chown=65532:65532 healthcheck /healthcheck
-COPY --chown=65532:65532 spool /var/lib/hvac/connectivity-spool
-COPY --chown=65532:65532 mqtt-crl /var/lib/hvac/mqtt-crl
-COPY --chown=65532:65532 ota-packages /var/lib/hvac/ota-packages
+COPY --chown=65532:65532 service /service
+LABEL org.opencontainers.image.title=${service}
+LABEL org.opencontainers.image.revision=${revision}
 USER 65532:65532
 ENTRYPOINT ["/service"]
 EOF
@@ -317,19 +429,117 @@ EOF
   esac
   rm -rf "$svc_ctx"
 
-  if [[ "$push_images" == 1 ]]; then
-    echo "pushing ${oci_tag_ref}"
-    docker_push_with_retry "$oci_tag_ref"
-  fi
-  oci_ref="$(resolve_pushed_digest_ref "$oci_repo" "$oci_tag_ref")"
-  printf '%s\t%s\t%s\n' "$service" "$local_image" "$oci_ref" >> "$manifest_tmp"
+  planned_refs+=("")
+  push_indices+=("$plan_idx")
   built_count=$((built_count + 1))
 done 3< "$services"
 
-if [[ "$built_count" -eq 0 ]]; then
+if [[ "${#planned_services[@]}" -eq 0 ]]; then
   echo "error: no services matched OCI_SERVICES_FILTER='$services_filter'." >&2
   exit 1
 fi
 
+if [[ "${#push_indices[@]}" -gt 0 ]]; then
+  if [[ "$push_images" != 1 || "${#push_indices[@]}" -le 1 || "$push_concurrency" -le 1 ]]; then
+    for idx in "${push_indices[@]}"; do
+      if [[ "$push_images" == 1 ]]; then
+        echo "pushing ${planned_tags[$idx]}"
+        docker_push_with_retry "${planned_tags[$idx]}"
+      fi
+      planned_refs[$idx]="$(resolve_pushed_digest_ref "${planned_repos[$idx]}" "${planned_tags[$idx]}")"
+    done
+  else
+    push_dir="$work/push"
+    mkdir -p "$push_dir"
+    declare -a active_pids=()
+    declare -A pid_to_idx=()
+    declare -A idx_push_rc=()
+
+    reap_done_pushes() {
+      local remaining=()
+      local pid="" r_idx="" rc=0
+      for pid in "${active_pids[@]+"${active_pids[@]}"}"; do
+        r_idx="${pid_to_idx[$pid]}"
+        if [[ -f "$push_dir/${r_idx}.done" ]]; then
+          set +e
+          wait "$pid"
+          rc=$?
+          set -e
+          idx_push_rc["$r_idx"]="$rc"
+        else
+          remaining+=("$pid")
+        fi
+      done
+      active_pids=("${remaining[@]+"${remaining[@]}"}")
+    }
+
+    echo "== pushing ${#push_indices[@]} OCI images (concurrency=${push_concurrency})"
+    for idx in "${push_indices[@]}"; do
+      while (( "${#active_pids[@]}" >= push_concurrency )); do
+        reap_done_pushes
+        if (( "${#active_pids[@]}" >= push_concurrency )); then
+          sleep 0.1
+        fi
+      done
+
+      p_repo="${planned_repos[$idx]}"
+      p_tag="${planned_tags[$idx]}"
+      p_log="$push_dir/${idx}.log"
+      p_digest="$push_dir/${idx}.digest"
+      p_done="$push_dir/${idx}.done"
+      (
+        p_rc=0
+        {
+          echo "pushing ${p_tag}"
+          if ! docker_push_with_retry "$p_tag"; then
+            p_rc=1
+          elif ! ( resolve_pushed_digest_ref "$p_repo" "$p_tag" > "$p_digest" ); then
+            p_rc=1
+          fi
+        } > "$p_log" 2>&1 || p_rc=1
+        : > "$p_done"
+        exit "$p_rc"
+      ) &
+      pid=$!
+      active_pids+=("$pid")
+      pid_to_idx["$pid"]="$idx"
+    done
+
+    for pid in "${active_pids[@]+"${active_pids[@]}"}"; do
+      r_idx="${pid_to_idx[$pid]}"
+      set +e
+      wait "$pid"
+      rc=$?
+      set -e
+      idx_push_rc["$r_idx"]="$rc"
+    done
+
+    failed_push=0
+    for idx in "${push_indices[@]}"; do
+      cat "$push_dir/${idx}.log"
+      if [[ "${idx_push_rc[$idx]:-1}" -ne 0 ]]; then
+        echo "error: parallel OCI push failed for ${planned_services[$idx]} (${planned_tags[$idx]})" >&2
+        failed_push=1
+      elif [[ ! -s "$push_dir/${idx}.digest" ]]; then
+        echo "error: missing resolved digest for ${planned_services[$idx]} (${planned_tags[$idx]})" >&2
+        failed_push=1
+      else
+        planned_refs[$idx]="$(tr -d '[:space:]' < "$push_dir/${idx}.digest")"
+      fi
+    done
+    if [[ "$failed_push" -ne 0 ]]; then
+      exit 1
+    fi
+  fi
+fi
+
+for idx in "${!planned_services[@]}"; do
+  if [[ -z "${planned_refs[$idx]}" ]]; then
+    echo "error: missing final OCI reference for ${planned_services[$idx]}" >&2
+    exit 1
+  fi
+  printf '%s\t%s\t%s\n' "${planned_services[$idx]}" "${planned_locals[$idx]}" "${planned_refs[$idx]}" >> "$manifest_tmp"
+done
+
 cp "$manifest_tmp" "$staging/image-manifest.tsv"
-echo "OCI control-only release staged at $staging (services=$built_count, tag=${oci_tag}, revision=${short_revision})"
+echo "OCI control-only release staged at $staging (services=${#planned_services[@]}, built=${built_count}, reused=${reused_count}, tag=${oci_tag}, revision=${short_revision})"
