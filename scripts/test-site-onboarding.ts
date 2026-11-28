@@ -6,7 +6,7 @@ import {
   ASSET_RELATIONSHIP_ROLES, SEMANTIC_ROLES, SUBJECT_BINDING_LIFECYCLE, buildOnboardingSql, checkSiteFile, expandPoints, planOnboarding, pointQuality, pointStatus, presenceApplicability, siteStateQuery, updateWhenChanged,
 } from './site-onboarding.mjs';
 
-import type { OnboardingAsset, OnboardingDevice, OnboardingPoint, OnboardingProfile, OnboardingState, PlanItem } from './site-onboarding.mjs';
+import type { OnboardingDevice, OnboardingPoint, OnboardingProfile, OnboardingState, PlanItem } from './site-onboarding.mjs';
 
 const songyaxuan = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.site.json', import.meta.url), 'utf8')) as OnboardingProfile;
 const songyaxuanAlarmRules = JSON.parse(readFileSync(new URL('../deploy/sites/songyaxuan.alarm-rules.json', import.meta.url), 'utf8'));

@@ -10,6 +10,7 @@ import {
   findComposePortExposureViolations,
   findDebugMarkerViolations,
   findHandoffBudgetViolations,
+  findJavascriptToolingViolations,
   findPackageScriptViolations,
   findRequiredGuardrailFileViolations,
   findSkillMirrorViolations,
@@ -697,4 +698,42 @@ test('edge-gateway daemon and packaging changes stay scoped to command and go ga
   assert.deepEqual(daemonDeploy.unitProfiles, ['command']);
   assert.equal(daemonDeploy.broad, false);
   assert.equal(daemonDeploy.unknown, false);
+});
+
+test('javascript tooling ratchet rejects both growth and slack', () => {
+  const baseline = {
+    schemaVersion: 1,
+    policy: 'legacy-js-ratchet',
+    trackedExtensions: ['.mjs'],
+    allowedLegacyRoots: { 'scripts/': { fileCount: 1, maxBytes: 100 } },
+    fileCount: 1,
+    maxBytes: 100,
+  };
+  assert.deepEqual(findJavascriptToolingViolations({ files: [{ path: 'scripts/a.mjs', bytes: 100 }], baseline }), []);
+  assert.equal(findJavascriptToolingViolations({ files: [{ path: 'scripts/a.mjs', bytes: 101 }], baseline }).length, 2);
+  const slackViolations = findJavascriptToolingViolations({ files: [{ path: 'scripts/a.mjs', bytes: 90 }], baseline });
+  assert.equal(slackViolations.length, 2);
+  assert.ok(slackViolations.every((entry) => entry.includes('tighten scripts/javascript-tooling-baseline.json')));
+});
+
+test('every tracked repository path is classified with unknown=false', () => {
+  const listed = spawnSync('git', ['ls-files'], { cwd: process.cwd(), encoding: 'utf8', windowsHide: true });
+  assert.equal(listed.status, 0, listed.stderr || listed.stdout);
+  const tempDir = mkdtempSync(join(tmpdir(), 'hvac-pr-all-tracked-'));
+  try {
+    const listFile = join(tempDir, 'tracked.txt');
+    writeFileSync(listFile, listed.stdout, 'utf8');
+    const result = spawnSync(
+      process.execPath,
+      ['--experimental-strip-types', 'scripts/classify-pr-gates.ts', `--files-file=${listFile}`],
+      { cwd: process.cwd(), encoding: 'utf8', windowsHide: true },
+    );
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const report = JSON.parse(result.stdout.trim()) as ClassificationReport & { reasons: Array<{ file: string; reason: string }> };
+    const unknowns = report.reasons.filter((entry) => entry.reason.includes('unknown ')).map((entry) => entry.file);
+    assert.deepEqual(unknowns, [], `unclassified repository files: ${unknowns.join(', ')}`);
+    assert.equal(report.unknown, false);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 });

@@ -117,9 +117,13 @@ export const findJavascriptToolingViolations = ({ files, baseline }: { files: Ja
   const totalBytes = normalizedFiles.reduce((sum, file) => sum + file.bytes, 0);
   if (normalizedFiles.length > baseline.fileCount) {
     violations.push(`${javascriptToolingBaselinePath}: JavaScript file count grew beyond ${baseline.fileCount} to ${normalizedFiles.length}; migrate tooling to TypeScript instead of growing legacy JavaScript`);
+  } else if (normalizedFiles.length < baseline.fileCount) {
+    violations.push(`${javascriptToolingBaselinePath}: JavaScript file count dropped from ${baseline.fileCount} to ${normalizedFiles.length}; tighten ${javascriptToolingBaselinePath}`);
   }
   if (totalBytes > baseline.maxBytes) {
     violations.push(`${javascriptToolingBaselinePath}: JavaScript bytes grew from ${baseline.maxBytes} to ${totalBytes}; migrate tooling to TypeScript instead of growing legacy JavaScript`);
+  } else if (totalBytes < baseline.maxBytes) {
+    violations.push(`${javascriptToolingBaselinePath}: JavaScript bytes dropped from ${baseline.maxBytes} to ${totalBytes}; tighten ${javascriptToolingBaselinePath}`);
   }
 
   for (const [root, expected] of Object.entries(baseline.allowedLegacyRoots)) {
@@ -127,9 +131,13 @@ export const findJavascriptToolingViolations = ({ files, baseline }: { files: Ja
     if (!actual) continue;
     if (actual.fileCount > expected.fileCount) {
       violations.push(`${javascriptToolingBaselinePath}: ${root} JavaScript file count grew beyond ${expected.fileCount} to ${actual.fileCount}`);
+    } else if (actual.fileCount < expected.fileCount) {
+      violations.push(`${javascriptToolingBaselinePath}: ${root} JavaScript file count dropped from ${expected.fileCount} to ${actual.fileCount}; tighten ${javascriptToolingBaselinePath}`);
     }
     if (actual.bytes > expected.maxBytes) {
       violations.push(`${javascriptToolingBaselinePath}: ${root} JavaScript bytes grew from ${expected.maxBytes} to ${actual.bytes}`);
+    } else if (actual.bytes < expected.maxBytes) {
+      violations.push(`${javascriptToolingBaselinePath}: ${root} JavaScript bytes dropped from ${expected.maxBytes} to ${actual.bytes}; tighten ${javascriptToolingBaselinePath}`);
     }
   }
 

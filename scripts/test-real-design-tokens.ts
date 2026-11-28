@@ -262,6 +262,13 @@ test('design system check passes on the repository and rejects violations across
     assert.equal(errors.some((entry: string) => entry.includes('BadPatterns.tsx:16')), false);
     assert.ok(errors.some((entry: string) => entry.includes('apps/hvac-web/src non-const `as` casts grew from 0 to 2')));
     assert.ok(errors.some((entry: string) => entry.includes('apps/hvac-web/src/routeTree.gen.ts is stale')));
+
+    writeFileSync(
+      join(sandbox, 'scripts/web-as-cast-baseline.json'),
+      JSON.stringify({ schemaVersion: 1, policy: 'web-non-const-as-cast-ratchet', maxNonConstAsCasts: 5 }),
+    );
+    const { errors: slackErrors } = await validateDesignSystem(sandbox);
+    assert.ok(slackErrors.some((entry: string) => entry.includes('non-const `as` casts dropped from 5 to 2; tighten scripts/web-as-cast-baseline.json')));
   } finally {
     rmSync(sandbox, { recursive: true, force: true });
   }

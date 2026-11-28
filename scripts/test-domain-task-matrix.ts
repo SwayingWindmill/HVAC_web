@@ -10,7 +10,6 @@ import {
   gateProfileSets,
   resolveDomainCommands,
   resolveGateCommands,
-  resolveGateProfileSet,
   type CommandSpec,
   type DomainName,
   type GateName,
