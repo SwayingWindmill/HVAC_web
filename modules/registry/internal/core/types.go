@@ -3,13 +3,15 @@ package core
 import (
 	"errors"
 	"time"
+
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 )
 
 var (
 	ErrNotFound                 = errors.New("registry resource not found")
 	ErrInvalidPage              = errors.New("registry page request is invalid")
 	ErrStoreClosed              = errors.New("registry store is closed")
-	ErrStatusFailed             = errors.New("registry grant status unavailable")
+	ErrStatusFailed             = registryauth.ErrStatusFailed
 	ErrInvalidBindingResolution = errors.New("meter binding resolution request is invalid")
 )
 

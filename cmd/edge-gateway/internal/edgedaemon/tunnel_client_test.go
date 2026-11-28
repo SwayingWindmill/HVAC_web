@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
+	"github.com/quanlaihe/hvac-web/libs/edgetunnel"
 )
 
 func TestTunnelClientAllowsConfiguredPortRejectsForbiddenAndReloads(t *testing.T) {
@@ -53,15 +53,15 @@ func TestTunnelClientAllowsConfiguredPortRejectsForbiddenAndReloads(t *testing.T
 	}()
 
 	var forbiddenDialed atomic.Bool
-	hub := tunnel.NewHub(
-		tunnel.WithAllowedTargetPorts(tunnel.AllowedTargetPort, tunnel.SSHTargetPort),
-		tunnel.WithPingInterval(time.Minute),
-		tunnel.WithOpenTimeout(3*time.Second),
+	hub := edgetunnel.NewHub(
+		edgetunnel.WithAllowedTargetPorts(edgetunnel.AllowedTargetPort, edgetunnel.SSHTargetPort),
+		edgetunnel.WithPingInterval(time.Minute),
+		edgetunnel.WithOpenTimeout(3*time.Second),
 	)
 	t.Cleanup(hub.Close)
 
 	mux := http.NewServeMux()
-	mux.Handle("GET /gateway/v1/tunnel", tunnel.NewUpgradeHandler(
+	mux.Handle("GET /gateway/v1/tunnel", edgetunnel.NewUpgradeHandler(
 		hub,
 		func(r *http.Request) (*x509.Certificate, error) {
 			if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
@@ -98,12 +98,12 @@ func TestTunnelClientAllowsConfiguredPortRejectsForbiddenAndReloads(t *testing.T
 		CAFile:             pki.caFile,
 		CertFile:           gwCert,
 		KeyFile:            gwKey,
-		AllowedTargetPorts: []uint16{tunnel.SSHTargetPort},
+		AllowedTargetPorts: []uint16{edgetunnel.SSHTargetPort},
 		PingInterval:       time.Minute,
 		LocalDialTarget: func(ctx context.Context, port uint16) (net.Conn, error) {
-			if port != tunnel.SSHTargetPort {
+			if port != edgetunnel.SSHTargetPort {
 				forbiddenDialed.Store(true)
-				return nil, tunnel.ErrPortForbidden
+				return nil, edgetunnel.ErrPortForbidden
 			}
 			return (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", echoLn.Addr().String())
 		},
@@ -143,7 +143,7 @@ func TestTunnelClientAllowsConfiguredPortRejectsForbiddenAndReloads(t *testing.T
 	}
 
 	// Open allowed SSH stream via Hub
-	stream, err := hub.OpenStream(t.Context(), gwID, tunnel.SSHTargetPort)
+	stream, err := hub.OpenStream(t.Context(), gwID, edgetunnel.SSHTargetPort)
 	if err != nil {
 		t.Fatalf("OpenStream(22) failed: %v", err)
 	}
@@ -158,9 +158,9 @@ func TestTunnelClientAllowsConfiguredPortRejectsForbiddenAndReloads(t *testing.T
 	}
 
 	// Forbidden port 1880 (omitted from client allowed ports) and 80 (hub disallowed)
-	if _, err := hub.OpenStream(t.Context(), gwID, tunnel.AllowedTargetPort); !errors.Is(err, tunnel.ErrPortForbidden) && err == nil {
+	if _, err := hub.OpenStream(t.Context(), gwID, edgetunnel.AllowedTargetPort); !errors.Is(err, edgetunnel.ErrPortForbidden) && err == nil {
 		t.Fatal("expected stream open for unconfigured port 1880 to fail on edge side")
-	} else if err != nil && !strings.Contains(err.Error(), tunnel.ErrPortForbidden.Error()) {
+	} else if err != nil && !strings.Contains(err.Error(), edgetunnel.ErrPortForbidden.Error()) {
 		t.Fatalf("expected ErrPortForbidden message, got %v", err)
 	}
 	if forbiddenDialed.Load() {

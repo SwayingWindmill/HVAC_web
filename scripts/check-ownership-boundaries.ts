@@ -788,6 +788,8 @@ export const checkPeerModuleImportsInFile = (filePath: string, content: string):
  * - libs/* must not import modules/*, services/*, cmd/*, or tools/*
  * - modules/* and services/* must not import cmd/* or tools/*
  * - cmd/<A> must not import sibling cmd/<B> or tools/*
+ * - cmd/edge-gateway (non-test) and tools/* must not import modules/* or services/*
+ * - cmd/connectivity must not import services/* or modules/* other than modules/connectivity and modules/command
  * - tools/<A> must not import cmd/* or sibling tools/<B>
  */
 export const checkGoLayerImportsInFile = (filePath: string, content: string): BoundaryViolation[] => {
@@ -814,8 +816,20 @@ export const checkGoLayerImportsInFile = (filePath: string, content: string): Bo
       reason = `${callerLayer}/* cannot depend upward on executable ${targetLayer}/*`;
     } else if (callerLayer === 'cmd' && ((targetLayer === 'cmd' && targetUnit !== callerUnit) || targetLayer === 'tools')) {
       reason = `executable ${callerUnit} cannot import ${targetLayer === 'tools' ? 'tools/*' : `sibling ${targetUnit}`}`;
-    } else if (callerLayer === 'tools' && (targetLayer === 'cmd' || (targetLayer === 'tools' && targetUnit !== callerUnit))) {
-      reason = `tool ${callerUnit} cannot import ${targetLayer === 'cmd' ? 'cmd/*' : `sibling ${targetUnit}`}`;
+    } else if (
+      callerUnit === 'cmd/edge-gateway'
+      && isNonTestGoFile(normalizedPath)
+      && (targetLayer === 'modules' || targetLayer === 'services')
+    ) {
+      // Production edge binary must build without server modules/services; *_test.go retains compatibility harnesses.
+      reason = `edge daemon ${callerUnit} must stay decoupled from server ${targetLayer}/* packages (use libs/* instead)`;
+    } else if (
+      callerUnit === 'cmd/connectivity'
+      && (targetLayer === 'services' || (targetLayer === 'modules' && targetUnit !== 'modules/connectivity' && targetUnit !== 'modules/command'))
+    ) {
+      reason = `${callerUnit} cannot import ${targetUnit} directly (only modules/connectivity, modules/command, and libs/* are allowed)`;
+    } else if (callerLayer === 'tools' && (targetLayer === 'cmd' || targetLayer === 'modules' || targetLayer === 'services' || (targetLayer === 'tools' && targetUnit !== callerUnit))) {
+      reason = `tool ${callerUnit} cannot import ${targetLayer === 'tools' ? `sibling ${targetUnit}` : `${targetLayer}/*`}`;
     }
 
     if (!reason) continue;

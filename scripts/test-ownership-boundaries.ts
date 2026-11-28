@@ -413,4 +413,40 @@ test('Go layer DAG forbids upward libs->modules/services/cmd/tools, module/servi
     ),
     [],
   );
+
+  // cmd/edge-gateway, tools/*, and cmd/connectivity cross-module seams stay locked
+  assert.equal(
+    checkGoLayerImportsInFile('cmd/edge-gateway/internal/edgedaemon/config.go', 'package edgedaemon\nimport "github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"\n').length,
+    1,
+  );
+  assert.equal(
+    checkGoLayerImportsInFile('cmd/edge-gateway/main.go', 'package main\nimport "github.com/quanlaihe/hvac-web/services/fdd-service/pkg/fdd"\n').length,
+    1,
+  );
+  assert.equal(
+    checkGoLayerImportsInFile('tools/eg8200-simulator/internal/simulator/sim.go', 'package simulator\nimport "github.com/quanlaihe/hvac-web/modules/telemetry/pkg/telemetry"\n').length,
+    1,
+  );
+  assert.equal(
+    checkGoLayerImportsInFile('cmd/connectivity/credential_runtime.go', 'package main\nimport "github.com/quanlaihe/hvac-web/modules/registry/pkg/coreservice"\n').length,
+    1,
+  );
+  assert.equal(
+    checkGoLayerImportsInFile('cmd/connectivity/credential_runtime.go', 'package main\nimport "github.com/quanlaihe/hvac-web/services/notification-service/pkg/notify"\n').length,
+    1,
+  );
+  assert.deepEqual(
+    checkGoLayerImportsInFile(
+      'cmd/connectivity/main.go',
+      'package main\nimport (\n  "github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"\n  "github.com/quanlaihe/hvac-web/modules/command/pkg/commandservice"\n  "github.com/quanlaihe/hvac-web/libs/edgetunnel"\n  "github.com/quanlaihe/hvac-web/libs/registryauth"\n)\n',
+    ),
+    [],
+  );
+  assert.deepEqual(
+    checkGoLayerImportsInFile(
+      'cmd/edge-gateway/internal/edgedaemon/runtime_test.go',
+      'package edgedaemon\nimport "github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"\n',
+    ),
+    [],
+  );
 });

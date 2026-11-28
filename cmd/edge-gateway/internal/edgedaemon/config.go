@@ -15,7 +15,7 @@ import (
 	"strings"
 
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
-	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
+	"github.com/quanlaihe/hvac-web/libs/edgetunnel"
 )
 
 const (
@@ -199,7 +199,7 @@ func (c *Config) ApplyDefaults(defaultVersion string) {
 	}
 	if c.Tunnel.Enabled {
 		if len(c.Tunnel.AllowedTargetPorts) == 0 {
-			c.Tunnel.AllowedTargetPorts = []uint16{tunnel.SSHTargetPort}
+			c.Tunnel.AllowedTargetPorts = []uint16{edgetunnel.SSHTargetPort}
 		}
 		if c.Tunnel.PingIntervalSec == 0 {
 			c.Tunnel.PingIntervalSec = defaultTunnelPingIntervalSec
@@ -266,7 +266,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("telemetryDeadbandMaxSilenceSec %d must be in [0,86400]", c.TelemetryDeadbandMaxSilenceSec)
 	}
 	if strings.TrimSpace(c.HealthListenAddr) != "" {
-		if err := tunnel.ValidateLoopbackAddr(c.HealthListenAddr); err != nil {
+		if err := edgetunnel.ValidateLoopbackAddr(c.HealthListenAddr); err != nil {
 			return fmt.Errorf("healthListenAddr: %w", err)
 		}
 	}
@@ -284,15 +284,15 @@ func (c Config) Validate() error {
 	}
 	if c.Tunnel.Enabled {
 		if strings.TrimSpace(c.PlatformBaseURL) == "" {
-			return errors.New("tunnel.enabled requires platformBaseUrl")
+			return errors.New("edgetunnel.enabled requires platformBaseUrl")
 		}
 		for _, port := range c.Tunnel.AllowedTargetPorts {
-			if !tunnel.IsSupportedTargetPort(port) {
-				return fmt.Errorf("tunnel.allowedTargetPorts contains unsupported port %d", port)
+			if !edgetunnel.IsSupportedTargetPort(port) {
+				return fmt.Errorf("edgetunnel.allowedTargetPorts contains unsupported port %d", port)
 			}
 		}
 		if c.Tunnel.PingIntervalSec < 5 || c.Tunnel.PingIntervalSec > 120 {
-			return fmt.Errorf("tunnel.pingIntervalSec %d must be in [5,120]", c.Tunnel.PingIntervalSec)
+			return fmt.Errorf("edgetunnel.pingIntervalSec %d must be in [5,120]", c.Tunnel.PingIntervalSec)
 		}
 	}
 	for keyID, keyB64 := range c.OTA.TrustedPublicKeys {

@@ -349,6 +349,10 @@ for (const file of files) {
   });
   match(file.startsWith('libs/commandauth/') || file.startsWith('libs/commandmodel/') || file.startsWith('modules/command/') || file.startsWith('infra/command/'), () => selectCommand(file, 'command capability changed', { integration: true }));
   match(file === 'modules/connectivity/pkg/connectivity/store.go' || file === 'modules/connectivity/pkg/connectivity/command_route.go' || file === 'cmd/connectivity/command_runtime.go', () => selectCommand(file, 'connectivity command correlation or runtime changed'));
+  match(file.startsWith('libs/edgetunnel/'), () => {
+    selectTelemetry(file, 'shared gateway reverse tunnel library changed');
+    selectCommand(file, 'shared gateway reverse tunnel library changed');
+  });
   match(file.startsWith('libs/edgecontrol/') || file.startsWith('tools/eg8200-simulator/') || file.startsWith('cmd/edge-gateway/') || file.startsWith('deploy/edge-gateway/'), () => selectCommand(file, 'Edge control, daemon, or plant simulator changed'));
   match(file.startsWith('deploy/sites/') || file.startsWith('deploy/templates/'), () => {
     selectRegistry(file, 'site onboarding manifest or device template changed');

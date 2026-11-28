@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
+	"github.com/quanlaihe/hvac-web/libs/edgetunnel"
 )
 
 var tunnelAuditUUIDv7Pattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-7[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
@@ -34,7 +34,7 @@ func truncateTunnelAuditUTF8(value string, maxBytes int) string {
 }
 
 // RecordTunnelAudit durably records one gateway tunnel session or stream event.
-func (store *Store) RecordTunnelAudit(ctx context.Context, event tunnel.AuditEvent) error {
+func (store *Store) RecordTunnelAudit(ctx context.Context, event edgetunnel.AuditEvent) error {
 	if store == nil || store.pool == nil {
 		return errors.New("connectivity store is not configured")
 	}
@@ -45,7 +45,7 @@ func (store *Store) RecordTunnelAudit(ctx context.Context, event tunnel.AuditEve
 		return fmt.Errorf("invalid tunnel audit identifiers: gateway=%q session=%q", gatewayID, sessionID)
 	}
 	switch eventType {
-	case tunnel.AuditSessionOpened, tunnel.AuditSessionClosed, tunnel.AuditStreamOpened, tunnel.AuditStreamRejected:
+	case edgetunnel.AuditSessionOpened, edgetunnel.AuditSessionClosed, edgetunnel.AuditStreamOpened, edgetunnel.AuditStreamRejected:
 	default:
 		return fmt.Errorf("unsupported tunnel audit event type %q", eventType)
 	}

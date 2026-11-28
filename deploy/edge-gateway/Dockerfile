@@ -5,9 +5,6 @@ WORKDIR /src
 COPY go.mod go.sum go.work go.work.sum ./
 COPY cmd ./cmd
 COPY libs ./libs
-COPY modules ./modules
-COPY services ./services
-COPY tools ./tools
 COPY contracts ./contracts
 
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -ldflags="-s -w" -o /out/edge-gateway ./cmd/edge-gateway

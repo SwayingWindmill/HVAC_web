@@ -12,7 +12,6 @@ const RegistryPathPrefix = core.RegistryPathPrefix
 type ServerConfig = core.ServerConfig
 type PostgresStore = core.PostgresStore
 type CursorCodec = core.CursorCodec
-type HTTPGrantStatusProvider = core.HTTPGrantStatusProvider
 type OutboxRelayConfig = core.OutboxRelayConfig
 type OutboxRelay = core.OutboxRelay
 
@@ -26,10 +25,6 @@ func OpenPostgresStore(ctx context.Context, databaseURL string) (*PostgresStore,
 
 func NewCursorCodec(key []byte) (*CursorCodec, error) {
 	return core.NewCursorCodec(key)
-}
-
-func NewHTTPGrantStatusProvider(endpoint string, client *http.Client) (*HTTPGrantStatusProvider, error) {
-	return core.NewHTTPGrantStatusProvider(endpoint, client)
 }
 
 func NewOutboxRelay(store *PostgresStore, config OutboxRelayConfig) (*OutboxRelay, error) {

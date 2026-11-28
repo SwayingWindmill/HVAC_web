@@ -766,6 +766,11 @@ test('classifier preserves deployment secret check on .gitignore, spatial model 
   assert.ok(schedCmd.unitProfiles.includes('analytics'));
   assert.ok(runPlan('unit', schedCmd.unitProfiles).commands.includes('npm run test:analytics'));
 
+  const edgeTunnel = runClassification(['libs/edgetunnel/tunnel.go']);
+  assert.deepEqual(edgeTunnel.unitProfiles, ['command', 'go', 'telemetry']);
+  assert.equal(edgeTunnel.unknown, false);
+  assert.equal(edgeTunnel.broad, false);
+
   assert.deepEqual(findGoWorkspaceModuleListViolations(['.', 'cmd/wecom-alert-adapter']), []);
   assert.equal(findGoWorkspaceModuleListViolations(['.', 'cmd/wecom-alert-adapter', 'libs/rogue']).length, 1);
 });

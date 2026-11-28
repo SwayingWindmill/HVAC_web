@@ -17,6 +17,7 @@ import (
 
 	"github.com/eclipse/paho.golang/paho"
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+	"github.com/quanlaihe/hvac-web/libs/edgetunnel"
 	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/libs/registryauth"
@@ -24,8 +25,6 @@ import (
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/concentrator"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/packettap"
-	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
-	"github.com/quanlaihe/hvac-web/modules/registry/pkg/coreservice"
 )
 
 const onlineGatewayMetricHelp = "Number of gateways currently tracked as online by Connectivity."
@@ -109,19 +108,19 @@ type credentialRuntimeConfig struct {
 	CoverageReporter    adapter.CoverageReporter
 	Tap                 *packettap.Manager
 	MQTTSession         *mqttclient.SharedSession
-	TunnelOptions       []tunnel.Option
+	TunnelOptions       []edgetunnel.Option
 	OTAStorage          *connectivity.OTAArtifactStorage
 	OTASigner           *connectivity.OTASignerVerifier
 	OTAPublicBaseURL    string
 	DiagnosticsBridge   *connectivity.DiagnosticsMQTTBridge
 }
 
-func credentialServer(store *connectivity.Store) (*http.Server, *tunnel.Hub, error) {
+func credentialServer(store *connectivity.Store) (*http.Server, *edgetunnel.Hub, error) {
 	srv, hub, _, err := newCredentialRuntime(credentialRuntimeConfig{Store: store})
 	return srv, hub, err
 }
 
-func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *tunnel.Hub, *crlRuntime, error) {
+func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *edgetunnel.Hub, *crlRuntime, error) {
 	rootCtx := cfg.RootCtx
 	if rootCtx == nil {
 		rootCtx = context.Background()
@@ -140,14 +139,14 @@ func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *tunnel.Hu
 	tunnelOptions := cfg.TunnelOptions
 	loopbackAddr := strings.TrimSpace(envOr("CONNECTIVITY_TUNNEL_LOOPBACK_ADDR", ""))
 	if loopbackAddr != "" && !strings.EqualFold(loopbackAddr, "off") {
-		if err := tunnel.ValidateLoopbackAddr(loopbackAddr); err != nil {
+		if err := edgetunnel.ValidateLoopbackAddr(loopbackAddr); err != nil {
 			return nil, nil, nil, err
 		}
 	}
 	sshLoopbackAddr := strings.TrimSpace(envOr("CONNECTIVITY_TUNNEL_SSH_LOOPBACK_ADDR", ""))
 	sshLoopbackEnabled := sshLoopbackAddr != "" && !strings.EqualFold(sshLoopbackAddr, "off")
 	if sshLoopbackEnabled {
-		if err := tunnel.ValidateLoopbackAddr(sshLoopbackAddr); err != nil {
+		if err := edgetunnel.ValidateLoopbackAddr(sshLoopbackAddr); err != nil {
 			return nil, nil, nil, err
 		}
 	}
@@ -205,7 +204,7 @@ func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *tunnel.Hu
 	iamTransport.ResponseHeaderTimeout = 10 * time.Second
 	iamTransport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: roots, Certificates: []tls.Certificate{cert}, ServerName: "iam-service"}
 	client := &http.Client{Timeout: 3 * time.Second, Transport: iamTransport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	status, err := coreservice.NewHTTPGrantStatusProvider(envOr("CONNECTIVITY_IAM_URL", "https://iam-service:8444"), client)
+	status, err := registryauth.NewHTTPGrantStatusProvider(envOr("CONNECTIVITY_IAM_URL", "https://iam-service:8444"), client)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -229,14 +228,14 @@ func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *tunnel.Hu
 		}
 		return claims, nil
 	}
-	tunnelHubOpts := append([]tunnel.Option{
-		tunnel.WithDefaultGateway(envOr("CONNECTIVITY_TUNNEL_GATEWAY_ID", "")),
-		tunnel.WithAuditSink(store),
+	tunnelHubOpts := append([]edgetunnel.Option{
+		edgetunnel.WithDefaultGateway(envOr("CONNECTIVITY_TUNNEL_GATEWAY_ID", "")),
+		edgetunnel.WithAuditSink(store),
 	}, tunnelOptions...)
 	if sshLoopbackEnabled {
-		tunnelHubOpts = append(tunnelHubOpts, tunnel.WithAllowedTargetPorts(tunnel.AllowedTargetPort, tunnel.SSHTargetPort))
+		tunnelHubOpts = append(tunnelHubOpts, edgetunnel.WithAllowedTargetPorts(edgetunnel.AllowedTargetPort, edgetunnel.SSHTargetPort))
 	}
-	tunnelHub := tunnel.NewHub(tunnelHubOpts...)
+	tunnelHub := edgetunnel.NewHub(tunnelHubOpts...)
 	service := connectivity.NewCredentialService(store, authority)
 	crlOutPath := strings.TrimSpace(os.Getenv("GATEWAY_CRL_OUTPUT_FILE"))
 	crlCtrl := attachCredentialCRLControl(rootCtx, logger, metrics, presence, store, authority, service, tunnelHub, coverageReporter, mqttSession, crlOutPath)
@@ -253,13 +252,13 @@ func newCredentialRuntime(cfg credentialRuntimeConfig) (*http.Server, *tunnel.Hu
 		}
 	}
 	if sshLoopbackEnabled {
-		if _, err := tunnelHub.StartLoopbackListenerForPort(sshLoopbackAddr, tunnel.SSHTargetPort); err != nil {
+		if _, err := tunnelHub.StartLoopbackListenerForPort(sshLoopbackAddr, edgetunnel.SSHTargetPort); err != nil {
 			crlCtrl.Close()
 			tunnelHub.Close()
 			return nil, nil, nil, err
 		}
 	}
-	tunnelHandler := tunnel.NewUpgradeHandler(tunnelHub, connectivity.ParseGatewayPeerCert, service.VerifyActiveCredential)
+	tunnelHandler := edgetunnel.NewUpgradeHandler(tunnelHub, connectivity.ParseGatewayPeerCert, service.VerifyActiveCredential)
 	var concentratorHandler http.Handler
 	if concentratorService != nil {
 		concentratorHandler = concentrator.NewHTTPHandler(concentratorService, authorize)
@@ -593,7 +592,7 @@ func attachCredentialCRLControl(
 	store *connectivity.Store,
 	authority *connectivity.CertificateAuthority,
 	service *connectivity.CredentialService,
-	tunnelHub *tunnel.Hub,
+	tunnelHub *edgetunnel.Hub,
 	coverageReporter adapter.CoverageReporter,
 	mqttSession *mqttclient.SharedSession,
 	crlOutPath string,
@@ -681,11 +680,11 @@ type gatewayChildLister interface {
 	ListGatewayChildDeviceIDs(ctx context.Context, gatewayID string) ([]string, error)
 }
 
-func applyCertificateRevokeHook(hub *tunnel.Hub, lister gatewayChildLister, reporter adapter.CoverageReporter, gatewayID, fingerprintSHA256 string, hasRemainingActive bool) {
+func applyCertificateRevokeHook(hub *edgetunnel.Hub, lister gatewayChildLister, reporter adapter.CoverageReporter, gatewayID, fingerprintSHA256 string, hasRemainingActive bool) {
 	applyCertificateRevokeHookWithLogger(nil, hub, lister, reporter, gatewayID, fingerprintSHA256, hasRemainingActive)
 }
 
-func applyCertificateRevokeHookWithLogger(logger *slog.Logger, hub *tunnel.Hub, lister gatewayChildLister, reporter adapter.CoverageReporter, gatewayID, fingerprintSHA256 string, hasRemainingActive bool) {
+func applyCertificateRevokeHookWithLogger(logger *slog.Logger, hub *edgetunnel.Hub, lister gatewayChildLister, reporter adapter.CoverageReporter, gatewayID, fingerprintSHA256 string, hasRemainingActive bool) {
 	if hub != nil {
 		hub.CloseGatewayByFingerprint(gatewayID, fingerprintSHA256)
 	}

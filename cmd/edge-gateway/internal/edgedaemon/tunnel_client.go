@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
+	"github.com/quanlaihe/hvac-web/libs/edgetunnel"
 )
 
 const (
@@ -49,7 +49,7 @@ type TunnelClientOptions struct {
 }
 
 // TunnelClient maintains an outbound mTLS WebSocket/Upgrade reverse tunnel session
-// to /gateway/v1/tunnel and delegates stream multiplexing to tunnel.RunEdgeConnWithAllowedPorts.
+// to /gateway/v1/tunnel and delegates stream multiplexing to edgetunnel.RunEdgeConnWithAllowedPorts.
 type TunnelClient struct {
 	opts          TunnelClientOptions
 	dialAddr      string
@@ -84,12 +84,12 @@ func NewTunnelClient(opts TunnelClientOptions) (*TunnelClient, error) {
 
 	ports := slices.Clone(opts.AllowedTargetPorts)
 	if len(ports) == 0 {
-		ports = []uint16{tunnel.SSHTargetPort}
+		ports = []uint16{edgetunnel.SSHTargetPort}
 	}
 	allowedSet := make(map[uint16]struct{}, len(ports))
 	dedupPorts := make([]uint16, 0, len(ports))
 	for _, port := range ports {
-		if !tunnel.IsSupportedTargetPort(port) {
+		if !edgetunnel.IsSupportedTargetPort(port) {
 			return nil, fmt.Errorf("unsupported tunnel target port %d", port)
 		}
 		if _, dup := allowedSet[port]; dup {
@@ -219,7 +219,7 @@ func (c *TunnelClient) connectAndServe(ctx context.Context) error {
 	}
 	req.Host = c.requestHost
 	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", tunnel.ProtocolName)
+	req.Header.Set("Upgrade", edgetunnel.ProtocolName)
 	req.Header.Set("User-Agent", "hvac-edge-gateway")
 	if err := signHTTPPoPIfPresent(req, id, time.Now().UTC()); err != nil {
 		return fmt.Errorf("sign tunnel PoP: %w", err)
@@ -234,7 +234,7 @@ func (c *TunnelClient) connectAndServe(ctx context.Context) error {
 		return fmt.Errorf("read tunnel upgrade response: %w", err)
 	}
 	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusSwitchingProtocols || !strings.EqualFold(strings.TrimSpace(resp.Header.Get("Upgrade")), tunnel.ProtocolName) {
+	if resp.StatusCode != http.StatusSwitchingProtocols || !strings.EqualFold(strings.TrimSpace(resp.Header.Get("Upgrade")), edgetunnel.ProtocolName) {
 		return fmt.Errorf("tunnel upgrade rejected with HTTP %d", resp.StatusCode)
 	}
 
@@ -246,12 +246,12 @@ func (c *TunnelClient) connectAndServe(ctx context.Context) error {
 		c.opts.OnConnected()
 	}
 
-	return tunnel.RunEdgeConnWithAllowedPorts(sessionCtx, muxConn, c.dialLocalTarget, c.pingInterval, c.allowedPorts...)
+	return edgetunnel.RunEdgeConnWithAllowedPorts(sessionCtx, muxConn, c.dialLocalTarget, c.pingInterval, c.allowedPorts...)
 }
 
 func (c *TunnelClient) dialLocalTarget(ctx context.Context, port uint16) (net.Conn, error) {
-	if _, ok := c.allowedSet[port]; !ok || !tunnel.IsSupportedTargetPort(port) {
-		return nil, tunnel.ErrPortForbidden
+	if _, ok := c.allowedSet[port]; !ok || !edgetunnel.IsSupportedTargetPort(port) {
+		return nil, edgetunnel.ErrPortForbidden
 	}
 	if c.opts.LocalDialTarget != nil {
 		return c.opts.LocalDialTarget(ctx, port)

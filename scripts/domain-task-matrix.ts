@@ -83,13 +83,14 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
       ),
     ]),
     registry: Object.freeze([
-      nodeRun('scripts/run-go.mjs', 'test', './libs/fixedpoint/...', './libs/planttwin/...', './libs/schemagate/...', './modules/registry/...'),
+      nodeRun('scripts/run-go.mjs', 'test', './libs/fixedpoint/...', './libs/planttwin/...', './libs/registryauth/...', './libs/schemagate/...', './modules/registry/...'),
       npmRun('test:registry-routing'),
     ]),
     telemetry: Object.freeze([
       nodeRun(
         'scripts/run-go.mjs',
         'test',
+        './libs/edgetunnel/...',
         './libs/limitpolicy/...',
         './libs/mqttclient/...',
         './libs/schemagate/...',
@@ -111,6 +112,7 @@ export const gateCommandMatrix: Readonly<Record<GateName, Readonly<Record<string
         './libs/commandauth/...',
         './libs/alarmexpr/...',
         './libs/commandmodel/...',
+        './libs/edgetunnel/...',
         './libs/mqttclient/...',
         './libs/planttwin/...',
         './modules/command/...',

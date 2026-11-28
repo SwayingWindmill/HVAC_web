@@ -25,6 +25,7 @@ import (
 	"github.com/quanlaihe/hvac-web/libs/commandauth"
 	"github.com/quanlaihe/hvac-web/libs/identitycontext"
 	"github.com/quanlaihe/hvac-web/libs/observability"
+	"github.com/quanlaihe/hvac-web/libs/registryauth"
 	"github.com/quanlaihe/hvac-web/libs/sessionevent"
 	"github.com/quanlaihe/hvac-web/libs/sessionstore"
 	"github.com/quanlaihe/hvac-web/libs/workloadtls"
@@ -633,7 +634,7 @@ func newEmbeddedCoreServer(ctx context.Context, logger *slog.Logger, bgWG *sync.
 			MinVersion: tls.VersionTLS13, RootCAs: iamRoots, Certificates: []tls.Certificate{certificate}, ServerName: envOr("CORE_IAM_SERVER_NAME", "iam-service"),
 		}),
 	}
-	grantStatus, err := coreservice.NewHTTPGrantStatusProvider(energyRequiredEnv("CORE_IAM_ENDPOINT"), iamClient)
+	grantStatus, err := registryauth.NewHTTPGrantStatusProvider(energyRequiredEnv("CORE_IAM_ENDPOINT"), iamClient)
 	if err != nil {
 		store.Close()
 		return nil, nil, func() {}, err

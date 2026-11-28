@@ -18,13 +18,13 @@ import (
 	"time"
 
 	"github.com/quanlaihe/hvac-web/libs/edgecontrol"
+	"github.com/quanlaihe/hvac-web/libs/edgetunnel"
 	"github.com/quanlaihe/hvac-web/libs/mqttclient"
 	"github.com/quanlaihe/hvac-web/libs/observability"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/adapter"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/concentrator"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/packettap"
-	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
 )
 
 func main() {
@@ -38,7 +38,7 @@ func run() int {
 	flag.Parse()
 	if strings.TrimSpace(*tunnelStdio) != "" {
 		stdioCtx, stdioCancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-		err := tunnel.RunStdioBridge(stdioCtx, *tunnelStdio, os.Stdin, os.Stdout)
+		err := edgetunnel.RunStdioBridge(stdioCtx, *tunnelStdio, os.Stdin, os.Stdout)
 		stdioCancel()
 		if err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err.Error())
@@ -170,7 +170,7 @@ func run() int {
 		CoverageReporter:    telemetryRuntime,
 		Tap:                 tap,
 		MQTTSession:         mqttSession,
-		TunnelOptions:       []tunnel.Option{tunnel.WithObservability(logger, telemetry.Metrics)},
+		TunnelOptions:       []edgetunnel.Option{edgetunnel.WithObservability(logger, telemetry.Metrics)},
 		OTAPublicBaseURL:    otaPublicBaseURL,
 		DiagnosticsBridge:   diagBridge,
 	})

@@ -9,8 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/quanlaihe/hvac-web/libs/edgetunnel"
 	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/connectivity"
-	"github.com/quanlaihe/hvac-web/modules/connectivity/pkg/tunnel"
 )
 
 func TestPostgresGatewayTunnelAuditAndRLSIsolation(t *testing.T) {
@@ -81,19 +81,19 @@ func TestPostgresGatewayTunnelAuditAndRLSIsolation(t *testing.T) {
 
 	streamID := int64(1)
 	port := uint16(1880)
-	if err := store.RecordTunnelAudit(ctx, tunnel.AuditEvent{
+	if err := store.RecordTunnelAudit(ctx, edgetunnel.AuditEvent{
 		GatewayID:  gatewayA,
 		SessionID:  sessionA,
-		EventType:  tunnel.AuditSessionOpened,
+		EventType:  edgetunnel.AuditSessionOpened,
 		RemoteAddr: "127.0.0.1:41001",
 		OccurredAt: now,
 	}); err != nil {
 		t.Fatalf("record session opened for retired gateway: %v", err)
 	}
-	if err := store.RecordTunnelAudit(ctx, tunnel.AuditEvent{
+	if err := store.RecordTunnelAudit(ctx, edgetunnel.AuditEvent{
 		GatewayID:  gatewayA,
 		SessionID:  sessionA,
-		EventType:  tunnel.AuditStreamOpened,
+		EventType:  edgetunnel.AuditStreamOpened,
 		StreamID:   &streamID,
 		TargetPort: &port,
 		RemoteAddr: "127.0.0.1:41001",
@@ -101,10 +101,10 @@ func TestPostgresGatewayTunnelAuditAndRLSIsolation(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("record stream opened: %v", err)
 	}
-	if err := store.RecordTunnelAudit(ctx, tunnel.AuditEvent{
+	if err := store.RecordTunnelAudit(ctx, edgetunnel.AuditEvent{
 		GatewayID:  gatewayA,
 		SessionID:  sessionA,
-		EventType:  tunnel.AuditSessionClosed,
+		EventType:  edgetunnel.AuditSessionClosed,
 		RemoteAddr: "127.0.0.1:41001",
 		Reason:     "gateway_closed",
 		BytesTX:    128,
@@ -113,10 +113,10 @@ func TestPostgresGatewayTunnelAuditAndRLSIsolation(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("record session closed: %v", err)
 	}
-	if err := store.RecordTunnelAudit(ctx, tunnel.AuditEvent{
+	if err := store.RecordTunnelAudit(ctx, edgetunnel.AuditEvent{
 		GatewayID:  unknownGateway,
 		SessionID:  sessionUnknown,
-		EventType:  tunnel.AuditStreamRejected,
+		EventType:  edgetunnel.AuditStreamRejected,
 		TargetPort: &port,
 		Reason:     "unknown_gateway",
 		OccurredAt: now.Add(3 * time.Second),
