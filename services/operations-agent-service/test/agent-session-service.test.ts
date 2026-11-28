@@ -10,8 +10,9 @@ import { HVAC_AGENT_EVENT_VERSION } from '../dist/agent/index.js';
 class MemoryAgentSessionStateStore {
   states = new Map();
 
-  async get(sessionId) {
-    return this.states.get(sessionId) ?? null;
+  async get(tenantId, sessionId) {
+    const state = this.states.get(sessionId) ?? null;
+    return state?.session.tenantId === tenantId ? state : null;
   }
 
   async list(tenantId, siteId, createdBy, limit) {
@@ -21,8 +22,9 @@ class MemoryAgentSessionStateStore {
       .slice(0, limit);
   }
 
-  async transact(sessionId, update) {
-    const next = update(this.states.get(sessionId) ?? null);
+  async transact(tenantId, sessionId, update) {
+    const existing = this.states.get(sessionId) ?? null;
+    const next = update(existing?.session.tenantId === tenantId ? existing : null);
     this.states.set(sessionId, next);
     return next;
   }

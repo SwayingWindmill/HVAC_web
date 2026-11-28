@@ -1,12 +1,13 @@
 import type { AgentEvidenceRef } from './artifacts.js';
 import type { AgentModelRef } from './policy.js';
+import type {
+  AGENT_MESSAGE_ROLES,
+  AGENT_RUN_STATUSES,
+  AGENT_SESSION_STATUSES,
+  AGENT_TOOL_EXECUTION_STATUSES,
+} from './session-contract.gen.js';
 
-export type AgentSessionStatus =
-  | 'ACTIVE'
-  | 'WAITING_FOR_INPUT'
-  | 'COMPLETED'
-  | 'FAILED'
-  | 'CANCELLED';
+export type AgentSessionStatus = (typeof AGENT_SESSION_STATUSES)[number];
 
 interface AgentSessionBase {
   readonly id: string;
@@ -31,7 +32,7 @@ export interface InactiveAgentSession extends AgentSessionBase {
 
 export type AgentSession = ActiveAgentSession | InactiveAgentSession;
 
-export type AgentRunStatus = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type AgentRunStatus = (typeof AGENT_RUN_STATUSES)[number];
 export type AgentRunTerminalStatus = Exclude<AgentRunStatus, 'RUNNING'>;
 
 export interface AgentRunUsage {
@@ -52,7 +53,7 @@ export interface AgentRun {
   readonly failureCode: string | null;
 }
 
-export type AgentMessageRole = 'OPERATOR' | 'ASSISTANT';
+export type AgentMessageRole = (typeof AGENT_MESSAGE_ROLES)[number];
 
 export interface AgentMessage {
   readonly id: string;
@@ -63,7 +64,7 @@ export interface AgentMessage {
   readonly createdAt: number;
 }
 
-export type AgentToolExecutionStatus = 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type AgentToolExecutionStatus = (typeof AGENT_TOOL_EXECUTION_STATUSES)[number];
 
 export interface AgentToolExecution {
   readonly id: string;

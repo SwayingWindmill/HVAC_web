@@ -253,6 +253,7 @@ export const createAgentSessionService = ({
     });
     try {
       const terminal = await lifecycle.complete({
+        tenantId: context.tenantId,
         sessionId: started.session.id,
         runId: run.id,
         expectedSessionRevision: started.session.revision,
@@ -291,7 +292,7 @@ export const createAgentSessionService = ({
     liveRuns.set(started.session.id, live);
     void finishRun(context, started, run, controller)
       .catch(async () => {
-        await lifecycle.interrupt({ sessionId: started.session.id, runId: run.id, at: now() }).catch(() => undefined);
+        await lifecycle.interrupt({ tenantId: context.tenantId, sessionId: started.session.id, runId: run.id, at: now() }).catch(() => undefined);
       })
       .finally(() => {
         live.settled = true;
@@ -328,7 +329,7 @@ export const createAgentSessionService = ({
     context: AgentSessionAccessContext,
     sessionId: string,
   ): Promise<AgentSessionState> => requireScopedState(
-    await lifecycle.get(requireIdentity(sessionId, 'Session id')),
+    await lifecycle.get(context.tenantId, requireIdentity(sessionId, 'Session id')),
     context,
   );
 
@@ -395,6 +396,7 @@ export const createAgentSessionService = ({
         throw new AgentSessionServiceError('SESSION_INPUT_INVALID', 'Only an active Agent Run can be cancelled.');
       }
       const cancelled = await lifecycle.cancel({
+        tenantId: context.tenantId,
         sessionId: state.session.id,
         runId: state.session.activeRunId,
         expectedSessionRevision: input.expectedRevision,
@@ -430,6 +432,7 @@ export const createAgentSessionService = ({
         : value;
       const { at: answeredAt, run, operatorMessage } = askQuestion(state.session.id, displayValue);
       const continued = await lifecycle.continueWithInput({
+        tenantId: context.tenantId,
         sessionId: state.session.id,
         expectedSessionRevision: input.expectedRevision,
         run,

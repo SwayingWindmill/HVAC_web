@@ -11,6 +11,7 @@ import type {
   AgentUsageReader,
 } from '../../application/index.js';
 import { createPostgresAgentUsageReader } from './postgres-agent-usage.js';
+import { withTenantTransaction } from './postgres-tenant-transaction.js';
 
 interface Queryable {
   query<T extends QueryResultRow>(text: string, values?: readonly unknown[]): Promise<QueryResult<T>>;
@@ -376,88 +377,78 @@ const persistState = async (
   }
 };
 
-const withTransaction = async <T>(pool: Pool, work: (client: PoolClient) => Promise<T>): Promise<T> => {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await work(client);
-    await client.query('COMMIT');
-    return result;
-  } catch (error) {
-    try { await client.query('ROLLBACK'); } catch {}
-    throw error;
-  } finally {
-    client.release();
-  }
-};
-
 export const createPostgresAgentSessionStateStore = (
   operationsPool: Pool,
 ): AgentSessionStateStore => Object.freeze({
-  get(sessionId: string) {
-    return loadAgentSessionState(operationsPool, sessionId, false);
+  get(tenantId: string, sessionId: string) {
+    return withTenantTransaction(
+      operationsPool,
+      tenantId,
+      (client) => loadAgentSessionState(client, sessionId, false),
+    );
   },
   async list(tenantId: string, siteId: string, createdBy: string, limit: number) {
-    const sessions = await operationsPool.query<SessionRow>(
-      `SELECT session_id, tenant_id, site_id, agent_definition_id, created_by,
-              revision, status, active_run_id, created_at_ms, updated_at_ms
-       FROM agent_operations.agent_sessions
-       WHERE tenant_id = $1 AND site_id = $2 AND created_by = $3
-       ORDER BY created_at_ms DESC, session_id
-       LIMIT $4`,
-      [tenantId, siteId, createdBy, limit],
-    );
-    if (sessions.rows.length === 0) return Object.freeze([]);
-    const sessionIds = sessions.rows.map(({ session_id }) => session_id);
-    const [runsResult, messagesResult, executionsResult, artifactsResult] = await Promise.all([
-      operationsPool.query<RunRow>(
+    return withTenantTransaction(operationsPool, tenantId, async (client) => {
+      const sessions = await client.query<SessionRow>(
+        `SELECT session_id, tenant_id, site_id, agent_definition_id, created_by,
+                revision, status, active_run_id, created_at_ms, updated_at_ms
+         FROM agent_operations.agent_sessions
+         WHERE tenant_id = $1 AND site_id = $2 AND created_by = $3
+         ORDER BY created_at_ms DESC, session_id
+         LIMIT $4`,
+        [tenantId, siteId, createdBy, limit],
+      );
+      if (sessions.rows.length === 0) return Object.freeze([]);
+      const sessionIds = sessions.rows.map(({ session_id }) => session_id);
+      const runsResult = await client.query<RunRow>(
         `SELECT session_id, run_id, model_provider, model_id, status, started_at_ms,
                 finished_at_ms, input_tokens, output_tokens, model_calls, tool_calls, failure_code
          FROM agent_operations.agent_runs
          WHERE session_id = ANY($1::text[])
          ORDER BY session_id, started_at_ms, run_id`,
         [sessionIds],
-      ),
-      operationsPool.query<MessageRow>(
+      );
+      const messagesResult = await client.query<MessageRow>(
         `SELECT message_id, session_id, run_id, role, content, created_at_ms
          FROM agent_operations.agent_messages
          WHERE session_id = ANY($1::text[])
          ORDER BY session_id, created_at_ms, message_id`,
         [sessionIds],
-      ),
-      operationsPool.query<ToolExecutionRow>(
+      );
+      const executionsResult = await client.query<ToolExecutionRow>(
         `SELECT tool_execution_id, session_id, run_id, tool_name, arguments_digest, status,
                 started_at_ms, finished_at_ms, result_summary, provenance, failure_code
          FROM agent_operations.agent_tool_executions
          WHERE session_id = ANY($1::text[])
          ORDER BY session_id, started_at_ms, tool_execution_id`,
         [sessionIds],
-      ),
-      operationsPool.query<ArtifactRow>(
+      );
+      const artifactsResult = await client.query<ArtifactRow>(
         `SELECT session_id, artifact_payload
          FROM agent_operations.agent_artifacts
          WHERE session_id = ANY($1::text[])
          ORDER BY session_id, created_at_ms, artifact_id`,
         [sessionIds],
-      ),
-    ]);
-    const runsBySession = groupBySessionId(runsResult.rows);
-    const messagesBySession = groupBySessionId(messagesResult.rows);
-    const executionsBySession = groupBySessionId(executionsResult.rows);
-    const artifactsBySession = groupBySessionId(artifactsResult.rows);
-    return Object.freeze(sessions.rows.map((sessionRow) => freezeSessionState(
-      sessionRow,
-      runsBySession.get(sessionRow.session_id) ?? [],
-      messagesBySession.get(sessionRow.session_id) ?? [],
-      executionsBySession.get(sessionRow.session_id) ?? [],
-      artifactsBySession.get(sessionRow.session_id) ?? [],
-    )));
+      );
+      const runsBySession = groupBySessionId(runsResult.rows);
+      const messagesBySession = groupBySessionId(messagesResult.rows);
+      const executionsBySession = groupBySessionId(executionsResult.rows);
+      const artifactsBySession = groupBySessionId(artifactsResult.rows);
+      return Object.freeze(sessions.rows.map((sessionRow) => freezeSessionState(
+        sessionRow,
+        runsBySession.get(sessionRow.session_id) ?? [],
+        messagesBySession.get(sessionRow.session_id) ?? [],
+        executionsBySession.get(sessionRow.session_id) ?? [],
+        artifactsBySession.get(sessionRow.session_id) ?? [],
+      )));
+    });
   },
   transact(
+    tenantId: string,
     sessionId: string,
     update: (current: AgentSessionState | null) => AgentSessionState,
   ) {
-    return withTransaction(operationsPool, async (client) => {
+    return withTenantTransaction(operationsPool, tenantId, async (client) => {
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [sessionId]);
       const current = await loadAgentSessionState(client, sessionId, true);
       const next = update(current);
@@ -466,19 +457,11 @@ export const createPostgresAgentSessionStateStore = (
     });
   },
   async interruptActiveRuns(at: number) {
-    const result = await operationsPool.query(
-      `UPDATE agent_operations.agent_runs r
-       SET status = 'FAILED',
-           finished_at_ms = $1,
-           failure_code = 'RUN_INTERRUPTED'
-       FROM agent_operations.agent_sessions s
-       WHERE s.session_id = r.session_id
-         AND s.status = 'ACTIVE'
-         AND s.active_run_id = r.run_id
-         AND r.status = 'RUNNING'`,
+    const result = await operationsPool.query<{ readonly interrupted_count: number | string }>(
+      'SELECT agent_operations.interrupt_orphaned_active_runs($1) AS interrupted_count',
       [at],
     );
-    return result.rowCount ?? 0;
+    return Number(result.rows[0]?.interrupted_count ?? 0);
   },
 });
 

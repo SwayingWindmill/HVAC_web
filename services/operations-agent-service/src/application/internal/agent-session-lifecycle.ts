@@ -46,10 +46,11 @@ export interface AgentSessionState {
 }
 
 export interface AgentSessionStateStore {
-  get(sessionId: string): Promise<AgentSessionState | null>;
+  get(tenantId: string, sessionId: string): Promise<AgentSessionState | null>;
   /** The Sessions one person started on a Site, newest first, at most `limit` (#639). */
   list(tenantId: string, siteId: string, createdBy: string, limit: number): Promise<readonly AgentSessionState[]>;
   transact(
+    tenantId: string,
     sessionId: string,
     update: (current: AgentSessionState | null) => AgentSessionState,
   ): Promise<AgentSessionState>;
@@ -64,6 +65,7 @@ export interface StartAgentSessionRunCommand {
 }
 
 export interface ContinueAgentSessionWithInputCommand {
+  readonly tenantId: string;
   readonly sessionId: string;
   readonly expectedSessionRevision: number;
   readonly run: AgentRun;
@@ -72,12 +74,14 @@ export interface ContinueAgentSessionWithInputCommand {
 }
 
 export interface InterruptAgentSessionRunCommand {
+  readonly tenantId: string;
   readonly sessionId: string;
   readonly runId: string;
   readonly at: number;
 }
 
 export interface CompleteAgentSessionRunCommand {
+  readonly tenantId: string;
   readonly sessionId: string;
   readonly runId: string;
   readonly expectedSessionRevision: number;
@@ -89,6 +93,7 @@ export interface CompleteAgentSessionRunCommand {
 }
 
 export interface CancelAgentSessionRunCommand {
+  readonly tenantId: string;
   readonly sessionId: string;
   readonly runId: string;
   readonly expectedSessionRevision: number;
@@ -96,7 +101,7 @@ export interface CancelAgentSessionRunCommand {
 }
 
 export interface AgentSessionLifecycle {
-  get(sessionId: string): Promise<AgentSessionState | null>;
+  get(tenantId: string, sessionId: string): Promise<AgentSessionState | null>;
   list(tenantId: string, siteId: string, createdBy: string, limit: number): Promise<readonly AgentSessionState[]>;
   start(command: StartAgentSessionRunCommand): Promise<AgentSessionState>;
   continueWithInput(command: ContinueAgentSessionWithInputCommand): Promise<AgentSessionState>;
@@ -367,12 +372,21 @@ const completionAlreadyCommitted = (
   ));
 };
 
+const requireTenantState = (current: AgentSessionState | null, tenantId: string): AgentSessionState => {
+  requireIdentity(tenantId, 'Tenant id');
+  const state = requireState(current);
+  if (state.session.tenantId !== tenantId) {
+    fail('SESSION_NOT_FOUND', 'Agent Session was not found.');
+  }
+  return state;
+};
+
 const completeState = (
   current: AgentSessionState | null,
   command: CompleteAgentSessionRunCommand,
 ): AgentSessionState => {
   validateTerminalRecords(command);
-  const state = requireState(current);
+  const state = requireTenantState(current, command.tenantId);
   if (completionAlreadyCommitted(state, command)) return state;
   const finishedAt = command.run.finishedAt
     ?? fail('LIFECYCLE_INPUT_INVALID', 'Completion requires a finished Run.');
@@ -413,7 +427,7 @@ const cancelState = (
   requireIdentity(command.sessionId, 'Session id');
   requireIdentity(command.runId, 'Run id');
   requireTimestamp(command.at, 'Cancel timestamp');
-  const state = requireState(current);
+  const state = requireTenantState(current, command.tenantId);
   const runIndex = state.runs.findIndex(({ id }) => id === command.runId);
   if (runIndex < 0) fail('RUN_NOT_FOUND', 'Run was not found.');
   const run = requireRun(state.runs[runIndex], 'Run was not found.');
@@ -472,7 +486,7 @@ const continueWithInputState = (
   command: ContinueAgentSessionWithInputCommand,
 ): AgentSessionState => {
   requireIdentity(command.sessionId, 'Session id');
-  const state = requireState(current);
+  const state = requireTenantState(current, command.tenantId);
   if (inputResponseAlreadyCommitted(state, command)) return state;
   if (state.session.status !== 'WAITING_FOR_INPUT' || state.session.activeRunId !== null) {
     fail('RUN_STALE', 'Operator input may continue only a Session waiting for input.');
@@ -536,7 +550,7 @@ const interruptState = (
   requireIdentity(command.sessionId, 'Session id');
   requireIdentity(command.runId, 'Run id');
   requireTimestamp(command.at, 'Interrupt timestamp');
-  const state = requireState(current);
+  const state = requireTenantState(current, command.tenantId);
 
   const runIndex = state.runs.findIndex(({ id }) => id === command.runId);
   if (runIndex < 0) fail('RUN_NOT_FOUND', 'Run was not found.');
@@ -552,7 +566,7 @@ const interruptState = (
   runs[runIndex] = Object.freeze({
     ...run,
     status: 'FAILED',
-    finishedAt: command.at,
+    finishedAt: Math.max(command.at, run.startedAt),
     failureCode: 'RUN_INTERRUPTED',
   });
   return freezeState({ ...state, runs });
@@ -561,9 +575,11 @@ const interruptState = (
 export const createAgentSessionLifecycle = ({
   store,
 }: CreateAgentSessionLifecycleInput): AgentSessionLifecycle => Object.freeze({
-  get(sessionId: string) {
+  async get(tenantId: string, sessionId: string) {
+    requireIdentity(tenantId, 'Tenant id');
     requireIdentity(sessionId, 'Session id');
-    return store.get(sessionId);
+    const state = await store.get(tenantId, sessionId);
+    return state?.session.tenantId === tenantId ? state : null;
   },
   list(tenantId: string, siteId: string, createdBy: string, limit: number) {
     requireIdentity(tenantId, 'Tenant id');
@@ -572,22 +588,27 @@ export const createAgentSessionLifecycle = ({
     return store.list(tenantId, siteId, createdBy, limit);
   },
   start(command: StartAgentSessionRunCommand) {
-    return store.transact(command.session.id, (current) => startState(current, command));
+    const tenantId = requireIdentity(command.session.tenantId, 'Tenant id');
+    return store.transact(tenantId, command.session.id, (current) => startState(current, command));
   },
   continueWithInput(command: ContinueAgentSessionWithInputCommand) {
-    return store.transact(command.sessionId, (current) => continueWithInputState(current, command));
+    const tenantId = requireIdentity(command.tenantId, 'Tenant id');
+    return store.transact(tenantId, command.sessionId, (current) => continueWithInputState(current, command));
   },
   interrupt(command: InterruptAgentSessionRunCommand) {
-    return store.transact(command.sessionId, (current) => interruptState(current, command));
+    const tenantId = requireIdentity(command.tenantId, 'Tenant id');
+    return store.transact(tenantId, command.sessionId, (current) => interruptState(current, command));
   },
   interruptActiveRuns(at: number) {
     requireTimestamp(at, 'Interrupt timestamp');
     return store.interruptActiveRuns(at);
   },
   complete(command: CompleteAgentSessionRunCommand) {
-    return store.transact(command.sessionId, (current) => completeState(current, command));
+    const tenantId = requireIdentity(command.tenantId, 'Tenant id');
+    return store.transact(tenantId, command.sessionId, (current) => completeState(current, command));
   },
   cancel(command: CancelAgentSessionRunCommand) {
-    return store.transact(command.sessionId, (current) => cancelState(current, command));
+    const tenantId = requireIdentity(command.tenantId, 'Tenant id');
+    return store.transact(tenantId, command.sessionId, (current) => cancelState(current, command));
   },
 });

@@ -19,7 +19,7 @@
 
 一次回答以 `investigation_complete`（结论卡片和依据）或 `investigation_request_input`（向值班人员提一个问题）结束。每次回答受 `AgentRunBudget` 限制（模型调用次数、工具调用次数、时间、查询范围、结果大小、令牌数），正式环境的上限在 `src/bootstrap/main.ts`。pi 的内部状态不保存：每次新回答都从已保存的消息和产出重建对话；回答到一半中断的，记为失败。
 
-会话的事件（`hvac.agent.event/v1`）通过 SSE 推送：快照、逐字输出的文字（`assistant.delta`）、工具开始和结束、产出、补充信息的提问、回答的结果。网页用的类型由 `scripts/generate-operations-agent-session-contracts.mjs` 生成。
+会话的事件（`hvac.agent.event/v1`）通过 SSE 推送：快照、逐字输出的文字（`assistant.delta`）、工具开始和结束、产出、补充信息的提问、回答的结果。网页用的类型由 `scripts/generate-operations-agent-session-contracts.ts` 生成。
 
 评测题库和最近的结果在 `evals/`（`evals/README.md`、`evals/BASELINE.md`）。
 

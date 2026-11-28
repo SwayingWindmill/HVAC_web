@@ -1,23 +1,18 @@
 import { AgentContractError } from './errors.js';
+import {
+  AGENT_OWNERS,
+  type FINDING_CHART_KINDS,
+  type INVESTIGATION_OUTCOMES,
+  MAX_CHART_CATEGORIES,
+  MAX_CHART_SERIES,
+  MAX_EVIDENCE_REF_FIELD_LENGTH,
+  MAX_FINDING_EVIDENCE_REFS,
+  MAX_FINDING_LIST_ITEM_LENGTH,
+  MAX_FINDING_LIST_ITEMS,
+  MAX_KEY_FIGURES,
+} from './session-contract.gen.js';
 
-export type AgentOwner =
-  | 'REGISTRY'
-  | 'TELEMETRY'
-  | 'ENERGY'
-  | 'ALARM'
-  | 'FDD'
-  | 'WORK_ORDER'
-  | 'COMMAND';
-
-const agentOwners: readonly AgentOwner[] = Object.freeze([
-  'REGISTRY',
-  'TELEMETRY',
-  'ENERGY',
-  'ALARM',
-  'FDD',
-  'WORK_ORDER',
-  'COMMAND',
-]);
+export type AgentOwner = (typeof AGENT_OWNERS)[number];
 
 export interface AgentEvidenceRef {
   readonly owner: AgentOwner;
@@ -30,17 +25,11 @@ export interface AgentEvidenceRef {
 export const INVESTIGATION_COMPLETE_TOOL_NAME = 'investigation_complete' as const;
 export const INVESTIGATION_REQUEST_INPUT_TOOL_NAME = 'investigation_request_input' as const;
 
-const MAX_FINDING_EVIDENCE_REFS = 32;
-const MAX_FINDING_LIST_ITEMS = 16;
-const MAX_FINDING_LIST_ITEM_LENGTH = 512;
-const MAX_EVIDENCE_REF_FIELD_LENGTH = 256;
-const MAX_KEY_FIGURES = 4;
-
 export type AgentTerminalToolName =
   | typeof INVESTIGATION_COMPLETE_TOOL_NAME
   | typeof INVESTIGATION_REQUEST_INPUT_TOOL_NAME;
 
-export type InvestigationOutcome = 'SUPPORTED_FINDING' | 'UNABLE_TO_CONCLUDE';
+export type InvestigationOutcome = (typeof INVESTIGATION_OUTCOMES)[number];
 
 /** A number the answer rests on, shown on the finding card: 多用电 +762 kWh. */
 export interface InvestigationKeyFigure {
@@ -54,7 +43,7 @@ export interface InvestigationKeyFigure {
  * names the read, so every number on it is one the model read (#640).
  */
 export interface FindingChart {
-  readonly kind: 'LINE' | 'BAR' | 'HORIZONTAL_BAR';
+  readonly kind: (typeof FINDING_CHART_KINDS)[number];
   readonly title: string;
   readonly unit: string;
   readonly categories: readonly string[];
@@ -63,8 +52,7 @@ export interface FindingChart {
 }
 
 /** The public contract's bounds; a read with more is not charted. */
-export const MAX_CHART_CATEGORIES = 200;
-export const MAX_CHART_SERIES = 4;
+export { MAX_CHART_CATEGORIES, MAX_CHART_SERIES };
 
 /**
  * What the finding card shows under the answer. The conclusion itself is the answer text, so the
@@ -255,7 +243,7 @@ const parseEvidenceRef = (value: unknown): AgentEvidenceRef => {
   const record = asRecord(value, 'evidenceRefs item');
   assertExactKeys(record, ['owner', 'resourceType', 'resourceId', 'toolExecutionId'], ['revision']);
   const owner = record.owner;
-  if (typeof owner !== 'string' || !agentOwners.includes(owner as AgentOwner)) {
+  if (typeof owner !== 'string' || !AGENT_OWNERS.some((candidate) => candidate === owner)) {
     return invalidTerminalArtifact('evidenceRefs owner is not a recognized authoritative owner.');
   }
 

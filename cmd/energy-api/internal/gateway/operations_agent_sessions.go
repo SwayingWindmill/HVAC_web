@@ -19,13 +19,6 @@ import (
 )
 
 const (
-	PublicAgentSessionsPathTemplate           = "/api/v1/sites/{siteId}/operations/agent-sessions"
-	PublicAgentSessionPathTemplate            = "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}"
-	PublicAgentSessionEventsPathTemplate      = "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}/events"
-	PublicAgentSessionStartRunPathTemplate    = "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}:run"
-	PublicAgentSessionCancelPathTemplate      = "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}:cancel"
-	PublicAgentSessionSubmitInputPathTemplate = "/api/v1/sites/{siteId}/operations/agent-sessions/{sessionId}:submit-input"
-
 	agentSessionSSEWriteTimeout      = 15 * time.Second
 	agentSessionSSEKeepaliveInterval = 15 * time.Second
 )
@@ -204,7 +197,7 @@ func validateAgentSessionEvidenceRef(value any) error {
 	if len(ref) != 4 && len(ref) != 5 {
 		return errors.New("invalid Agent evidence reference shape")
 	}
-	if !operationsAllowedString(ref["owner"], "REGISTRY", "TELEMETRY", "ENERGY", "ALARM", "FDD", "WORK_ORDER", "COMMAND") {
+	if !isAllowedAgentEvidenceOwner(ref["owner"]) {
 		return errors.New("invalid Agent evidence owner")
 	}
 	for _, key := range []string{"resourceType", "resourceId", "toolExecutionId"} {
@@ -246,7 +239,7 @@ func validateAgentRunValue(value any) error {
 	if _, ok := operationsBoundedString(modelRef["model"], 256); !ok {
 		return errors.New("invalid Agent model identity")
 	}
-	if !operationsAllowedString(run["status"], "RUNNING", "COMPLETED", "FAILED", "CANCELLED") {
+	if !isAllowedAgentRunStatus(run["status"]) {
 		return errors.New("invalid Agent Run status")
 	}
 	if _, ok := operationsNonnegativeInteger(run["startedAt"]); !ok {
@@ -289,7 +282,7 @@ func validateAgentMessageValue(value any) error {
 			return errors.New("invalid Agent Message Run")
 		}
 	}
-	if !operationsAllowedString(message["role"], "OPERATOR", "ASSISTANT") {
+	if !isAllowedAgentMessageRole(message["role"]) {
 		return errors.New("invalid Agent Message role")
 	}
 	if _, ok := operationsBoundedString(message["content"], 4000); !ok {
@@ -311,7 +304,7 @@ func validateAgentToolExecutionValue(value any) error {
 			return errors.New("invalid Agent Tool execution identity")
 		}
 	}
-	if !operationsAllowedString(execution["status"], "RUNNING", "COMPLETED", "FAILED", "CANCELLED") {
+	if !isAllowedAgentToolExecutionStatus(execution["status"]) {
 		return errors.New("invalid Agent Tool execution status")
 	}
 	if _, ok := operationsNonnegativeInteger(execution["startedAt"]); !ok {
@@ -333,7 +326,7 @@ func validateAgentToolExecutionValue(value any) error {
 		}
 	}
 	provenance, ok := execution["provenance"].([]any)
-	if !ok || len(provenance) > 32 {
+	if !ok || len(provenance) > maxFindingEvidenceRefs {
 		return errors.New("invalid Agent Tool provenance")
 	}
 	for _, ref := range provenance {
@@ -379,7 +372,7 @@ func validateAgentArtifactValue(value any) error {
 			}
 		}
 		if !ok || !operationsExactKeys(finding, findingKeys...) ||
-			!operationsAllowedString(finding["outcome"], "SUPPORTED_FINDING", "UNABLE_TO_CONCLUDE") {
+			!isAllowedAgentInvestigationOutcome(finding["outcome"]) {
 			return errors.New("invalid finding Artifact")
 		}
 		if err := validateAgentSessionKeyFigures(finding["keyFigures"]); err != nil {
@@ -389,7 +382,7 @@ func validateAgentArtifactValue(value any) error {
 			return err
 		}
 		refs, ok := finding["evidenceRefs"].([]any)
-		if !ok || len(refs) > 32 {
+		if !ok || len(refs) > maxFindingEvidenceRefs {
 			return errors.New("invalid finding evidence")
 		}
 		for _, ref := range refs {
@@ -399,11 +392,11 @@ func validateAgentArtifactValue(value any) error {
 		}
 		for _, key := range []string{"limitations", "recommendedNext"} {
 			items, ok := finding[key].([]any)
-			if !ok || len(items) > 16 {
+			if !ok || len(items) > maxFindingListItems {
 				return errors.New("invalid finding list")
 			}
 			for _, item := range items {
-				if _, ok := operationsBoundedString(item, 512); !ok {
+				if _, ok := operationsBoundedString(item, maxFindingListItemLength); !ok {
 					return errors.New("invalid finding list item")
 				}
 			}
@@ -513,7 +506,7 @@ func validateAgentSessionStateValue(value any) error {
 	if _, ok := operationsNonnegativeInteger(session["updatedAt"]); !ok {
 		return errors.New("invalid Agent Session updatedAt")
 	}
-	if !operationsAllowedString(session["status"], "ACTIVE", "WAITING_FOR_INPUT", "COMPLETED", "FAILED", "CANCELLED") {
+	if !isAllowedAgentSessionStatus(session["status"]) {
 		return errors.New("invalid Agent Session status")
 	}
 	if session["status"] == "ACTIVE" {
@@ -529,10 +522,10 @@ func validateAgentSessionStateValue(value any) error {
 		maximum  int
 		validate func(any) error
 	}{
-		{key: "runs", maximum: 64, validate: validateAgentRunValue},
-		{key: "messages", maximum: 256, validate: validateAgentMessageValue},
-		{key: "toolExecutions", maximum: 256, validate: validateAgentToolExecutionValue},
-		{key: "artifacts", maximum: 256, validate: validateAgentArtifactValue},
+		{key: "runs", maximum: maxAgentSessionRuns, validate: validateAgentRunValue},
+		{key: "messages", maximum: maxAgentSessionMessages, validate: validateAgentMessageValue},
+		{key: "toolExecutions", maximum: maxAgentSessionToolExecutions, validate: validateAgentToolExecutionValue},
+		{key: "artifacts", maximum: maxAgentSessionArtifacts, validate: validateAgentArtifactValue},
 	}
 	for _, collection := range collections {
 		items, ok := state[collection.key].([]any)
@@ -572,7 +565,7 @@ func validateAgentSessionList(raw []byte) error {
 		return err
 	}
 	items, ok := value.([]any)
-	if !ok || len(items) > 50 {
+	if !ok || len(items) > maxAgentSessionList {
 		return errors.New("invalid Agent Session list")
 	}
 	for _, item := range items {
@@ -617,7 +610,7 @@ func validateAgentSessionKeyFigures(value any) error {
 		return nil
 	}
 	figures, ok := value.([]any)
-	if !ok || len(figures) > 4 {
+	if !ok || len(figures) > maxFindingKeyFigures {
 		return errors.New("invalid finding key figures")
 	}
 	for _, item := range figures {
@@ -649,15 +642,15 @@ func validateAgentSessionFindingChart(value any) error {
 	}
 	chart, ok := value.(map[string]any)
 	if !ok || !operationsExactKeys(chart, "kind", "title", "unit", "categories", "series") ||
-		!operationsAllowedString(chart["kind"], "LINE", "BAR", "HORIZONTAL_BAR") {
+		!isAllowedFindingChartKind(chart["kind"]) {
 		return errors.New("invalid finding chart")
 	}
 	_, titleOK := operationsBoundedString(chart["title"], 64)
 	unit, unitOK := chart["unit"].(string)
 	categories, categoriesOK := chart["categories"].([]any)
 	series, seriesOK := chart["series"].([]any)
-	if !titleOK || !unitOK || utf8.RuneCountInString(unit) > 16 || !categoriesOK || len(categories) == 0 || len(categories) > 200 ||
-		!seriesOK || len(series) == 0 || len(series) > 4 {
+	if !titleOK || !unitOK || utf8.RuneCountInString(unit) > 16 || !categoriesOK || len(categories) == 0 || len(categories) > maxFindingChartCategories ||
+		!seriesOK || len(series) == 0 || len(series) > maxFindingChartSeries {
 		return errors.New("invalid finding chart")
 	}
 	for _, category := range categories {
@@ -693,7 +686,7 @@ func validateAgentSessionEvent(name string, raw []byte) ([]byte, error) {
 	if !ok || !operationsExactKeys(event, "version", "type", "sessionId", "runId", "sequence", "at", "payload") {
 		return nil, errors.New("invalid Agent event envelope")
 	}
-	if event["version"] != "hvac.agent.event/v1" || event["type"] != name {
+	if event["version"] != AgentEventVersion || event["type"] != name {
 		return nil, errors.New("invalid Agent event version or type")
 	}
 	if _, ok := operationsBoundedString(event["sessionId"], 256); !ok {

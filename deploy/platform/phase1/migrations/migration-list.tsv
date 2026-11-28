@@ -204,3 +204,4 @@ hvac_s5|modules/workorder/migrations/007_schema_and_table_comments.sql
 hvac_operations_agent|services/operations-agent-service/migrations/operations/001_agent_sessions.sql
 hvac_operations_agent|services/operations-agent-service/migrations/operations/002_finding_without_summary.sql
 hvac_operations_agent|services/operations-agent-service/migrations/operations/003_schema_and_table_comments.sql
+hvac_operations_agent|services/operations-agent-service/migrations/operations/agent-operations-rls.sql
